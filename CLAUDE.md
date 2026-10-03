@@ -377,6 +377,14 @@ Active file:», «## Active selection range:», «## Active selection of the fil
   (`sandbox-project/.codex/scenarios/`) пустая и не в git: сценарий для проверки пишется на месте,
   кнопкой «New scenario» или фразой в модель. Песочница гасит только свою копию (маркер
   `io.github.crmapache.amazingcodex`), песочницу оригинала не трогает.
+- **Живой прогон панели в песочнице агентом**: `./gradlew runIde -PopenProject=$PWD/sandbox-project
+  -PjcefDebugPort=4452`, затем Playwright `chromium.connectOverCDP('http://127.0.0.1:4452')` и страница с
+  адресом `acx-webview` (у README в редакторе своя страница JCEF - не перепутать). Кнопки - по ролям и
+  именам из `ariaSnapshot()`. Модальное окно самой WebStorm (например, «Evaluation Feedback») молча держит
+  действия IDE: файл из ленты не открывается, пока его не закрыть (`osascript`, кнопка по `description`).
+  Телефон к такой песочнице спаривается через ссылку `.../p#...` с экрана Remote access и «Allow» в IDE.
+- Скриншоты для стора: `scripts/screenshots.mjs` (харнесс на :5190, кадры из
+  `webview/src/harness/scenarios/showcase.ts`); телефон снимается настоящим клиентом через релей.
 - Протокол `app-server` своей версии Codex можно выгрузить схемой:
   `codex app-server generate-json-schema --out /tmp/codex-schema` - это самый надёжный ответ на
   «какие поля у этого уведомления».
