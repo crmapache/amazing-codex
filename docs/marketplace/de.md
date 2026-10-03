@@ -63,6 +63,10 @@ unverändert mit. Kein Proxy dazwischen, kein Konto bei uns.
   her geöffnet und bei Bedarf seitenweise weiter zurückgeladen.
 - **Codex' eigene Befehle** - `/compact`, `/review`, `/init`, `/new`, deine eigenen Prompts und
   Skills - in den Vorschlägen des Feldes.
+- **Fragen am Rand** mit `/side` oder `/btw`: fragen Sie, während Codex arbeitet - die Antwort
+  kommt als Karte über dem Eingabefeld, und das Gespräch sieht sie nie.
+- **Die Einstellungen von Codex selbst** auf einem eigenen Bildschirm (`/config`): was in Ihrer
+  config.toml steht und woher jeder Wert kommt, und einem Projekt mit einem Klick vertrauen.
 - **`!` führt einen Befehl in deiner eigenen Shell aus**, und die Ausgabe reist mit deiner
   nächsten Nachricht mit, ohne einen Zug oder eine Freigabeanfrage zu kosten.
 - **Prompt verbessern** - der Funke schreibt deinen Entwurf in einem eigenen Lauf um, ohne Kontext
@@ -82,9 +86,11 @@ unverändert mit. Kein Proxy dazwischen, kein Konto bei uns.
 - **Alles läuft auf deinem Rechner.** Kein Proxy, kein Server von uns dazwischen. Deine
   Codex-Anmeldung gehört der CLI: Das Plugin schickt sie nie irgendwohin und sucht auch keine
   API-Schlüssel auf deiner Platte.
-- **Keine Telemetrie, keine Analytik, kein Konto.** Bei ausgeschaltetem Fernzugriff verlässt nur
-  ein Fehlerbericht die Maschine, den du selbst schreibst und abschickst - und eine Taste zeigt
-  vorher seinen genauen Text.
+- **Nichts verlässt den Rechner ohne Ihr Ja.** Kein Konto, keine heimliche Analyse. Anonyme
+  Nutzungsstatistik bleibt aus, bis Sie auf der Karte, die einmal fragt, auf Erlauben drücken:
+  nur Zählwerte, nie Code, Nachrichten oder Dateinamen. Ist sie aus und der Fernzugriff ebenso,
+  verlässt nur ein Feedback den Rechner, das Sie selbst schreiben und senden - und ein Knopf
+  zeigt vorher den genauen Text.
 - **Deine Regeln bleiben deine.** Codex wendet deine Konfiguration an, seine eigene Sandbox und
   seine eigene Freigaberichtlinie; der Modus auf dem Bildschirm ist genau die Richtlinie, mit der
   der Thread läuft, und das Plugin startet nie einen Thread in einem laxeren Modus.

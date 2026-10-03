@@ -229,8 +229,8 @@ And once per report:
 - a random identifier, made on your machine when you press Allow. It is derived from nothing: not your
   hardware, not your account, not your name. Its only job is to tell one machine's days from another's.
   All JetBrains IDEs on one machine share it, as they share the answer to the question. It is this
-  plugin's own: if you also use Amazing Claude Code GUI, that plugin asks its own question and makes its
-  own identifier, and nothing links the two.
+  plugin's own: another plugin by the same author that you may also use asks its own question and makes
+  its own identifier, and nothing links the two.
 
 **What is never sent**: your messages or the agent's answers, code, file names, paths, project names,
 the names of your own prompts, skills, MCP servers or the models you added, your Codex or ChatGPT
@@ -240,10 +240,10 @@ The counts come from the statistics the plugin already keeps on your machine for
 That file stays where it is; the report picks numbers out of it by name and copies nothing else.
 
 **Where it goes.** To `usage.mzpizote.com`, a service run by the plugin's author on the same server as
-the relay (OVH, Virginia, United States). It is the same service that receives the statistics of Amazing
-Claude Code GUI, the plugin this one is forked from. Each report says which of the two plugins sent it,
-and the service keeps their figures apart: every stored row is marked with its plugin, the two are never
-added together, and a deletion asked for by one plugin cannot touch the other's. It stores the counts
+the relay (OVH, Virginia, United States). The same service receives the statistics of another plugin by
+the same author. Each report says which plugin sent it, and the service keeps their figures apart: every
+stored row is marked with its plugin, the two are never added together, and a deletion asked for by one
+plugin cannot touch the other's. It stores the counts
 under the random identifier and nothing else. It does not store your IP address: the address is
 used only in memory, to limit how many reports one address can send in an hour, and the service's log
 shows its first few characters. Reports are kept for two years and then deleted automatically. The

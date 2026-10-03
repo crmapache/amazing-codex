@@ -210,7 +210,8 @@ const FRAMES = [
     shot: 'shot-diff',
     run: async (page) => {
       await clickLastButton(page, 'tools')
-      await clickLastButton(page, 'paymentMethods.ts', '+11')
+      // The edits come open with their diffs (Codex reports the patch it applied), so there is nothing
+      // more to press - only the foot of the feed to bring into the frame.
       await scrollFeed(page, 'bottom')
     },
   },
@@ -331,6 +332,9 @@ const FRAMES = [
     run: async (page) => {
       await scrollFeed(page, 'bottom')
       await openMenu(page)
+      // The sounds live inside Settings since the menu was regrouped.
+      await clickButton(page, 'Settings')
+      await sleep(400)
       await clickButton(page, 'Sound alerts')
       await sleep(600)
     },

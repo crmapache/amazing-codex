@@ -154,6 +154,12 @@ intellijPlatform {
               <li><b>Codex's own commands</b> - <code>/compact</code>, <code>/review</code>,
               <code>/init</code>, <code>/new</code>, your custom prompts and skills - in the field's
               suggestions.</li>
+              <li><b>Side questions</b> with <code>/side</code> or <code>/btw</code>: ask while Codex is
+              working, and the answer comes in a card above the field - the conversation never sees
+              it.</li>
+              <li><b>Codex's own settings</b> on a screen of their own (<code>/config</code>): what your
+              config.toml says and where each value comes from, and trusting a project in one
+              click.</li>
               <li><b><code>!</code> runs a command in your own shell</b>, and the output travels with
               your next message, costing no turn and no approval.</li>
               <li><b>Improve prompt</b> - the sparkle rewrites your draft in a run of its own, costing
@@ -175,9 +181,11 @@ intellijPlatform {
               <li><b>Everything runs on your machine.</b> No proxy, no server of ours in the middle.
               Your Codex sign-in belongs to the CLI - the plugin never sends it anywhere and never hunts
               for API keys on your disk.</li>
-              <li><b>No telemetry, no analytics, no account.</b> With remote access off, the only thing
-              that ever leaves is a feedback report you write and send yourself - and one button shows
-              its exact text first.</li>
+              <li><b>Nothing leaves without your say.</b> No account and no analytics behind your back.
+              Anonymous usage statistics stay off until you press Allow on a card that asks once -
+              counts only, never code, messages or file names. With them off and remote access off, the
+              only thing that ever leaves is a feedback report you write and send yourself - and one
+              button shows its exact text first.</li>
               <li><b>Your rules stay yours.</b> Codex applies your config, its sandbox and its approval
               policy; the mode on screen is exactly the policy the thread runs with, and the plugin
               never starts a thread in a laxer one.</li>

@@ -57,6 +57,10 @@ config, MCP servers, skills and custom prompts all come with it. No proxy, no ac
   and paged back on demand.
 - **Codex's own commands** - `/compact`, `/review`, `/init`, `/new`, your custom prompts and
   skills - in the field's suggestions.
+- **Side questions** with `/side` or `/btw`: ask while Codex is working, and the answer comes in
+  a card above the field - the conversation never sees it.
+- **Codex's own settings** on a screen of their own (`/config`): what your config.toml says and
+  where each value comes from, and trusting a project in one click.
 - **`!` runs a command in your own shell**, and the output travels with your next message,
   costing no turn and no approval.
 - **Improve prompt** - the sparkle rewrites your draft in a run of its own, costing your
@@ -75,7 +79,9 @@ config, MCP servers, skills and custom prompts all come with it. No proxy, no ac
 - **Everything runs on your machine.** No proxy, no server of ours in the middle. Your Codex
   sign-in belongs to the CLI - the plugin never sends it anywhere and never hunts for API keys on
   your disk.
-- **No telemetry, no analytics, no account.** With remote access off, the only thing that ever
+- **Nothing leaves without your say.** No account and no analytics behind your back. Anonymous
+  usage statistics stay off until you press Allow on a card that asks once - counts only, never
+  code, messages or file names. With them off and remote access off, the only thing that ever
   leaves is a feedback report you write and send yourself - and one button shows its exact text
   first.
 - **Your rules stay yours.** Codex applies your config, its sandbox and its approval policy; the

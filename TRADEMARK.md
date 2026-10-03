@@ -5,13 +5,11 @@ does **not** grant any rights to the project's name or branding.
 
 ## What is not licensed
 
-- The name **Amazing Codex GUI**, and names confusingly similar to it - as well
-  as the names of the plugin it was ported from, **Amazing Claude Code GUI** and
-  **Amazing Claude Code**.
+- The name **Amazing Codex GUI** and **Amazing Codex**, and names confusingly
+  similar to them.
 - The plugin logo and the tool window icon, and marks confusingly similar to
   them.
-- The plugin ID `io.github.crmapache.amazingcodex` (and the original plugin's
-  `io.github.crmapache.amazingclaudecode`), and IDs derived from them.
+- The plugin ID `io.github.crmapache.amazingcodex`, and IDs derived from it.
 
 These remain the property of the author, Maksim Zolotoi.
 
@@ -42,9 +40,7 @@ it is an independent modified version and not the original.
 
 OpenAI, Codex and ChatGPT are trademarks of OpenAI. This project is an
 independent plugin that drives the Codex CLI; it is not affiliated with,
-endorsed by, or sponsored by OpenAI. Claude and Claude Code are trademarks of
-Anthropic, named here only because this plugin began as a port of one for
-Claude Code. JetBrains, IntelliJ, and WebStorm are
+endorsed by, or sponsored by OpenAI. JetBrains, IntelliJ, and WebStorm are
 trademarks of JetBrains s.r.o., and this project is likewise not affiliated
 with JetBrains.
 

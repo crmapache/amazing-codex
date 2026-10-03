@@ -18,11 +18,6 @@ moved to any edge of the window.
 
 The rest of this file is for people working on the plugin rather than using it.
 
-This plugin is a port of [Amazing Claude Code GUI](https://github.com/crmapache/amazing-claude-code)
-to Codex. The interface - the React panel, the phone client, the harness - is the same code;
-what changed is the engine underneath it, which now drives `codex app-server` instead of the
-Claude Code CLI. How the two fit together is described in `CLAUDE.md`.
-
 ## What it does that a terminal doesn't
 
 Same agent, same account, same config - but you point at files instead of typing paths,
@@ -66,7 +61,10 @@ The short version, in full in [PRIVACY.md](PRIVACY.md):
 - **The agent runs on your machine.** The plugin starts the Codex CLI and talks to it over
   its standard input and output. No proxy in between and no server of ours your conversation
   passes through. Your sign-in belongs to Codex: the plugin never sends it anywhere.
-- **No telemetry.** No analytics, no usage reporting, no account. With remote access off,
+- **Nothing is sent unless you say so.** No account, no analytics behind your back.
+  Anonymous usage statistics stay off until you press Allow on the card that asks once -
+  counts of features and minutes, never your code, messages, file names or who you are - and
+  the settings show the whole report and switch it off. With that off and remote access off,
   the only thing that ever leaves the machine is a feedback report you write and send
   yourself.
 - **Your config stays yours.** The approval policy and the sandbox a thread runs with are
@@ -85,10 +83,9 @@ Three layers, each with its own responsibility:
 
 - **Kotlin shell** (`src/main/kotlin`) - registers the panel, hosts the embedded browser,
   starts one `codex app-server` per conversation and speaks its JSON-RPC. The events Codex
-  sends are translated into the stream the panel already understands (the one Claude Code
-  used to write), so everything above the engine - the feed, the phone, statistics,
-  scenarios - carried over unchanged. The translation lives in `codex/CodexDialect.kt` and
-  `codex/CodexStream.kt`.
+  sends are translated into one stream of events the whole interface reads, so the feed, the
+  phone, statistics and scenarios share a single language whatever the agent does. The
+  translation lives in `codex/CodexDialect.kt` and `codex/CodexStream.kt`.
 - **React interface** (`webview/`) - everything the user sees. Receives agent events and
   decides on its own what to turn them into.
 - **Bridge** - `window.__accSend` from the web to the shell, `window.__accReceive` back.
@@ -116,8 +113,9 @@ with a plan card; approving it switches the conversation to Auto and starts the 
 ## Commands
 
 The field suggests Codex's own commands - `/compact`, `/review`, `/init`, `/new` (and
-`/clear`) - the panel's (`/resume`, `/fork`, `/model`, `/effort`, `/login`, `/logout`), your
-custom prompts from `~/.codex/prompts` as `/prompts:name`, and your skills. The app-server
+`/clear`), `/side` (or `/btw`) for a question beside the conversation, `/rename`, `/config` -
+the panel's (`/resume`, `/fork`, `/model`, `/effort`, `/login`, `/logout`), your custom
+prompts from `~/.codex/prompts` as `/prompts:name`, and your skills. The app-server
 has no slash commands of its own, so the IDE carries each of these out itself:
 `/compact` is `thread/compact/start`, `/review` is `review/start`, a prompt is expanded
 with its arguments, and a skill travels as a skill item beside the message.

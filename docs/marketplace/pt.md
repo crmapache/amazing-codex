@@ -62,6 +62,10 @@ personalizados vêm junto. Sem proxy no meio e sem nenhuma conta nossa.
   abertas pelo final e com as páginas mais antigas carregadas sob demanda.
 - **Os comandos do próprio Codex** - `/compact`, `/review`, `/init`, `/new`, seus prompts
   personalizados e suas skills - nas sugestões do campo.
+- **Perguntas paralelas** com `/side` ou `/btw`: pergunte enquanto o Codex trabalha; a resposta
+  chega num cartão acima do campo e a conversa nunca a vê.
+- **As configurações do próprio Codex** numa tela própria (`/config`): o que o seu config.toml
+  diz e de onde vem cada valor, e confiar num projeto com um clique.
 - **`!` roda um comando no seu próprio shell**, e a saída viaja com a sua próxima mensagem, sem
   custar um turno nem pedir permissão.
 - **Melhorar o prompt**: a estrelinha reescreve seu rascunho em uma execução separada, sem gastar o
@@ -81,9 +85,11 @@ personalizados vêm junto. Sem proxy no meio e sem nenhuma conta nossa.
 - **Tudo roda na sua máquina.** Sem proxy e sem nenhum servidor nosso no meio. Seu login no Codex
   pertence ao CLI: o plugin nunca o envia para lugar nenhum nem sai procurando chaves de API no seu
   disco.
-- **Sem telemetria, sem analytics, sem conta.** Com o acesso remoto desligado, a única coisa que
-  sai da máquina é um relatório de erro que você escreve e envia, e um botão mostra antes o texto
-  exato dele.
+- **Nada sai sem a sua permissão.** Sem conta e sem analytics escondido. As estatísticas de
+  uso anônimas ficam desligadas até você tocar em Permitir no cartão que pergunta uma única vez:
+  só contagens, nunca código, mensagens ou nomes de arquivos. Com elas e o acesso remoto
+  desligados, a única coisa que sai é um relato que você escreve e envia - e um botão mostra o
+  texto exato antes.
 - **Suas regras continuam suas.** O Codex aplica a sua configuração, o próprio sandbox dele e a
   própria política de aprovação dele; o modo na tela é exatamente a política com que a conversa
   roda, e o plugin nunca inicia uma conversa em um modo mais frouxo.

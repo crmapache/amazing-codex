@@ -120,6 +120,51 @@ const SESSIONS: ScenarioStep = shell({
 })
 
 /** Signed in, the project open, a branch with a pull request, and a subscription half spent. */
+/**
+ * The patch Codex applied, as it reports one: a unified diff with the file's real line numbers, which is
+ * what the Edit card draws (see unifiedHunks). Both edits of the showcase only add lines, so the hunk is
+ * the lines kept around the insertion and the lines added.
+ */
+const insertion = (start: number, before: string[], added: string[], after: string[]): string => {
+  const kept = before.length + after.length
+  return [
+    `@@ -${start},${kept} +${start},${kept + added.length} @@`,
+    ...before.map((line) => ` ${line}`),
+    ...added.map((line) => `+${line}`),
+    ...after.map((line) => ` ${line}`),
+  ].join('\n')
+}
+
+const APPLE_PAY_ENTRY = [
+  '  {',
+  "    id: 'apple-pay',",
+  "    label: 'Apple Pay',",
+  "    icon: 'apple',",
+  '    available: () => canUseApplePay(),',
+  '    session: createApplePaySession,',
+  '  },',
+]
+
+const MERCHANT_SESSION = [
+  '',
+  'export const signMerchantSession = async (validationUrl: string) => {',
+  '  assertAppleDomain(validationUrl)',
+  '',
+  '  const response = await fetch(validationUrl, {',
+  '    method: "POST",',
+  '    agent: appleMerchantAgent,',
+  '    body: JSON.stringify({',
+  '      merchantIdentifier: env.APPLE_MERCHANT_ID,',
+  '      displayName: "Nimbus",',
+  '      initiative: "web",',
+  '      initiativeContext: env.PUBLIC_HOST,',
+  '    }),',
+  '  })',
+  '',
+  '  return response.json()',
+  '}',
+]
+
 export const showcaseBootstrap: ScenarioStep[] = [
   shell({ type: 'auth', installed: true, loggedIn: true, email: 'dev@nimbus.dev', plan: 'Max' }),
   shell({
@@ -246,6 +291,16 @@ const WORK: ScenarioStep[] = [
         "export const METHODS: PaymentMethod[] = [\n  { id: 'card', label: 'Card', icon: 'card', available: () => true },\n  { id: 'paypal', label: 'PayPal', icon: 'paypal', available: () => true },\n]",
       new_string:
         "export const METHODS: PaymentMethod[] = [\n  {\n    id: 'apple-pay',\n    label: 'Apple Pay',\n    icon: 'apple',\n    available: () => canUseApplePay(),\n    session: createApplePaySession,\n  },\n  { id: 'card', label: 'Card', icon: 'card', available: () => true },\n  { id: 'paypal', label: 'PayPal', icon: 'paypal', available: () => true },\n]",
+      unified_diff: insertion(
+        14,
+        ['export const METHODS: PaymentMethod[] = ['],
+        APPLE_PAY_ENTRY,
+        [
+          "  { id: 'card', label: 'Card', icon: 'card', available: () => true },",
+          "  { id: 'paypal', label: 'PayPal', icon: 'paypal', available: () => true },",
+          ']',
+        ],
+      ),
     },
     'w-edit-1',
   ),
@@ -293,6 +348,12 @@ const WORK: ScenarioStep[] = [
         'export const startSession = async (cart: Cart) => {\n  const provider = providerFor(cart)\n  return provider.createIntent(cart)\n}',
       new_string:
         'export const startSession = async (cart: Cart) => {\n  const provider = providerFor(cart)\n  return provider.createIntent(cart)\n}\n\nexport const signMerchantSession = async (validationUrl: string) => {\n  assertAppleDomain(validationUrl)\n\n  const response = await fetch(validationUrl, {\n    method: "POST",\n    agent: appleMerchantAgent,\n    body: JSON.stringify({\n      merchantIdentifier: env.APPLE_MERCHANT_ID,\n      displayName: "Nimbus",\n      initiative: "web",\n      initiativeContext: env.PUBLIC_HOST,\n    }),\n  })\n\n  return response.json()\n}',
+      unified_diff: insertion(
+        31,
+        ['export const startSession = async (cart: Cart) => {', '  const provider = providerFor(cart)', '  return provider.createIntent(cart)', '}'],
+        MERCHANT_SESSION,
+        [],
+      ),
     },
     'w-edit-2',
   ),

@@ -6,9 +6,8 @@ It exists because a plugin cannot reach into your home network from the outside.
 this server and holds the connection open; your phone dials out to the same server; frames go one way
 and the other. That is the whole job.
 
-It came over with the rest of the code from Amazing Claude Code GUI (at its 0.12.13) and is run
-separately from that project's relay: the relay also serves the phone its client, so the host a phone
-was paired through decides which client it runs, and only this fork's relay serves this fork's.
+It is run as a relay of this plugin's own: the relay also serves the phone its client, so the host a
+phone was paired through decides which client it runs, and only this relay serves this plugin's.
 
 > **Licensed Apache-2.0**, separately from the plugin around it, which is source-available under the
 > Elastic License 2.0. The plugin's licence forbids offering the software to third parties as a hosted
@@ -88,8 +87,8 @@ host the client elsewhere and list its origin in `RELAY_ALLOWED_ORIGINS`.
 ### How this fork's relay is deployed
 
 The relay the plugin points at by default, `wss://relay-codex.mzpizote.com`, is the Coolify application
-`acx-relay` on the same server as the Claude project's `acc-relay` (`relay.mzpizote.com`) and
-`acc-relay-dev` (`relay-dev.mzpizote.com`). Until this directory becomes a repository of its own (see
+`acx-relay` on the same server as two other relays of the same author, `acc-relay` (`relay.mzpizote.com`)
+and `acc-relay-dev` (`relay-dev.mzpizote.com`). Until this directory becomes a repository of its own (see
 "Where this lives") there is no build from git to hook up: the sources are copied to the server, the
 image is built there, and Coolify pulls it from the registry running on that machine. It is one
 command:
@@ -103,11 +102,11 @@ What it does, in order:
 
 1. Checks that the Coolify application it is about to redeploy (`APP_UUID` at the top of the script)
    answers on `https://relay-codex.mzpizote.com` and pulls `127.0.0.1:5000/acx-relay`. A uuid of one
-   of the Claude relays fails this and nothing happens.
+   of the other two relays fails this and nothing happens.
 2. Asks before going on (`--yes` skips the question), because phones are paired with this relay.
 3. Builds the phone's client from `webview/` (`pnpm build:mobile`), stages it in `relay/public/`, and
    checks that what is staged is this fork's client: the shell titled Amazing Codex GUI, a manifest
-   named Amazing Codex, no Amazing Claude Code anywhere in the shell, the manifest or the service
+   named Amazing Codex, no other plugin's name anywhere in the shell, the manifest or the service
    worker, and a privacy page built from this repository's `PRIVACY.md`. That step is
    `scripts/relay-client.sh` on its own.
 4. Copies the sources to `/root/apps/acx-relay` on the server (emptied first, so a file that has left
@@ -131,8 +130,8 @@ Two things are worth knowing after a deploy:
 A phone dials whichever host served it the client rather than the address written down when it was
 paired (see relayAddress in the mobile client), so moving the relay to another server behind the same
 address asks everybody to reload, not to pair again. A new address is a different matter: the phone's
-keys live in the storage of the origin that served it, so phones paired through the Claude project's
-relay before this fork had its own pair again here, with a fresh QR code.
+keys live in the storage of the origin that served it, so phones paired through another relay before
+this one existed pair again here, with a fresh QR code.
 
 Horizontal scaling is out of scope. Two replicas would need a shared bus between them, and this
 server's whole value is that it is small enough to read in one sitting.
@@ -140,8 +139,8 @@ server's whole value is that it is small enough to read in one sitting.
 ### First deploy
 
 Done once, by hand, before `scripts/relay-deploy.sh` has anywhere to deploy to. Everything mirrors
-`acc-relay`, with these differences: the container listens on **4450** (the Claude project's image
-defaults to 8080); the image is `acx-relay`, not `acc-relay`; the VAPID pair is new; and the domain
+`acc-relay`, with these differences: the container listens on **4450** (that relay's image defaults
+to 8080); the image is `acx-relay`, not `acc-relay`; the VAPID pair is new; and the domain
 is `relay-codex.mzpizote.com`.
 
 1. **DNS.** An `A` record `relay-codex.mzpizote.com` → `40.160.85.25` in Cloudflare, **not proxied**

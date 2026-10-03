@@ -3,9 +3,6 @@
 All notable changes to Amazing Codex GUI. The section for the version being built is what the
 Marketplace and the IDE's update dialog show, so every release lists only its own changes.
 
-This plugin began as a port of Amazing Claude Code GUI to OpenAI Codex; the history before 0.1.0
-belongs to that plugin and lives in its own repository.
-
 ## [Unreleased]
 
 ## [0.2.0] - 2026-10-02
@@ -28,6 +25,14 @@ belongs to that plugin and lives in its own repository.
 - Changed: the plugin has its own mark (ACX) and its own relay for remote access. Phones paired before this version have to be paired again.
 - Changed: per-turn settings the panel sends now follow your config.toml: network access and extra writable folders of the workspace sandbox, and the reasoning summary.
 - Changed: "Default" in the model menu names the model your config.toml sets, when it sets one, and "auto" effort names its effort.
+- Changed: on the phone, answering a plan shows the plan itself rather than the last thing the agent said before it.
+- Fixed: a plan arrived without its Approve & run and Keep planning buttons, so plan mode could not be approved from the panel or the phone.
+- Fixed: Stop wiped the part of the answer that had already been written.
+- Fixed: the findings of `/review` appeared twice.
+- Fixed: a fork took a generated name over the one it inherited from its conversation.
+- Fixed: `/compact` was captioned as an automatic compaction.
+- Fixed: a turn the tab or the phone only saw the end of was captioned with the time it had watched rather than the time it took.
+- Fixed: on the phone, a business seat's account showed two empty limits instead of its spending limit.
 - Fixed: on the phone, "load earlier messages" did nothing in long conversations written in Russian or another non-Latin script.
 - Fixed: a usage update about an extra limit could overwrite the five-hour and weekly rings.
 - Fixed: "the model picked is not the one answering" could appear on a tab left on Default.

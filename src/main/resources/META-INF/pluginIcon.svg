@@ -1,11 +1,8 @@
 <!-- The plugin's logo: the ACX monogram on a rounded plate.
 
-     It belongs to the same family as the mark of Amazing Claude Code GUI, the plugin this one was forked
-     from - the same 20x20 grid, the same stroke weights, the same fan of rays - and differs where the eye
-     tells the two apart at a glance: the third letter is an X instead of a second C, and the plate is
-     indigo instead of coral. Both plugins can sit in one IDE, and two coral squares in the side bar or in
-     the list of installed plugins would be one too many. The fork's own mark is also what the original's
-     licence asks of a fork: its name and logo are not part of it.
+     Drawn on a 20x20 grid with even stroke weights and a fan of rays; the third letter is an X, and the
+     plate is indigo, so the mark is told apart at a glance in the side bar and in the list of installed
+     plugins.
 
      The plate - the pale frame and the field inside it - is the trace of the original raster, which is
      why those two paths are long and are not edited by hand; only their colours are this plugin's. What

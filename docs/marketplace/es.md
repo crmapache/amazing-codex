@@ -63,6 +63,10 @@ personalizados vienen contigo. Sin proxy y sin ninguna cuenta nuestra.
   la terminal, que se abren desde el final y cargan las páginas anteriores bajo demanda.
 - **Los propios comandos de Codex** - `/compact`, `/review`, `/init`, `/new`, tus prompts
   personalizados y tus skills - en las sugerencias del campo.
+- **Preguntas al margen** con `/side` o `/btw`: pregunta mientras Codex trabaja; la respuesta
+  llega en una tarjeta sobre el campo y la conversación nunca la ve.
+- **Los ajustes de Codex** en una pantalla propia (`/config`): qué dice tu config.toml y de
+  dónde sale cada valor, y confiar en un proyecto con un clic.
 - **`!` ejecuta un comando en tu propio shell**, y la salida viaja con tu siguiente mensaje, sin
   gastar un turno ni pedir permiso.
 - **Mejorar el prompt**: la estrella reescribe tu borrador en una ejecución aparte, sin gastar el
@@ -82,9 +86,11 @@ personalizados vienen contigo. Sin proxy y sin ninguna cuenta nuestra.
 - **Todo corre en tu máquina.** Sin proxy y sin ningún servidor nuestro por el medio. Tu inicio de
   sesión de Codex pertenece al CLI: el plugin nunca lo envía a ningún sitio ni va buscando claves
   de API por tu disco.
-- **Sin telemetría, sin analítica y sin cuenta.** Con el acceso remoto apagado, lo único que sale de
-  la máquina es un informe de fallo que tú escribes y envías, y un botón te enseña antes su texto
-  exacto.
+- **Nada sale sin tu permiso.** Sin cuenta y sin analíticas a tus espaldas. Las estadísticas
+  de uso anónimas están apagadas hasta que pulsas Permitir en la tarjeta que pregunta una sola
+  vez: solo recuentos, nunca código, mensajes ni nombres de archivo. Con ellas y el acceso
+  remoto apagados, lo único que sale es un informe que tú escribes y envías - y un botón muestra
+  antes su texto exacto.
 - **Tus reglas siguen siendo tuyas.** Codex aplica tu configuración, su propio sandbox y su propia
   política de aprobación; el modo en pantalla es exactamente la política con la que corre el hilo,
   y el plugin nunca arranca un hilo en un modo más laxo.
