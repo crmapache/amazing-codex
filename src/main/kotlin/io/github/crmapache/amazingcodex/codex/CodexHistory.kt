@@ -298,8 +298,17 @@ internal object CodexHistory {
     /**
      * A question with options the agent asked (`request_user_input`) and how it was answered - null
      * [answers] when it never was. [input] is the panel's question card's (see CodexDialect.askInput).
+     * [after] is the agent's item it was asked right after - a remark or a thought, by the id
+     * `thread/turns/list` gives it too - or null when the agent had said nothing yet in the turn;
+     * [answeredAt] is when the person answered, as the file stamped it.
      */
-    data class Ask(val callId: String, val input: JsonObject, val answers: Map<String, String>?)
+    data class Ask(
+        val callId: String,
+        val input: JsonObject,
+        val answers: Map<String, String>?,
+        val after: String? = null,
+        val answeredAt: String? = null,
+    )
 
     /**
      * The questions a conversation's file holds, by the id of the turn they were asked in.
@@ -316,19 +325,33 @@ internal object CodexHistory {
     internal fun asksOf(file: File?): Map<String, List<Ask>> {
         if (file == null || !file.isFile) return emptyMap()
 
-        val calls = LinkedHashMap<String, Pair<String, List<JsonObject>>>()
-        val replies = HashMap<String, JsonObject>()
+        val calls = LinkedHashMap<String, Asked>()
+        val replies = HashMap<String, Pair<JsonObject, String?>>()
         var turn = ""
+        // The agent's last remark or thought in the turn so far - where the next question stands.
+        var lastSaid: String? = null
 
         runCatching {
             file.useLines { lines ->
                 for (line in lines) {
+                    // The agent's own items are many and some heavy (a thought carries its encrypted body), so
+                    // only their head is read, never the whole line.
+                    val said = SAID.find(line.take(SAID_HEAD))
+                    if (said != null) {
+                        if (said.groupValues[1] == "reasoning" || said.groupValues[3] == "assistant") lastSaid = said.groupValues[2]
+                        continue
+                    }
+
                     val context = line.contains(TURN_CONTEXT)
                     if (!context && !line.contains(ASK_CALL) && !line.contains(FUNCTION_OUTPUT)) continue
-                    val payload = runCatching { Json.parseToJsonElement(line).jsonObject["payload"] as? JsonObject }.getOrNull() ?: continue
+                    val record = runCatching { Json.parseToJsonElement(line).jsonObject }.getOrNull() ?: continue
+                    val payload = record["payload"] as? JsonObject ?: continue
 
                     if (context) {
-                        AppServer.text(payload["turn_id"]).takeIf { it.isNotEmpty() }?.let { turn = it }
+                        AppServer.text(payload["turn_id"]).takeIf { it.isNotEmpty() }?.let {
+                            if (it != turn) lastSaid = null
+                            turn = it
+                        }
                         continue
                     }
 
@@ -337,20 +360,20 @@ internal object CodexHistory {
                         "function_call" -> if (AppServer.text(payload["name"]) == ASK_NAME) {
                             val arguments = runCatching { Json.parseToJsonElement(AppServer.text(payload["arguments"])).jsonObject }.getOrNull()
                             val questions = (arguments?.get("questions") as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
-                            if (questions.isNotEmpty()) calls[callId] = turn to questions
+                            if (questions.isNotEmpty()) calls[callId] = Asked(turn, questions, lastSaid)
                         }
 
                         "function_call_output" -> runCatching {
                             Json.parseToJsonElement(AppServer.text(payload["output"])).jsonObject
-                        }.getOrNull()?.let { replies[callId] = it }
+                        }.getOrNull()?.let { replies[callId] = it to AppServer.text(record["timestamp"]).ifEmpty { null } }
                     }
                 }
             }
         }
 
-        return calls.entries.groupBy({ it.value.first }) { (callId, asked) ->
-            val (input, ids) = CodexDialect.askInput(asked.second)
-            val reply = replies[callId]?.get("answers") as? JsonObject
+        return calls.entries.groupBy({ it.value.turn }) { (callId, asked) ->
+            val (input, ids) = CodexDialect.askInput(asked.questions)
+            val reply = replies[callId]?.first?.get("answers") as? JsonObject
             val answers = reply?.let { byId ->
                 ids.mapNotNull { (question, id) ->
                     val picked = ((byId[id] as? JsonObject)?.get("answers") as? JsonArray).orEmpty()
@@ -358,9 +381,15 @@ internal object CodexHistory {
                     if (picked.isEmpty()) null else question to picked.joinToString(", ")
                 }.toMap()
             }
-            Ask(callId, input, answers)
+            Ask(callId, input, answers, after = asked.after, answeredAt = replies[callId]?.second)
         }
     }
+
+    private class Asked(val turn: String, val questions: List<JsonObject>, val after: String?)
+
+    /** The head of an agent's item in a thread's file: its kind, its id, and for a message who said it. */
+    private val SAID = Regex(""""type":"response_item","payload":\{"type":"(message|reasoning)","id":"([^"]+)"(?:,"role":"([a-z]+)")?""")
+    private const val SAID_HEAD = 400
 
     private const val ASK_NAME = "request_user_input"
     private const val ASK_CALL = "\"request_user_input\""
@@ -489,19 +518,30 @@ internal object CodexReplay {
         // of - or at its end when there is none (see [CodexHistory.asksOf] on why they are not items).
         val askAt = items.indexOfLast { AppServer.text(it["type"]) == "agentMessage" && AppServer.text(it["phase"]) == "final_answer" }
             .takeIf { it >= 0 } ?: items.size
-        var asked = false
+        // Each question where it was asked: right after the agent's item it followed, or right after the
+        // person's message when the agent had said nothing yet in the turn. An item the turn's list does not
+        // have leaves it to the guess above.
+        val slots = asks.groupBy { ask ->
+            val after = ask.after?.let { id -> items.indexOfFirst { AppServer.text(it["id"]) == id } }
+            when {
+                after != null && after >= 0 -> after + 1
+                ask.after == null ->
+                    items.indexOfFirst { AppServer.text(it["type"]) == "userMessage" }.let { if (it >= 0) it + 1 else 0 }
+                else -> askAt
+            }
+        }
         val startedAt = AppServer.longOf(turn["startedAt"])?.let { Instant.ofEpochSecond(it).toString() }
         val lines = ArrayList<String>()
         var lastText = ""
+        // The review's findings come back once more as an ordinary message (see CodexStream.reviewSaid).
+        var reviewSaid: String? = null
 
-        fun ask() {
-            if (asked) return
-            asked = true
-            for (question in asks) lines += askLines(question)
+        fun askAt(index: Int) {
+            for (question in slots[index].orEmpty()) lines += askLines(question)
         }
 
         for ((index, item) in items.withIndex()) {
-            if (index == askAt) ask()
+            askAt(index)
             val id = AppServer.text(item["id"])
             when (AppServer.text(item["type"])) {
                 "userMessage" -> {
@@ -513,7 +553,9 @@ internal object CodexReplay {
 
                 "agentMessage" -> {
                     val text = AppServer.text(item["text"])
-                    if (text.isNotBlank()) {
+                    val repeatsReview = reviewSaid != null && text.trim() == reviewSaid
+                    if (repeatsReview) reviewSaid = null
+                    if (text.isNotBlank() && !repeatsReview) {
                         lastText = text
                         lines += CodexDialect.assistantText(id, text, model = "", uuid = id)
                     }
@@ -537,6 +579,7 @@ internal object CodexReplay {
                     val review = AppServer.text(item["review"])
                     if (review.isNotBlank()) {
                         lastText = review
+                        reviewSaid = review.trim()
                         lines += CodexDialect.assistantText(id, review, model = "", uuid = id)
                     }
                 }
@@ -549,7 +592,7 @@ internal object CodexReplay {
             }
         }
 
-        ask()
+        askAt(items.size)
 
         // A turn that stopped on a question nobody answered is left open: the question is the last thing
         // that happened, and the panel brings it back as a card to answer (see feed/build.ts, revivedAsk).
@@ -580,6 +623,7 @@ internal object CodexReplay {
         CodexDialect.toolResults(
             listOf(CodexDialect.ToolResult(ask.callId, summary, isError = answers.isEmpty())),
             uuid = "${ask.callId}-answer",
+            timestamp = ask.answeredAt,
             toolUseResult = buildJsonObject {
                 putJsonObject("answers") { answers.forEach { (question, answer) -> put(question, answer) } }
             },

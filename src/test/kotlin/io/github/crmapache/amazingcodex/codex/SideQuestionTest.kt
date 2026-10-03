@@ -56,12 +56,16 @@ class SideQuestionTest {
     }
 
     @Test
-    fun `the fork goes without sub-agents and without every MCP server by name`() {
+    fun `the fork goes without sub-agents, without the configured MCP servers by name and without Codex's own`() {
         val config = SideQuestion.configOverrides(listOf("notion", "playwright-1"))
 
         assertEquals(JsonPrimitive(false), config["features.multi_agent"])
         assertEquals(JsonPrimitive(false), config["mcp_servers.notion.enabled"])
         assertEquals(JsonPrimitive(false), config["mcp_servers.playwright-1.enabled"])
+        // Codex's apps and a plugin's servers have no table to switch off; their features go instead.
+        assertEquals(JsonPrimitive(false), config["features.apps"])
+        assertEquals(JsonPrimitive(false), config["features.plugins"])
+        assertFalse(config.keys.any { it.startsWith("mcp_servers.codex_apps") })
     }
 
     // A name that would break the dotted key is left alone rather than written into a path it escapes.
@@ -69,7 +73,7 @@ class SideQuestionTest {
     fun `a server name that cannot be a key is not switched off by a broken key`() {
         val config = SideQuestion.configOverrides(listOf("odd.name", "", "quoted\"name"))
 
-        assertEquals(setOf("features.multi_agent"), config.keys)
+        assertEquals(setOf("features.multi_agent", "features.apps", "features.plugins"), config.keys)
     }
 
     @Test

@@ -140,6 +140,15 @@ internal class CodexSession(
     @Volatile
     private var interruptWanted = false
 
+    /**
+     * The end of a plan-mode turn whose plan waits for a decision, not yet told to the panel. Codex ends the
+     * turn with the plan; the panel's dialect has the plan as a question the turn stands on (ExitPlanMode),
+     * and the card's buttons, the field's "answer the plan" and the phone's card all live only while the
+     * turn runs. So the turn is told to have ended once the plan is decided - see [releasePlanTurn].
+     */
+    @Volatile
+    private var heldPlanTurn: JsonObject? = null
+
     var model: String = model
         private set
 
@@ -278,6 +287,12 @@ internal class CodexSession(
         if (server == null && start() == null) {
             endTurn()
             return
+        }
+        // A message that is not an answer to a waiting plan sets the plan aside, as typing past it does in
+        // Codex's terminal: the plan is withdrawn and its turn ends before this one begins.
+        if (heldPlanTurn != null) {
+            withdrawPlans()
+            releasePlanTurn(drain = false)
         }
         busy = true
         whenOpen { deliver(Outgoing(text, images, context)) }
@@ -421,6 +436,7 @@ internal class CodexSession(
     private fun compact() {
         val srv = server ?: return endTurn()
         val thread = conversationId ?: return endTurn()
+        stream.compactionAsked()
         srv.request(
             "thread/compact/start",
             buildJsonObject { put("threadId", thread) },
@@ -556,6 +572,26 @@ internal class CodexSession(
     }
 
     /** The person's name for the tab, written into the thread a process has just opened - see [ownTitle]. */
+    /**
+     * A fork carries its parent's name: Codex copies it into the new thread's record (measured on 0.152 -
+     * the history and `codex resume` show the fork under it at once). The tab takes it on with the
+     * parent's standing - the model's name stays the model's, anything else is a person's - so the title
+     * question, which exists to replace stand-ins, does not write over a name somebody gave.
+     */
+    private fun adoptForkName(thread: String, name: String) {
+        if (name.isEmpty() || !nameWanted) return
+        val parent = forkFrom ?: return
+        val book = AutoTitles(workingDirectory)
+        if (AutoTitles.sourceOf(name, book.all()[parent]) == SessionSnapshot.TITLE_LLM) {
+            modelNamed = name
+            book.note(thread, name)
+            onTitle(name)
+        } else {
+            namedAs = name
+            onRenamed(name)
+        }
+    }
+
     private fun nameAfterPerson() {
         val title = ownTitle()?.trim()?.takeIf { it.isNotEmpty() } ?: return
         if (title == namedAs) return
@@ -622,6 +658,22 @@ internal class CodexSession(
     private fun forkForAside(aside: Aside, through: String? = null, alone: Boolean = false) {
         if (aside.cancelled) return
         val srv = server ?: return finishAside(aside, SideQuestion.Answer.Failed(SideQuestion.Reason.ENDED, "The conversation is not running."))
+
+        // Which MCP servers the settings in force configure - the only ones a fork can switch off by name
+        // (see SideQuestion.configOverrides). Asked of this process, so a project's own servers count too.
+        srv.request(
+            "config/read",
+            buildJsonObject { workingDirectory?.let { put("cwd", it) } },
+            onResult = { result ->
+                val servers = ((result as? JsonObject)?.get("config") as? JsonObject)?.get("mcp_servers") as? JsonObject
+                openAside(srv, aside, through, alone, servers?.keys.orEmpty())
+            },
+            onError = { openAside(srv, aside, through, alone, emptySet()) },
+        )
+    }
+
+    private fun openAside(srv: AppServer, aside: Aside, through: String?, alone: Boolean, configuredServers: Set<String>) {
+        if (aside.cancelled) return
         val parent = conversationId.takeUnless { alone }
 
         val params = buildJsonObject {
@@ -638,7 +690,7 @@ internal class CodexSession(
             put("approvalPolicy", "never")
             put("sandbox", PermissionModes.SANDBOX_READ_ONLY)
             put("developerInstructions", SideQuestion.INSTRUCTIONS)
-            put("config", SideQuestion.configOverrides(mcpStartup.keys))
+            put("config", SideQuestion.configOverrides(configuredServers))
         }
 
         srv.request(
@@ -947,6 +999,14 @@ internal class CodexSession(
         synchronized(afterTurn) { afterTurn.clear() }
         if (server == null) return
 
+        // Stop over a plan nobody has decided: Codex has nothing running, only the panel's turn stands on
+        // the card. The plan is withdrawn and the turn ends as stopped.
+        if (heldPlanTurn != null) {
+            withdrawPlans()
+            releasePlanTurn(drain = false)
+            return
+        }
+
         val turn = activeTurn ?: stream.activeTurn
         if (turn == null) {
             if (busy) interruptWanted = true
@@ -985,6 +1045,10 @@ internal class CodexSession(
     fun stop() {
         val srv = server ?: return
         abandonAsides()
+        // A plan left undecided goes with the process; its turn is told to have ended, or the panel would
+        // stand on a card nothing can answer any more.
+        heldPlanTurn?.let(stream::turnCompleted)
+        heldPlanTurn = null
         server = null
         busy = false
         open = false
@@ -1003,6 +1067,20 @@ internal class CodexSession(
         busy = false
         activeTurn = null
         onTurnEnded()
+    }
+
+    /** The held end of a plan-mode turn, told now - see [heldPlanTurn]. */
+    private fun releasePlanTurn(drain: Boolean) {
+        val turn = heldPlanTurn ?: return
+        heldPlanTurn = null
+        stream.turnCompleted(turn)
+        endTurn()
+        if (drain) drainAfterTurn()
+    }
+
+    private fun withdrawPlans() {
+        val plans = awaitingPermission.filterValues { it.kind == Kind.PLAN }.keys
+        plans.forEach { id -> if (awaitingPermission.remove(id) != null) onPermissionWithdrawn(id) }
     }
 
     private fun drainAfterTurn() {
@@ -1077,6 +1155,10 @@ internal class CodexSession(
 
             Kind.PLAN -> {
                 closeCard(pending.request.toolUseId, if (allow) "Plan approved." else message, isError = !allow)
+                // The planning turn ends here, as far as the panel knows; what was waiting for its end waits
+                // on behind the turn that follows, if one does.
+                val followed = allow || message.isNotBlank()
+                releasePlanTurn(drain = !followed)
                 if (allow) implementPlan() else followUp(message)
             }
 
@@ -1213,6 +1295,8 @@ internal class CodexSession(
         awaitingPermission.clear()
         requestIds.clear()
         orphaned.forEach(onPermissionWithdrawn)
+        heldPlanTurn?.let(stream::turnCompleted)
+        heldPlanTurn = null
 
         if (!requested) {
             DiagnosticsLog.note(DiagnosticsLog.AGENT, "codex exited on its own (code $code)")
@@ -1330,6 +1414,7 @@ internal class CodexSession(
         }
 
         namedAs = null
+        if (!resumed && forkFrom != null) adoptForkName(id, AppServer.text(thread?.get("name")).trim())
         nameAfterPerson()
 
         // A conversation continued from the history knows how full its window is only after its next turn;
@@ -1413,8 +1498,13 @@ internal class CodexSession(
 
             "turn/completed" -> {
                 val turn = params["turn"] as? JsonObject ?: return
-                stream.turnCompleted(turn)
                 AppServer.text(turn["id"]).takeIf { it.isNotEmpty() }?.let { lastEndedTurn = it }
+                if (AppServer.text(turn["status"]) == "completed" && awaitingPermission.values.any { it.kind == Kind.PLAN }) {
+                    heldPlanTurn = turn
+                    activeTurn = null
+                    return
+                }
+                stream.turnCompleted(turn)
                 endTurn()
                 drainAfterTurn()
             }

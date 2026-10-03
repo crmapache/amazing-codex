@@ -48,6 +48,24 @@ internal class CodexStream(
     private var compactingSince = 0L
     private var tokensBeforeCompaction: Long? = null
 
+    /** The compaction under way is the person's `/compact`, not one Codex started on its own. */
+    private var compactionAsked = false
+
+    /**
+     * The remark being typed out right now and what of it has arrived. Codex completes a remark only when
+     * it is whole: a turn stopped in the middle of one never completes it (measured on 0.152 - the thread's
+     * file keeps no trace of it either), and the panel drops typed-out words that no answer follows. So the
+     * words are kept here, and a turn ending over an open remark lays them down as they stood.
+     */
+    private var openMessageId: String? = null
+    private val openMessageText = StringBuilder()
+
+    /**
+     * A review's findings, as the end of review mode said them. Codex 0.152 then says the same words again
+     * as an ordinary message (measured), and the feed would show the review twice.
+     */
+    private var reviewSaid: String? = null
+
     /** A counter for the task strip's snapshots: each plan update is a call of its own in the feed. */
     private var planUpdates = 0
 
@@ -66,6 +84,8 @@ internal class CodexStream(
         lastUsage = null
         drawn.clear()
         retryAttempt = 0
+        closeMessage()
+        reviewSaid = null
     }
 
     fun itemStarted(item: JsonObject) {
@@ -78,7 +98,11 @@ internal class CodexStream(
 
             // A remark of its own: the words that follow are a new block (see CodexDialect.textBlockStart) -
             // said with the first of them, so a message that comes to nothing draws nothing.
-            "agentMessage" -> blockOwed = true
+            "agentMessage" -> {
+                blockOwed = true
+                openMessageId = AppServer.text(item["id"]).ifEmpty { null }
+                openMessageText.clear()
+            }
 
             // A Stop hook sent the agent back to work: what it said before this was an ending of the turn,
             // and the turn now goes on (see CodexDialect.messageEnd).
@@ -98,9 +122,12 @@ internal class CodexStream(
 
         when (AppServer.text(item["type"])) {
             "agentMessage" -> {
+                closeMessage()
                 val text = AppServer.text(item["text"])
-                if (text.isBlank()) blockOwed = false
-                if (text.isNotBlank()) {
+                val repeatsReview = reviewSaid != null && text.trim() == reviewSaid
+                if (repeatsReview) reviewSaid = null
+                if (text.isBlank() || repeatsReview) blockOwed = false
+                if (text.isNotBlank() && !repeatsReview) {
                     lastAgentText = text
                     startBlock()
                     emit(CodexDialect.assistantText(id, text, model(), uuid = id, usage = lastUsage))
@@ -131,6 +158,7 @@ internal class CodexStream(
                 val review = AppServer.text(item["review"])
                 if (review.isNotBlank()) {
                     lastAgentText = review
+                    reviewSaid = review.trim()
                     emit(CodexDialect.assistantText(id, review, model(), uuid = id))
                 }
             }
@@ -147,7 +175,13 @@ internal class CodexStream(
     fun agentDelta(delta: String) {
         if (delta.isEmpty()) return
         startBlock()
+        openMessageText.append(delta)
         emit(CodexDialect.textDelta(delta))
+    }
+
+    private fun closeMessage() {
+        openMessageId = null
+        openMessageText.setLength(0)
     }
 
     /** A new block of words is owed by an agentMessage that has begun - see [itemStarted]. */
@@ -263,6 +297,16 @@ internal class CodexStream(
             emit(CodexDialect.rateLimited(resetsAtSeconds = null, window = "codex"))
         }
 
+        // A remark cut off by the end of the turn (Stop, as a rule) stays as far as it got: the person has
+        // been reading it, and without an answer to stand on the panel would wipe it from the feed.
+        val cutOff = openMessageText.toString()
+        val cutOffId = openMessageId
+        closeMessage()
+        if (cutOffId != null && cutOff.isNotBlank()) {
+            lastAgentText = cutOff
+            emit(CodexDialect.assistantText(cutOffId, cutOff, model(), uuid = cutOffId, usage = lastUsage))
+        }
+
         val duration = AppServer.longOf(turn["durationMs"]) ?: (now - turnStartedAt).coerceAtLeast(0)
         emit(
             CodexDialect.result(
@@ -285,11 +329,18 @@ internal class CodexStream(
     /** A compaction of the whole conversation (`/compact`) runs as a turn of its own - see CodexSession. */
     fun compactionFinished() = finishCompaction()
 
+    /** The person asked for the compaction that comes next - see CodexSession.compact. */
+    fun compactionAsked() {
+        compactionAsked = true
+    }
+
     private fun finishCompaction() {
         if (compactingSince == 0L) return
         val took = System.currentTimeMillis() - compactingSince
         compactingSince = 0L
-        emit(CodexDialect.compactBoundary(tokensBeforeCompaction, null, took))
+        val manual = compactionAsked
+        compactionAsked = false
+        emit(CodexDialect.compactBoundary(tokensBeforeCompaction, null, took, manual))
     }
 
     fun noteTokensBeforeCompaction(tokens: Long?) {

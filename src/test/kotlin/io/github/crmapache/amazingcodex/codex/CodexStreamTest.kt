@@ -98,6 +98,36 @@ class CodexStreamTest {
     }
 
     @Test
+    fun `a remark cut off by Stop stays in the feed as far as it got`() {
+        stream.turnStarted(json("""{"id":"turn-1"}"""))
+        stream.itemStarted(json("""{"type":"agentMessage","id":"msg_1","text":""}"""))
+        stream.agentDelta("The protocol began ")
+        stream.agentDelta("in 2008")
+        lines.clear()
+
+        // Codex completes nothing: the turn just ends, interrupted.
+        stream.turnCompleted(json("""{"id":"turn-1","status":"interrupted","durationMs":4000}"""))
+
+        val (answer, result) = emitted()
+        assertEquals("msg_1", answer.text("uuid"))
+        assertEquals("The protocol began in 2008", answer.content().single().text("text"))
+        assertEquals("result", result.text("type"))
+    }
+
+    @Test
+    fun `a remark that completed is not laid down a second time when the turn ends`() {
+        stream.turnStarted(json("""{"id":"turn-1"}"""))
+        stream.itemStarted(json("""{"type":"agentMessage","id":"msg_1","text":""}"""))
+        stream.agentDelta("Done.")
+        stream.itemCompleted(json("""{"type":"agentMessage","id":"msg_1","text":"Done."}"""))
+        lines.clear()
+
+        stream.turnCompleted(json("""{"id":"turn-1","status":"completed"}"""))
+
+        assertEquals(listOf("result"), emitted().map { it.text("type") })
+    }
+
+    @Test
     fun `a thought is typed out and laid down as thinking`() {
         stream.reasoningDelta("Hm")
         stream.itemCompleted(json("""{"type":"reasoning","id":"rs_1","summary":["Reading the file."],"content":[]}"""))
@@ -274,7 +304,21 @@ class CodexStreamTest {
         assertEquals("compacting", started.text("status"))
         assertEquals("compact_boundary", ended.text("subtype"))
         assertEquals("200000", ended["compact_metadata"]!!.jsonObject.text("pre_tokens"))
+        assertEquals("auto", ended["compact_metadata"]!!.jsonObject.text("trigger"))
         assertEquals(2, lines.size)
+    }
+
+    @Test
+    fun `a compaction the person asked for is said to be manual, and only that one`() {
+        stream.compactionAsked()
+        stream.itemStarted(json("""{"type":"contextCompaction","id":"c1"}"""))
+        stream.itemCompleted(json("""{"type":"contextCompaction","id":"c1"}"""))
+        stream.itemStarted(json("""{"type":"contextCompaction","id":"c2"}"""))
+        stream.itemCompleted(json("""{"type":"contextCompaction","id":"c2"}"""))
+
+        val triggers = emitted().filter { it.text("subtype") == "compact_boundary" }
+            .map { it["compact_metadata"]!!.jsonObject.text("trigger") }
+        assertEquals(listOf("manual", "auto"), triggers)
     }
 
     @Test
@@ -287,6 +331,19 @@ class CodexStreamTest {
         val (answer, result) = emitted()
         assertEquals("One finding: a.kt:3.", answer.content().single().text("text"))
         assertEquals("One finding: a.kt:3.", result.text("result"))
+    }
+
+    @Test
+    fun `the same findings said again as a message are not a second answer`() {
+        stream.turnStarted(json("""{"id":"turn-1"}"""))
+        stream.itemCompleted(json("""{"type":"exitedReviewMode","id":"r1","review":"No new bugs in this patch."}"""))
+        stream.itemStarted(json("""{"type":"agentMessage","id":"m1","text":""}"""))
+        stream.itemCompleted(json("""{"type":"agentMessage","id":"m1","text":"No new bugs in this patch.\n"}"""))
+        // Anything else said afterwards is said.
+        stream.itemCompleted(json("""{"type":"agentMessage","id":"m2","text":"Anything else?"}"""))
+
+        val answers = emitted().filter { it.text("type") == "assistant" }.map { it.content().single().text("text") }
+        assertEquals(listOf("No new bugs in this patch.", "Anything else?"), answers)
     }
 
     @Test

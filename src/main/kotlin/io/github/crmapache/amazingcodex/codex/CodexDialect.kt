@@ -190,12 +190,14 @@ internal object CodexDialect {
      * (`{"answers": {question: answer}}`), which is what draws the answer under a question in a past
      * conversation (see feed/build.ts, addReplayedAnswers).
      */
-    fun toolResults(results: List<ToolResult>, uuid: String, toolUseResult: JsonObject? = null): String? {
+    fun toolResults(results: List<ToolResult>, uuid: String, toolUseResult: JsonObject? = null, timestamp: String? = null): String? {
         if (results.isEmpty()) return null
 
         return buildJsonObject {
             put("type", "user")
             put("uuid", uuid)
+            // When it was answered, for a replayed answer the feed shows as the person's line.
+            timestamp?.let { put("timestamp", it) }
             toolUseResult?.let { put("toolUseResult", it) }
             putJsonObject("message") {
                 put("role", "user")
@@ -278,11 +280,12 @@ internal object CodexDialect {
         put("status", "compacting")
     }.toString()
 
-    fun compactBoundary(preTokens: Long?, postTokens: Long?, durationMs: Long?): String = buildJsonObject {
+    /** The end of a compaction; [manual] when the person asked for it (`/compact`), as against Codex's own. */
+    fun compactBoundary(preTokens: Long?, postTokens: Long?, durationMs: Long?, manual: Boolean = false): String = buildJsonObject {
         put("type", "system")
         put("subtype", "compact_boundary")
         putJsonObject("compact_metadata") {
-            put("trigger", "auto")
+            put("trigger", if (manual) "manual" else "auto")
             preTokens?.let { put("pre_tokens", it) }
             postTokens?.let { put("post_tokens", it) }
             durationMs?.let { put("duration_ms", it) }

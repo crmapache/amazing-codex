@@ -210,6 +210,8 @@ class CodexHistoryTest {
             """{"type":"plan","id":"p1","text":"1. Read\n2. Fix"}""",
             """{"type":"contextCompaction","id":"c1"}""",
             """{"type":"exitedReviewMode","id":"r1","review":"No findings."}""",
+            // Codex 0.152 says the findings again as a message; the replay shows them once.
+            """{"type":"agentMessage","id":"m1","text":"No findings."}""",
         ).joinToString(",")
 
         val lines = CodexReplay.lines(turn(items), 12_000, closeTurn = true).map(::parse)

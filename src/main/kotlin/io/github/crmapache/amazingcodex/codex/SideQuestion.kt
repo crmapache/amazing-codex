@@ -173,13 +173,20 @@ internal object SideQuestion {
     }
 
     /**
-     * The fork's settings on top of the conversation's: no sub-agents, and none of the MCP servers by name.
-     * The sandbox holds what the shell and a patch may do, and nothing about what an MCP server does on
-     * its own side; with no card to ask in, the side conversation simply goes without them.
+     * The fork's settings on top of the conversation's: no sub-agents, and no MCP servers. The sandbox holds
+     * what the shell and a patch may do, and nothing about what an MCP server does on its own side; with no
+     * card to ask in, the side conversation simply goes without them.
+     *
+     * [configuredServers] are the `mcp_servers` tables of the settings in force, switched off by name. Only
+     * those can be: a server Codex brings itself - its apps (`codex_apps`), a plugin's - has no table there,
+     * and naming one makes a table without a transport, which Codex refuses to load at all (measured on
+     * 0.152: "invalid transport in `mcp_servers.codex_apps`"). Those go with their features instead.
      */
-    fun configOverrides(mcpServers: Collection<String>): JsonObject = buildJsonObject {
+    fun configOverrides(configuredServers: Collection<String>): JsonObject = buildJsonObject {
         put("features.multi_agent", false)
-        for (server in mcpServers) {
+        put("features.apps", false)
+        put("features.plugins", false)
+        for (server in configuredServers) {
             if (server.isNotBlank() && server.none { it == '.' || it == '"' }) put("mcp_servers.$server.enabled", false)
         }
     }

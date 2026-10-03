@@ -183,6 +183,42 @@ class CodexCatchUpTest {
     }
 
     @Test
+    fun `a question comes back where it was asked, after what the agent had said, with the time it was answered`() {
+        val file = Files.createTempFile("rollout-acx", ".jsonl").toFile().apply { deleteOnExit() }
+        file.writeText(
+            listOf(
+                """{"type":"turn_context","payload":{"turn_id":"turn-1","cwd":"/p"}}""",
+                """{"timestamp":"t0","type":"response_item","payload":{"type":"message","id":"msg_u","role":"user","content":[]}}""",
+                """{"timestamp":"t1","type":"response_item","payload":{"type":"message","id":"msg_a","role":"assistant","content":[]}}""",
+                """{"timestamp":"t2","type":"response_item","payload":{"type":"function_call","name":"request_user_input","call_id":"call_1",""" +
+                    """"arguments":"{\"questions\":[{\"id\":\"n\",\"question\":\"How many?\",\"options\":[{\"label\":\"5\",\"description\":\"Five.\"}]}]}"}}""",
+                """{"timestamp":"2026-10-02T23:39:10Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"{\"answers\":{\"n\":{\"answers\":[\"5\"]}}}"}}""",
+            ).joinToString("\n") + "\n",
+        )
+        val asks = CodexHistory.asksOf(file)["turn-1"].orEmpty()
+        assertEquals("msg_a", asks.single().after)
+
+        val turn = json(
+            """{"id": "turn-1", "status": "completed", "items": [
+                {"type": "userMessage", "id": "u1", "content": [{"type": "text", "text": "Plan it"}]},
+                {"type": "agentMessage", "id": "msg_a", "text": "First, a question.", "phase": "commentary"},
+                {"type": "plan", "id": "p1", "text": "1. Five tries"}]}""",
+        )
+        val replayed = CodexReplay.lines(turn, outputLimit = 1000, closeTurn = true, asks = asks).map(::json)
+        val said = replayed.map { line ->
+            val block = (line["message"] as? JsonObject)?.get("content")?.jsonArray?.firstOrNull()?.jsonObject
+            block?.get("text")?.jsonPrimitive?.content ?: block?.get("name")?.jsonPrimitive?.content ?: line["type"]!!.jsonPrimitive.content
+        }
+
+        // The person's message, the agent's remark, the question, its answer, the plan, the turn's end.
+        assertEquals(6, said.size)
+        assertEquals("First, a question.", said[1])
+        assertEquals(CodexLaunch.ASK_TOOL, said[2])
+        assertEquals("2026-10-02T23:39:10Z", replayed[3]["timestamp"]!!.jsonPrimitive.content)
+        assertEquals(CodexDialect.PLAN_TOOL, said[4])
+    }
+
+    @Test
     fun `a turn that stopped on a question nobody answered is left open for it`() {
         val asks = CodexHistory.asksOf(rollout(answered = false))["turn-1"].orEmpty()
         assertNull(asks.single().answers)
