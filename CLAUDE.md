@@ -328,6 +328,11 @@ Active file:», «## Active selection range:», «## Active selection of the fil
   `./scripts/relay-deploy.sh`, который до сборки проверяет, что цель - приложение форка, а в
   `relay/public/` - клиент форка. Подробности - `docs/panel-notes.md` («Свой релей форка») и
   `relay/README.md` (первичная настройка - «First deploy»).
+- Релей развёрнут 2026-10-02: приложение Coolify `acx-relay` (uuid в `scripts/relay-deploy.sh`), ключи
+  VAPID - в `secrets/relay-vapid.env` (в git не едет, значения в чат не выводить). Логи релея хранятся
+  7 дней, как обещает `PRIVACY.md`: docker сервера режет их только по размеру, поэтому срок держит
+  `container-log-retention.py` на сервере раз в час (`/etc/cron.d/relay-log-retention`). Заводишь
+  форку ещё один релей - впиши его uuid туда же, иначе обещание политики для него станет неправдой.
 - `PromptDeliveries` и часть `PromptDelivery` остались от оригинала: там проверка доставки читала
   транскрипт CLI. У `app-server` доставку подтверждает сам ответ на `turn/start` / `turn/steer`, и
   живой код их не зовёт.

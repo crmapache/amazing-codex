@@ -21,9 +21,9 @@ set -euo pipefail
 
 DOMAIN=relay-codex.mzpizote.com
 SERVER=root@40.160.85.25
-# The Coolify application, made once by hand - see "First deploy" in relay/README.md. Empty until it
-# exists, and the script will not run on an empty one.
-APP_UUID=""
+# The Coolify application (project and application `acx-relay`), made once by hand - see "First deploy"
+# in relay/README.md.
+APP_UUID="hxm2q10qjbjzrnzertjoi17e"
 REMOTE_DIR=/root/apps/acx-relay
 IMAGE_NAME=127.0.0.1:5000/acx-relay
 IMAGE_TAG=local

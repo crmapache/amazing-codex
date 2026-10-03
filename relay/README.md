@@ -162,6 +162,13 @@ is `relay-codex.mzpizote.com`.
    `curl https://relay-codex.mzpizote.com/v1/push/key` says `"enabled":true`;
    `https://relay-codex.mzpizote.com/manifest.webmanifest` is named Amazing Codex;
    `https://relay-codex.mzpizote.com/privacy` is this repository's `PRIVACY.md`.
+7. **Log retention.** The privacy policy promises seven days of logs, and Docker on that server rotates
+   them by size alone (10 MB x 3), which at a relay's few hundred lines a day reaches back years. So
+   an hourly job on the server drops older lines: `/usr/local/bin/container-log-retention.py 7 <uuid>`
+   from `/etc/cron.d/relay-log-retention`. A new relay's uuid goes on that line too.
+
+Done on 2026-10-02: the application is `acx-relay` in Coolify, and its uuid is the one in
+`scripts/relay-deploy.sh`.
 
 ### On this machine
 
