@@ -38,6 +38,8 @@ internal object CodexErrors {
             "rateLimitExceeded", "usageLimitExceeded" -> 429
             "serverOverloaded" -> 529
             "unauthorized" -> 401
+            // A request the API would not take as sent - a parameter it refuses among them.
+            "badRequest" -> 400
             "internalServerError" -> 500
             else -> null
         }

@@ -106,7 +106,7 @@ self.addEventListener('push', (event) => {
 
 const show = async (data) => {
   const fallback = () =>
-    self.registration.showNotification('Amazing Claude Code', {
+    self.registration.showNotification('Amazing Codex', {
       body: 'Open the app to see what happened.',
       tag: 'acc-unknown',
     })

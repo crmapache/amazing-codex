@@ -5,6 +5,7 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.util.concurrency.AppExecutorUtil
+import io.github.crmapache.amazingcodex.codex.accounts.AccountIdentity
 import io.github.crmapache.amazingcodex.codex.accounts.CodexAccounts
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
@@ -30,8 +31,25 @@ internal class ProjectAuth(
      * The sign-in has moved to another account. Everything counted about the subscription was about the
      * previous one and has to be thrown away rather than merged with what the new one says (see
      * ProjectUsage.forget).
+     *
+     * [identity] is who it has moved to, or null when there is nothing to name it by. Every open project
+     * notices one switch for itself, and this is what tells the figures, which are the whole IDE's, that
+     * the second project to notice is late news rather than a second switch (see AccountUsage.forget).
      */
-    private val onAccountChanged: (accountId: String) -> Unit = {},
+    private val onAccountChanged: (accountId: String, identity: String?) -> Unit = { _, _ -> },
+    /**
+     * What the account in force's own drawer answered, and when it was asked. It is the question the
+     * accounts screen puts to that row, so the screen takes it rather than waiting to ask again (see
+     * AccountDesk.heard).
+     */
+    private val onAnswered: (accountId: String, status: CodexAuth.Status, askedAt: Long) -> Unit =
+        { _, _, _ -> },
+    /**
+     * A sign-in or sign-out made in the terminal has been seen to land. The drawer it went into is the
+     * machine's rather than this project's, so the other open projects are still showing whatever they
+     * knew before it.
+     */
+    private val onSettled: () -> Unit = {},
 ) {
 
     /**
@@ -40,16 +58,6 @@ internal class ProjectAuth(
      */
     @Volatile
     var loggedIn = false
-        private set
-
-    /**
-     * The whole of the CLI's last answer about the ordinary sign-in - who, on what plan.
-     *
-     * Kept so the accounts screen can name that account without starting a second `auth status` of its
-     * own: this round already asked, at warm-up, and the answer is the same one.
-     */
-    @Volatile
-    var lastStatus: CodexAuth.Status? = null
         private set
 
     /** Polling of the sign-in state while the user goes through it in the terminal. */
@@ -90,16 +98,18 @@ internal class ProjectAuth(
 
             // Asked under the current account's own environment, so `loggedIn` and the plan describe the
             // account the panel claims to be on rather than whatever the CLI's default drawer holds.
-            val status = accounts.variablesFor(chosen, project.basePath)
+            val askedAt = System.currentTimeMillis()
+            val variables = accounts.variablesFor(chosen, project.basePath)
+            val status = variables
                 ?.let { CodexAuth.status(it, project.basePath) }
                 ?: CodexAuth.Status(installed = true, loggedIn = false)
 
             val before = loggedIn
             loggedIn = status.loggedIn
-            // Only the ordinary sign-in's own answer is worth keeping: asked under a drawer, `email` is
-            // still the shared file's and names whoever signed in last (see CodexAuth.Status.identity).
-            if (chosen.isEmpty()) lastStatus = status
-            send(status, chosen)
+            // A drawer that would not resolve was never asked, and the "signed out" standing in for it
+            // says nothing about what is filed there.
+            if (variables != null) onAnswered(chosen, status, askedAt)
+            send(status, chosen, if (status.installed && !status.loggedIn) heldBackBy(chosen) else emptyList())
 
             /*
              * Which account we are on.
@@ -128,12 +138,13 @@ internal class ProjectAuth(
                 account = identity
                 accountIsOurs = ours
             }
-            if (switched) onAccountChanged(chosen)
+            if (switched) onAccountChanged(chosen, identity.ifEmpty { null })
 
             if (status.loggedIn == awaited) {
                 awaited = null
                 polling?.cancel(false)
                 polling = null
+                onSettled()
             }
 
             // The model catalogue comes only after a confirmed sign-in: without one the CLI answers not
@@ -263,7 +274,22 @@ internal class ProjectAuth(
         )
     }
 
-    private fun send(status: CodexAuth.Status, accountId: String) {
+    /**
+     * What keeps a credential that IS in the account's drawer from counting as a sign-in in this project:
+     * the trusted project's own settings demanding another method or another workspace (see
+     * CodexConfig.demands). Codex answers "not signed in" then, in this directory only (measured on 0.152),
+     * and the sign-in screen would offer to sign in again - which changes nothing, since the credential is
+     * already there. Empty when there is no credential, or nothing in the project stands in its way.
+     * Background only: it asks the shared Codex process.
+     */
+    private fun heldBackBy(accountId: String): List<String> = runCatching {
+        val storeDir = if (accountId.isEmpty()) null else CodexAccounts.getInstance().account(accountId)?.storeDir
+        val who = AccountIdentity.probeDrawer(storeDir)?.who?.takeIf { it.isNamed } ?: return emptyList()
+        val layer = hub.codexConfig.projectLayer() ?: return emptyList()
+        CodexConfig.demands(layer, who.method, who.orgUuid)
+    }.getOrDefault(emptyList())
+
+    private fun send(status: CodexAuth.Status, accountId: String, heldBackBy: List<String> = emptyList()) {
         // The account's own label rather than what the CLI answered: with several accounts its `email`
         // is the shared config file's and names whoever signed in last.
         val named = CodexAccounts.getInstance().account(accountId)
@@ -277,6 +303,8 @@ internal class ProjectAuth(
                 put("plan", named?.plan?.ifEmpty { status.plan } ?: status.plan)
                 put("accountId", accountId)
                 put("executablePath", CodexPreferences.executablePath)
+                // The project's settings, by name, that keep the credential in the drawer from counting here.
+                if (heldBackBy.isNotEmpty()) putJsonArray("heldBackBy") { heldBackBy.forEach { add(it) } }
                 // Not found - we show where we looked and what the system itself answered. Those two
                 // lists show why we missed, even when the machine is someone else's and cannot be looked
                 // at.

@@ -3,6 +3,7 @@ package io.github.crmapache.amazingcodex.codex.accounts
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.thisLogger
+import io.github.crmapache.amazingcodex.codex.AccountUsage
 import io.github.crmapache.amazingcodex.codex.CodexAuth
 import io.github.crmapache.amazingcodex.codex.CodexExecutable
 import io.github.crmapache.amazingcodex.codex.CodexHome
@@ -66,24 +67,75 @@ internal class CodexAccounts {
         /** Nothing is filed: this account has to be signed in again before it can run a turn. */
         ABSENT,
 
-        UNKNOWN,
+        UNKNOWN;
+
+        companion object {
+            /**
+             * What one `auth status`, asked inside an account's own drawer, says about that drawer.
+             *
+             * One reading for both askers - the accounts screen's round and the sign-in round (see
+             * LatestAnswer) - because two readings of one answer are how the screen and the sign-in gate
+             * come to disagree about the same drawer.
+             */
+            fun of(status: CodexAuth.Status): Health = when {
+                !status.installed -> UNKNOWN
+                status.loggedIn -> PRESENT
+                else -> ABSENT
+            }
+        }
+    }
+
+    /** How far a sign-in in progress has got. */
+    sealed interface Landing {
+        /**
+         * Nothing usable in the drawer yet - the person is still in the browser, or the credential is
+         * there and has not said whose it is yet (see [identityOf]).
+         */
+        data object NotYet : Landing
+
+        data class Added(val account: AccountsState.Account) : Landing
+
+        /**
+         * The credential landed, and it belongs to the account the CLI's own sign-in already holds.
+         *
+         * Nothing is added: a second drawer on one subscription is two rows that bill the same place,
+         * tell the same figures and silence each other's honest ones (see [AccountTwin]). The drawer
+         * just minted goes away with it, which costs the person nothing - the account they signed into
+         * is on the screen already, and their credential for it was never touched.
+         */
+        data object Twin : Landing
     }
 
     /**
-     * How far a sign-in in progress has got - three answers rather than "an account or null".
+     * What a drawer the register already files under some account turns out to hold, asked of the drawer.
      *
-     * The middle one is the whole reason this is not a nullable: a credential filed in the new drawer
-     * while the shared profile still names the previous account looks exactly like a finished sign-in
-     * and is the one moment at which believing it destroys an account (see [completeSignIn]).
+     * Asked before that drawer is deleted as the old half of a repeated sign-in, and the answer is the
+     * whole difference between tidying up and destroying an account: the register's label is only what
+     * the sign-in was told at the time, and a drawer filed under the wrong address holds the ONLY copy of
+     * somebody else's credential on this machine.
      */
-    sealed interface Landing {
-        /** Nothing in the drawer yet - the person is still in the browser. */
-        data object NotYet : Landing
+    sealed interface Holds {
+        /** The account it is filed under - the old half of a repeated sign-in, safe to replace. */
+        data object Same : Holds
 
-        /** The credential is filed, but the name attached to it is still the previous one. */
-        data object Unsettled : Landing
+        /** No credential at all - nothing in it to lose. */
+        data object Nobody : Holds
 
-        data class Added(val account: AccountsState.Account) : Landing
+        /** Somebody else - the record was filed under the wrong name, and is filed again under this one. */
+        data class Another(val who: AccountIdentity.Who) : Holds
+
+        /** Signed in, but it would not say whose it is. Nothing is deleted on that. */
+        data object Unknown : Holds
+
+        companion object {
+            /** Pure, so the rule "never delete a drawer holding somebody else" is held by a test. */
+            fun of(loggedIn: Boolean, who: AccountIdentity.Who?, filedAs: String): Holds = when {
+                !loggedIn -> Nobody
+                who == null || !who.isNamed -> Unknown
+                who.key == filedAs -> Same
+                else -> Another(who)
+            }
+        }
     }
 
     private val state: AccountsState get() = AccountsState.getInstance()
@@ -143,6 +195,12 @@ internal class CodexAccounts {
             // theirs: it costs a process per account per project, and the one path that has nothing new
             // to ask about is the one where this book was re-read rather than written (see AccountsWatch).
             CodexSessionHub.everyHub { it.conversations.switchAllTo() }
+
+            // What the next tab starts on is part of the same choice and costs one small message rather
+            // than a process: a new account brings its own memory of the last pick, and the chip over an
+            // empty tab that went on naming the old one's promised a model the launch no longer used
+            // (see StartingChoice).
+            CodexSessionHub.announceNewTabDefaults()
         }
 
     /**
@@ -216,7 +274,11 @@ internal class CodexAccounts {
     fun noteModels(accountId: String, models: Set<String>) {
         if (models.isEmpty()) return
 
-        catalogues[accountId] = models
+        val before = catalogues.put(accountId, models)
+        // The clamp reads this, so a first or changed answer about the account in use can change what a
+        // new tab starts on - a pinned model the plan turns out not to have (see StartingChoice). Asked at
+        // every conversation's birth, so only a catalogue that actually moved is worth telling anybody.
+        if (before != models && accountId == currentId) CodexSessionHub.announceNewTabDefaults()
     }
 
     /**
@@ -330,55 +392,51 @@ internal class CodexAccounts {
         }
 
     /**
-     * The map for the one-off question about an account's usage: the same drawer, and a config directory
-     * of its own so that the answer cannot be another account's (see [AccountStore.usageProbeEnvironment]).
-     *
-     * The directory is per account and kept between questions on purpose - a cold one costs the process an
-     * extra round before it knows the windows, and the panel would show a blank where a figure was a
-     * moment ago.
+     * The map for the one-off question about an account's usage: the drawer's own, as its conversations
+     * have it. Codex asks the server for the limits of the credential it holds, so there is no cache in a
+     * config directory to borrow another account's figures from and nothing to keep apart (see
+     * AccountStore.usageProbeEnvironment).
      */
-    fun usageProbeVariables(accountId: String, workingDirectory: String?): Map<String, String>? {
-        val directory = usageProbeDirectory(accountId) ?: return null
+    fun usageProbeVariables(accountId: String, workingDirectory: String?): Map<String, String>? =
+        variablesFor(accountId, workingDirectory)
 
-        return when (val resolved = environmentFor(accountId, workingDirectory, probeConfigDir = directory)) {
-            is AccountStore.Environment.Ready -> resolved.variables
-            is AccountStore.Environment.Refused -> null
-        }
-    }
+    /**
+     * Who this account really is, read off the credential in its drawer - the ordinary home's for the
+     * empty id. Null when there is no record, no credential file, or one that names nobody.
+     *
+     * The straight answer the Claude side of this code had to wait a process for: a Codex drawer's
+     * `auth.json` is the credential itself, so whoever it names is who a turn in that drawer runs as
+     * (see AccountIdentity). Read from disk every time rather than kept in the state, because the state
+     * is where a stale address would live forever.
+     */
+    fun probedIdentity(accountId: String): AccountIdentity.Probed? {
+        val storeDir = if (accountId.isEmpty()) null else state.account(accountId)?.storeDir ?: return null
 
-    private fun usageProbeDirectory(accountId: String): String? {
-        val directory = usageProbeFolder(accountId) ?: return null
-
-        return runCatching {
-            directory.mkdirs()
-            directory.takeIf { it.isDirectory }?.absolutePath
-        }.getOrNull()
-    }
-
-    private fun usageProbeFolder(accountId: String): File? {
-        // The id is ours and opaque already, but it also names a folder, so anything that could climb out
-        // of one is refused rather than sanitised: there is nothing here worth guessing about.
-        if (accountId.any { it == '/' || it == '\\' || it == '.' || it == '\u0000' }) return null
-
-        return File(usageDirectory(), accountId.ifEmpty { DEFAULT_PROBE_NAME })
+        return AccountIdentity.probeDrawer(storeDir)?.takeIf { it.who.isNamed }
     }
 
     /**
-     * Who this account really is, as the CLI wrote it down while answering about that account alone.
-     *
-     * This is the one place the question has a straight answer. `auth status` reads the address out of
-     * the file every drawer shares, so after a second sign-in it names whoever went last - two rows on
-     * the accounts screen with one address, one of them wrong. A usage question runs with a config
-     * directory of its own (see [usageProbeVariables]), and the CLI fills THAT file in with the account
-     * whose credential it just used: the ordinary sign-in included, which nothing else can tell us.
-     *
-     * Null until such a question has been asked and answered, which is what the fallbacks around this
-     * are for. Read from disk rather than kept in the state, because the state is where a stale address
-     * would live forever.
+     * Who the credential in this account's drawer belongs to - see [probedIdentity]. The working
+     * directory is not needed to read a file and is kept for the callers, which pass it to everything.
      */
-    fun probedIdentity(accountId: String): AccountIdentity.Who? {
-        val who = if (accountId.isEmpty()) AccountIdentity.current() else state.account(accountId)?.let { AccountIdentity.ofDrawer(it.storeDir) }
-        return who?.takeIf { it.isNamed }
+    @Suppress("UNUSED_PARAMETER")
+    fun identityOf(accountId: String, workingDirectory: String?): AccountIdentity.Who? = probedIdentity(accountId)?.who
+
+    /**
+     * Whether [from] and [to] are one subscription in two drawers - see [AccountTwin.sameAccount].
+     *
+     * An added row is the account its record is filed under - which the round keeps honest by filing a
+     * mislabelled row again (see AccountDesk). The ordinary sign-in has no record, and its credential is
+     * read instead.
+     */
+    fun sameAccount(from: String, to: String): Boolean {
+        if (from == to) return true
+
+        val keyOf = { id: String ->
+            if (id.isEmpty()) probedIdentity("")?.who?.key else state.account(id)?.key
+        }
+
+        return AccountTwin.sameAccount(keyOf(from), keyOf(to))
     }
 
     private fun refuse(reason: String): AccountStore.Environment {
@@ -566,53 +624,64 @@ internal class CodexAccounts {
      *
      * Asked of the drawer itself rather than read out of the terminal. There is nothing to scrape: the
      * credential never appears on screen, and the only honest question is the one the CLI answers -
-     * "is there a credential in this drawer". Call from a background thread; it starts a process.
+     * "is there a credential in this drawer". Call from a background thread; it starts processes.
      *
-     * [before] is who the shared file named BEFORE this sign-in was started, and it is what makes the
-     * answer safe to believe. The credential and the shared profile are written by two separate steps of
-     * the login, so the drawer can be full while `~/.claude.json` still names the previous account - and
-     * that answer is not merely unhelpful, it is destructive: the newcomer would be filed under somebody
-     * else's address, and an account with that address already on the list would be replaced by it,
-     * drawer and keychain item and all. So an answer that has not moved is not an answer yet, and the
-     * caller is told to come back ([Landing.Unsettled]) rather than given a name.
-     *
-     * [insist] is the way out of the one case where it never moves: signing in again as the very account
-     * the file already named. The caller allows it after a grace long enough for any write to have
-     * happened (see AccountSignIn.SETTLE_MS).
+     * **Who it was is asked of that credential too** ([identityOf]), and never read out of the file every
+     * drawer shares. That file names whoever's process wrote it last, and every open conversation of every
+     * account keeps writing it, so in the seconds a sign-in takes it flips between accounts. Read from
+     * there, a sign-in was filed under another account's address, sometimes with a delay and a
+     * "believe it anyway" to wait the flip out - and the next genuine sign-in of that account then read as
+     * a repeated one and deleted the drawer of whoever was really in it.
      */
-    fun completeSignIn(
-        pending: AccountsState.Account,
-        workingDirectory: String?,
-        before: AccountIdentity.Who,
-        insist: Boolean = false,
-    ): Landing {
+    fun completeSignIn(pending: AccountsState.Account, workingDirectory: String?): Landing {
         val variables = variablesFor(pending.id, workingDirectory) ?: return Landing.NotYet
         val status = CodexAuth.status(variables, workingDirectory)
 
+        // The cheap question first: while the person is in the browser this is all each round costs.
         if (!status.loggedIn) return Landing.NotYet
 
-        // Who signed in is read off the account's own credential - its own home holds it (see
-        // AccountDrawer) - with Codex's own answer for what the file does not say. There is no shared
-        // profile to wait for here, so [before] and [insist] have nothing left to decide.
-        val drawn = AccountIdentity.ofDrawer(pending.storeDir)
-        val who = AccountIdentity.Who(
-            email = status.email.ifEmpty { drawn.email },
-            orgUuid = drawn.orgUuid,
-            orgName = drawn.orgName,
-        )
-        if (!who.isNamed) return Landing.NotYet
+        // Off the drawer's own credential; when that is kept in the system keyring there is no file, and
+        // the address Codex itself reports is what is left - with no workspace, so a row filed under it can
+        // never be taken for somebody else's and replaced (see [whoHolds]: such a drawer answers Unknown).
+        val who = identityOf(pending.id, workingDirectory)
+            ?: AccountIdentity.Who(email = status.email, orgUuid = "", orgName = "").takeIf { it.isNamed }
+            ?: return Landing.NotYet
 
-        val id = AccountStore.idOf(who.email, who.orgUuid)
+        // Signing in as the account the CLI's own sign-in already holds is not an account to add: it is
+        // the row at the top of the screen, reached a second way. Refused rather than merged afterwards,
+        // because the merge has to delete a drawer and this one has nothing in it the person would miss
+        // - their credential for that account is the one they already had (see [AccountTwin]).
+        if (holdsTheDefault(who, workingDirectory)) {
+            abandonSignIn(pending)
+            DiagnosticsLog.note(DiagnosticsLog.ACCOUNTS, "a sign-in named the account the CLI's own holds")
+            return Landing.Twin
+        }
 
-        // Signing in again as an account already on the list replaces it rather than doubling it: the
-        // new drawer is the live one. The old record goes, and with it the old drawer.
-        val replaced = state.account(id)?.takeIf { it.storeDir != pending.storeDir }
-        replaced?.let { discard(it.storeDir) }
+        // Signing in again as an account already on the list replaces its drawer rather than doubling the
+        // row - but only once that drawer has said it holds this account. The register's label is what an
+        // earlier sign-in was told, and a label was exactly what used to be wrong: the drawer it names can
+        // hold the only copy of somebody else's credential on this machine.
+        val held = list().firstOrNull { !it.isPending && it.key == who.key && it.storeDir != pending.storeDir }
+        if (held != null) {
+            when (val there = whoHolds(held, workingDirectory)) {
+                Holds.Same, Holds.Nobody -> return renew(held, pending, status.plan)
 
-        state.forget(pending.id)
+                // Filed under the wrong name, so it is filed again under the right one and stays - and the
+                // sign-in is added beside it as the account it really is.
+                is Holds.Another -> refile(held.id, there.who, workingDirectory)
+
+                // Two rows with one label until the round hears from the old drawer and either files it
+                // again or merges the pair (see AccountDesk). Deleting on "it would not say" is how an
+                // account is lost.
+                Holds.Unknown -> DiagnosticsLog.note(
+                    DiagnosticsLog.ACCOUNTS,
+                    "a drawer filed under the same account would not say whose it is; kept",
+                )
+            }
+        }
 
         val account = AccountsState.Account().apply {
-            this.id = id
+            id = AccountStore.newAccountId()
             storeDir = pending.storeDir
             email = who.email
             orgUuid = who.orgUuid
@@ -620,15 +689,8 @@ internal class CodexAccounts {
             addedAt = pending.addedAt
         }
 
-        state.remember(account)
-
-        // The processes already running as this account are pointing at the drawer just deleted: a
-        // credential is read once, at start, so they carry on until the token they hold expires and then
-        // fail at a moment nobody connects with a sign-in that happened an hour ago. Raised again over
-        // their own transcripts, they read the drawer this sign-in has just filled. Before the line
-        // below, so a first account - which has no conversations of its own yet - does not pay for the
-        // same raise twice.
-        if (replaced != null) CodexSessionHub.everyHub { it.conversations.relaunchOn(id) }
+        // In one write, so no other IDE ever reads the draft gone and the account not there yet.
+        state.replace(pending.id, account)
 
         // The first account added becomes the one new conversations start on; a second does not. Signing
         // in to another account is not the same as wanting to work on it.
@@ -637,10 +699,83 @@ internal class CodexAccounts {
         // setter sees to that, which is the whole reason it lives there (see [currentId]). This line is
         // the one place a choice is made by the plugin rather than by the person, and it was the one
         // place that used to leave the open tabs behind.
-        if (currentId.isEmpty()) currentId = id
+        if (currentId.isEmpty()) currentId = account.id
 
         return Landing.Added(account)
     }
+
+    /**
+     * A repeated sign-in into an account already on the list: the new drawer becomes that record's, and
+     * the old one goes.
+     *
+     * The record stays - its id, its name, the model it was left on - and only the drawer under it changes,
+     * so everything pointing at it goes on pointing at the same account.
+     */
+    private fun renew(held: AccountsState.Account, pending: AccountsState.Account, plan: String): Landing {
+        state.renew(held.id, pending.storeDir, plan, draftId = pending.id)
+        discard(held.storeDir)
+
+        // The processes already running as this account are pointing at the drawer just deleted: a
+        // credential is read once, at start, so they carry on until the token they hold expires and then
+        // fail at a moment nobody connects with a sign-in that happened an hour ago. Raised again over
+        // their own transcripts, they read the drawer this sign-in has just filled.
+        CodexSessionHub.everyHub { it.conversations.relaunchOn(held.id) }
+
+        if (currentId.isEmpty()) currentId = held.id
+
+        return Landing.Added(state.account(held.id) ?: held)
+    }
+
+    /**
+     * Who the drawer of a record really holds - see [Holds]. Background only: up to two processes.
+     *
+     * A folder that is gone holds nothing this plugin can reach, and reads as [Holds.Nobody].
+     */
+    private fun whoHolds(held: AccountsState.Account, workingDirectory: String?): Holds {
+        val variables = variablesFor(held.id, workingDirectory) ?: return Holds.Nobody
+        val loggedIn = CodexAuth.status(variables, workingDirectory).loggedIn
+
+        return Holds.of(loggedIn, if (loggedIn) identityOf(held.id, workingDirectory) else null, held.key)
+    }
+
+    /**
+     * File a record again under the account its drawer really holds. Background only: it asks the drawer
+     * for its plan.
+     *
+     * In place, and that is the point: the id is what the current choice, every open conversation and the
+     * figures hold, and the drawer under it does not change - only the name it was filed under was wrong.
+     * Nothing moves, nothing is raised again, and nothing is billed differently: it always was this account.
+     */
+    fun refile(id: String, who: AccountIdentity.Who, workingDirectory: String?) {
+        if (!who.isNamed) return
+
+        val plan = variablesFor(id, workingDirectory)
+            ?.let { runCatching { CodexAuth.status(it, workingDirectory) }.getOrNull() }
+            ?.takeIf { it.loggedIn }
+            ?.plan
+
+        state.refile(id, who.email, who.orgUuid, plan)
+        DiagnosticsLog.note(DiagnosticsLog.ACCOUNTS, "an account filed under the wrong name was filed again")
+    }
+
+    /**
+     * Whether the account that has just signed in is the one the ordinary sign-in holds - and holds in a
+     * credential that works.
+     *
+     * The second half is Codex's own: `auth.json` names its account whether or not the token in it still
+     * works, and a person signing the same account in here is often doing it BECAUSE the ordinary one
+     * stopped working - revoked from another machine, expired. Turning that sign-in away as "already
+     * here" would leave them with no working credential at all. So the ordinary one counts as holding
+     * the account only once it has answered a usage question lately (see AccountUsage.provenSince);
+     * until then the newcomer is added, and the two rows are merged by the round later if the ordinary
+     * one turns out to work (see AccountDesk.mergeTwin).
+     */
+    private fun holdsTheDefault(who: AccountIdentity.Who, @Suppress("UNUSED_PARAMETER") workingDirectory: String?): Boolean =
+        probedIdentity("")?.who?.key == who.key && credentialWorks("")
+
+    /** Whether the account's credential has answered a usage question lately - see [holdsTheDefault]. */
+    fun credentialWorks(accountId: String): Boolean =
+        AccountUsage.getInstance().provenSince(accountId, System.currentTimeMillis() - CREDENTIAL_PROVEN_MS)
 
     /** A sign-in that never landed: the drawer and its provisional record go away together. */
     fun abandonSignIn(pending: AccountsState.Account) {
@@ -661,13 +796,8 @@ internal class CodexAccounts {
      */
     fun health(id: String, workingDirectory: String?): Health {
         val variables = variablesFor(id, workingDirectory) ?: return Health.UNKNOWN
-        val status = CodexAuth.status(variables, workingDirectory)
 
-        return when {
-            !status.installed -> Health.UNKNOWN
-            status.loggedIn -> Health.PRESENT
-            else -> Health.ABSENT
-        }
+        return Health.of(CodexAuth.status(variables, workingDirectory))
     }
 
     /**
@@ -717,16 +847,6 @@ internal class CodexAccounts {
         File(File(System.getProperty("user.home"), ".amazing-codex"), "accounts")
 
     /**
-     * Where the usage questions keep their own config directories - beside the drawers, never inside
-     * `~/.claude`.
-     *
-     * Nothing of the person's lives here: a few kilobytes of the CLI's own bookkeeping per account, whose
-     * only purpose is that the usage cache in it belongs to one account instead of all of them.
-     */
-    private fun usageDirectory(): File =
-        File(File(System.getProperty("user.home"), ".amazing-codex"), "usage")
-
-    /**
      * The empty drawer the isolation probe points at - one fixed name, and not among the real ones.
      *
      * One name rather than a fresh one each time, on top of clearing it away afterwards: a probe that
@@ -747,10 +867,14 @@ internal class CodexAccounts {
         /** A provisional record's id, before the sign-in has said who it is. */
         const val PENDING_PREFIX = "pending-"
 
-        /** The folder name for the sign-in with no drawer of its own - its id is the empty string. */
-        private const val DEFAULT_PROBE_NAME = "default"
-
         private const val ALIAS_LIMIT = 40
         private const val RETRY_MS = 60_000L
+
+        /**
+         * How recently the ordinary sign-in must have answered a usage question to count as working (see
+         * [holdsTheDefault]). The accounts screen asks every row about its usage each time it is open, so
+         * a quarter of an hour covers a screen opened now without trusting an answer from yesterday.
+         */
+        private const val CREDENTIAL_PROVEN_MS = 15 * 60 * 1000L
     }
 }

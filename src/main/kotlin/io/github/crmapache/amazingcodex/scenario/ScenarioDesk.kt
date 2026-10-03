@@ -13,10 +13,10 @@ import io.github.crmapache.amazingcodex.codex.CodexExecutable
 import io.github.crmapache.amazingcodex.codex.CodexHistory
 import io.github.crmapache.amazingcodex.codex.CodexHome
 import io.github.crmapache.amazingcodex.codex.CodexPlugin
-import io.github.crmapache.amazingcodex.codex.CodexPreferences
 import io.github.crmapache.amazingcodex.codex.EffortLevels
 import io.github.crmapache.amazingcodex.codex.InstalledPlugin
 import io.github.crmapache.amazingcodex.codex.CodexSessionHub
+import io.github.crmapache.amazingcodex.codex.StartingChoice
 import io.github.crmapache.amazingcodex.codex.accounts.CodexAccounts
 import io.github.crmapache.amazingcodex.feedback.DiagnosticsLog
 import io.github.crmapache.amazingcodex.remote.RemoteFeed
@@ -144,21 +144,6 @@ internal class ScenarioDesk(private val project: Project, private val hub: Codex
     private val pulsing = AtomicBoolean(false)
 
     /**
-     * The newest run that is OVER, as its summary - or null while this desk has not looked at the disk.
-     *
-     * Carried by the live frame rather than read from the shelves, and that is what makes a project's
-     * card answer "how did the night go" on a screen that is not looking at this project. The shelves are
-     * tens of kilobytes and travel by subscription; the live frame is a few hundred bytes and travels to
-     * every device on the line (see RemoteFeed.isOverview), so the one row somebody wants in the morning
-     * rides with it.
-     *
-     * Kept in memory rather than read when asked: a year of a morning routine is three hundred folders on
-     * the disk, and this is wanted every time anything moves.
-     */
-    @Volatile
-    private var finished: RunSummary? = null
-
-    /**
      * When the short "what is going" frame last went out, so it goes at a pace an eye can use.
      *
      * A frame of its own beside the heavy record, and this is the one everybody who is NOT looking at a
@@ -259,11 +244,6 @@ internal class ScenarioDesk(private val project: Project, private val hub: Codex
             // has been deleted is work that cannot be done, and one whose shelf could not be READ is work
             // that is still perfectly fine (see QueueRules.keepOnly).
             val waiting = queue.keepOnly(project, user)
-            // The newest run that is over, for the live frame to carry (see [finished]). Off the same
-            // reading of the disk this message is already built from: asking for it separately would be
-            // a second walk of the same folder.
-            val going = live.keys
-            finished = summaries.firstOrNull { it.id !in going }
             hub.broadcastProject(
                 buildJsonObject {
                     put("type", "scenarios")
@@ -283,10 +263,9 @@ internal class ScenarioDesk(private val project: Project, private val hub: Codex
             // directories off a disk, and every scenario saved would redraw a queue that had not changed.
             sendQueue(waiting)
 
-            // And the live frame, because the run it names as the last one that finished has just been
-            // read (see [finished]). This is the only road by which a screen that is not watching this
-            // project learns of it at all - and on an IDE that has just opened it is the first time that
-            // frame is said at all, so without it a card stays blank until something runs.
+            // And the live frame: on an IDE that has just opened this is the first time it is said at all,
+            // and a phone that last heard of a run going before the IDE went down would otherwise go on
+            // drawing it on the project's card until something else ran.
             sendLive()
         }
     }
@@ -337,10 +316,6 @@ internal class ScenarioDesk(private val project: Project, private val hub: Codex
             buildJsonObject {
                 put("type", "scenarioLive")
                 put("runs", json.encodeToJsonElement(going))
-                // And the newest one that is over, so a card elsewhere can say how the night went - see
-                // [finished]. Left out entirely when this project has never run anything, which is a
-                // different thing from "the last one is gone".
-                finished?.let { put("last", json.encodeToJsonElement(it)) }
             }.toString(),
         )
     }
@@ -377,6 +352,20 @@ internal class ScenarioDesk(private val project: Project, private val hub: Codex
     fun duplicate(clientId: String, id: String, scope: String) {
         off {
             store.duplicate(id, scope) ?: return@off outcome(clientId, ok = false, code = "scenarioNotWritten")
+            sendList()
+        }
+    }
+
+    /**
+     * A row dragged to a new place - on its own shelf, or over onto the other one (see ScenarioStore.place).
+     *
+     * The shelves go out again whichever way it went, the refusal included: the page has already drawn the
+     * row where it was dropped, and only this list puts it back where it really is. Its hours and its turns
+     * on the queue follow it to the other shelf on the same pass (see Schedules.keepOnly).
+     */
+    fun place(clientId: String, id: String, from: String, to: String, before: String) {
+        off {
+            store.place(id, from, to, before)?.let { outcome(clientId, ok = false, code = it) }
             sendList()
         }
     }
@@ -445,8 +434,12 @@ internal class ScenarioDesk(private val project: Project, private val hub: Codex
             workingDirectory = project.basePath,
             description = description,
             accountId = accountId,
-            model = writingModel(accountId),
-            effort = EffortLevels.normalize(CodexPreferences.startingEffort()),
+            // What a new tab of this panel starts on, held to what this account can run - a model the
+            // account has no access to is not refused at launch, the process dies on its first message,
+            // and here that is a strip over the field saying the answer could not be read (see
+            // StartingChoice). The floor under it is the author's own (see ScenarioAuthor.atTheFloor).
+            model = StartingChoice.model(accountId),
+            effort = EffortLevels.normalize(StartingChoice.effort(accountId)),
             skills = listed,
             readableDirectories = readable,
             onStarted = { handler -> drafts.started(id, handler) },
@@ -466,25 +459,6 @@ internal class ScenarioDesk(private val project: Project, private val hub: Codex
     /** The person stopped waiting: the process goes, and its answer with it (see AiRuns). */
     fun cancelDraft(id: String) {
         drafts.cancel(id)
-    }
-
-    /**
-     * What the writing runs on: the model a new tab of this panel starts with, unless this account is
-     * known not to run it.
-     *
-     * The same clamp a conversation gets (see CodexSessions.modelFor), for the same reason: a model the
-     * account has no access to is not refused at launch, the process dies on its first message, and here
-     * that is a strip over the field saying the answer could not be read. Unknown counts as yes - the
-     * catalogue is asked for lazily, and an unasked one is the ordinary state of a project's first
-     * minutes. Empty leaves the choice to the CLI.
-     */
-    private fun writingModel(accountId: String): String {
-        val accounts = CodexAccounts.getInstance()
-        val wanted = CodexPreferences.startingModel()
-        if (accounts.canRun(accountId, wanted) != false) return wanted
-
-        val own = accounts.account(accountId)?.model.orEmpty()
-        return if (own.isNotEmpty() && accounts.canRun(accountId, own) != false) own else ""
     }
 
     private fun drafted(clientId: String, id: String, scenario: Scenario?, error: String?) {
@@ -610,11 +584,14 @@ internal class ScenarioDesk(private val project: Project, private val hub: Codex
             total = ScenarioRules.cardRuns(scenario),
         )
 
+        // One reading for both halves: the account the run pays with is the one its defaults are worked
+        // out on (see StartingChoice), and read twice they could straddle a switch.
+        val account = CodexAccounts.getInstance().currentId
         val walker = ScenarioEngine(
             workingDirectory = project.basePath,
-            accountId = CodexAccounts.getInstance().currentId,
-            defaultModel = CodexPreferences.startingModel(),
-            defaultEffort = CodexPreferences.startingEffort(),
+            accountId = account,
+            defaultModel = StartingChoice.model(account),
+            defaultEffort = StartingChoice.effort(account),
             start = record,
             onChange = { moved(record.id) },
             onFinished = { finished -> ended(finished) },
@@ -1016,11 +993,12 @@ internal class ScenarioDesk(private val project: Project, private val hub: Codex
             if (CarryOn.pointOf(record) == null) return@off outcome(clientId, ok = false, code = "runNotResumable")
             if (CodexExecutable.find() == null) return@off outcome(clientId, ok = false, code = "noClaude")
 
+            val account = CodexAccounts.getInstance().currentId
             val walker = ScenarioEngine(
                 workingDirectory = project.basePath,
-                accountId = CodexAccounts.getInstance().currentId,
-                defaultModel = CodexPreferences.startingModel(),
-                defaultEffort = CodexPreferences.startingEffort(),
+                accountId = account,
+                defaultModel = StartingChoice.model(account),
+                defaultEffort = StartingChoice.effort(account),
                 start = record,
                 onChange = { moved(runId) },
                 onFinished = { finished -> ended(finished) },
@@ -1047,6 +1025,12 @@ internal class ScenarioDesk(private val project: Project, private val hub: Codex
                 if (live.containsKey(runId)) runs.keep(walker.run)
             }
             sendList()
+            // A queue that stopped on THIS run has just had the ending it stopped on taken back, and the
+            // step is where that is worked out (see QueueRules.step). Taken now rather than left to the
+            // clock's half-minute beat, for the reason the one after [letGoQueue] is: the band saying
+            // "nothing after it will start" over a run visibly working is the screen contradicting itself,
+            // and half a minute of it is long enough to be believed.
+            stepQueue()
         }
     }
 
@@ -1261,10 +1245,7 @@ internal class ScenarioDesk(private val project: Project, private val hub: Codex
             runs.keep(record)
             hub.broadcastProject(envelope(record))
         }
-        // The newest run that is over is this one, and the live frame below carries it (see [finished]).
-        // Written here rather than left to the reading of the shelves further down, because that reading
-        // happens off a pooled thread and the frame goes now.
-        finished = record.summarise()
+        // Out of the live frame this second: a card still showing it as going would promise work that ended.
         sendLive()
         announce(said, ending(record))
         // The list carries how each run ended, and it has just changed: nobody is going to ask again.
@@ -1304,15 +1285,13 @@ internal class ScenarioDesk(private val project: Project, private val hub: Codex
      * is the ONLY surface a run has while the panel is closed, which is most of the time a run is alive.
      *
      * The first answer somebody gave it, because that is what tells two starts of one round of work apart
-     * - the ticket, the branch. Two runs given the same answers, or a scenario that asks nothing, fall
-     * back to the minute they started at. The panel works the same thing out for its tabs and rows in ten
-     * languages of its own (see runMarks); this side has one language and needs it for one line.
+     * - the ticket, the branch; a link by the page it points at (see AnswerLabel). Two runs given the same
+     * answers, or a scenario that asks nothing, fall back to the minute they started at. The panel works
+     * the same thing out for its tabs and rows in ten languages of its own (see runMarks); this side has
+     * one language and needs it for one line.
      */
     private fun markOf(record: ScenarioRun): String {
-        val answer = record.inputs.values
-            .firstOrNull { it.isNotBlank() }
-            ?.lineSequence()?.firstOrNull()?.trim()?.take(MARK_CHARS)
-            .orEmpty()
+        val answer = AnswerLabel.of(record.inputs, MARK_CHARS)
 
         // The clock is added whenever another run of the same scenario is about, and not only when there
         // is no answer to use: the commonest second start is the same round of work against the same

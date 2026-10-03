@@ -5,6 +5,7 @@ import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.util.Disposer
+import com.intellij.openapi.util.SystemInfo
 import com.intellij.openapi.wm.IdeGlassPaneUtil
 import com.intellij.ui.jcef.JBCefApp
 import com.intellij.ui.jcef.JBCefBrowser
@@ -146,6 +147,8 @@ private const val HOVER_SETTLE_MS = 80
  */
 internal class WebviewHost(
     parentDisposable: Disposable,
+    /** The theme the page opens in - see [startUrl]. */
+    private val startTheme: String,
     private val onMessage: (String) -> Unit,
 ) : Disposable {
 
@@ -363,9 +366,15 @@ internal class WebviewHost(
         val type = when (cursor) {
             "pointer" -> Cursor.HAND_CURSOR
             "text" -> Cursor.TEXT_CURSOR
-            // Dragging: AWT has no grabbing hand of its own, and the nearest thing in meaning is the
-            // move cursor.
-            "grab", "grabbing", "move" -> Cursor.MOVE_CURSOR
+            /*
+             * Dragging: AWT has no grabbing hand of its own, and the nearest thing in meaning is the move
+             * cursor - everywhere but macOS, where it is not drawn at all. The runtime builds that one
+             * through a private AppKit cursor this system no longer has, and what comes out is an ordinary
+             * arrow: seen live over the grip of a scenario's row, where the hand holds the row itself.
+             * There the pointing hand is the nearest thing that is actually drawn, and it is what every
+             * other button of the panel already shows.
+             */
+            "grab", "grabbing", "move" -> if (SystemInfo.isMac) Cursor.HAND_CURSOR else Cursor.MOVE_CURSOR
             "col-resize", "ew-resize" -> Cursor.E_RESIZE_CURSOR
             "row-resize", "ns-resize" -> Cursor.N_RESIZE_CURSOR
             "wait", "progress" -> Cursor.WAIT_CURSOR
@@ -586,18 +595,38 @@ internal class WebviewHost(
     /** Vite's dev server address, if the panel was asked to load from it rather than from the plugin's resources. */
     private val devUrl: String get() = System.getProperty("acx.webview.devUrl").orEmpty()
 
+    /**
+     * Where the page is loaded from - and in which theme it paints its first frame.
+     *
+     * The theme rides in the address because nothing else is there early enough: the page paints before its
+     * receiver exists, so a message saying "light" would arrive after a frame of ink on a light IDE. The
+     * page reads it before it renders (see theme.ts) and takes every later word from the `theme` message.
+     * A reload keeps the address, and with it the theme of the moment the panel was built - the message
+     * that follows the reload puts that right a frame later.
+     */
     private fun startUrl(): String {
         if (devUrl.isNotBlank()) {
             thisLogger().info("Loading webview from dev server: $devUrl")
-            return devUrl
+            return withTheme(devUrl, startTheme)
         }
-        return "${WebviewResources.ORIGIN}/index.html"
+        return withTheme("${WebviewResources.ORIGIN}/index.html", startTheme)
     }
 
     internal companion object {
 
         /** Whether this IDE can show the embedded browser the panel lives in. */
         fun isSupported(): Boolean = JBCefApp.isSupported()
+
+        /**
+         * The address with the theme added to its query - after a query the address may already have (a
+         * dev server's), and before a fragment, which is where a query stops being one.
+         */
+        fun withTheme(url: String, theme: String): String {
+            val fragment = url.indexOf('#').takeIf { it >= 0 } ?: url.length
+            val head = url.substring(0, fragment)
+            val separator = if ('?' in head) '&' else '?'
+            return "$head${separator}theme=$theme${url.substring(fragment)}"
+        }
 
         /**
          * A proxy settings warm-up used to stand here, reading them in advance and by the ordinary route.

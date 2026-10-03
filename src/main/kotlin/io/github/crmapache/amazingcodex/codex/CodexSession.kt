@@ -77,6 +77,17 @@ internal class CodexSession(
     private val onTitle: (String) -> Unit = {},
     /** Whether this conversation still needs a name of its own - the tab keeps one across processes. */
     private val titleWanted: () -> Boolean = { true },
+    /**
+     * The name the person gave the tab, if any - written into the thread whenever a process opens it and
+     * it does not carry that name yet (see [nameAfterPerson]), so a name given before the first message,
+     * or while the conversation slept, reaches Codex's record too.
+     */
+    private val ownTitle: () -> String? = { null },
+    /**
+     * The thread was renamed by somebody else - another Codex client, a terminal - to a name that is
+     * neither ours nor the model's (see [notification]): a person's name, which the tab takes on.
+     */
+    private val onRenamed: (String) -> Unit = {},
     /** The process died on its own, not because we stopped it. */
     private val onCrashed: (Int) -> Unit = {},
     /** The person's turn has ended - by its end, by a crash, or by never getting started. */
@@ -85,6 +96,16 @@ internal class CodexSession(
     private val onTurnStarted: () -> Unit = {},
     /** What the agent is told about where it runs - see CodexLaunch.PANEL_BRIEFING. */
     private val briefing: String = CodexLaunch.PANEL_BRIEFING,
+    /**
+     * A new role for a thread this process resumes, said before its next turn - see [threadOpened].
+     *
+     * Codex keeps the developer instructions a thread was started with: `thread/resume` takes the field
+     * and does nothing with it (measured on 0.152 - a thread started "answer in French" and resumed
+     * "answer in German" went on in French). A conversation whose role changes over the same thread - a
+     * scenario's main thread raised to finish a card's work, and back - is told the change in its own
+     * history instead, as a developer message, which is how Codex's own side conversations say theirs.
+     */
+    private val roleChange: String? = null,
     /** Whether this conversation should be given a name at all; the scenario engine's sessions are not. */
     private val nameWanted: Boolean = true,
     /** How full the context window is now, straight from Codex's own count - see CodexShapes.contextOf. */
@@ -133,6 +154,16 @@ internal class CodexSession(
     var conversationId: String? = resumeFrom
         private set
 
+    /**
+     * Whether the thread has anything on disk to come back to: one continued from the history or forked
+     * off another has, a new one only once a turn has started in it. Codex names a thread the moment it
+     * opens it, but writes its file with the first turn - so a tab remembered by the id alone would come
+     * back after a restart as a conversation that is not there (see CodexSessionHub.rememberTabs).
+     */
+    @Volatile
+    var hasHistory: Boolean = resumeFrom != null || forkFrom != null
+        private set
+
     /** The model the thread actually runs on, as Codex said when it opened it - the menu's empty "default". */
     @Volatile
     private var threadModel: String = ""
@@ -148,8 +179,45 @@ internal class CodexSession(
     /** An explicit effort was sent at some point - choosing "auto" afterwards has to clear it. */
     private var effortSent = false
 
+    /** A message on its way: the person's words, the pictures, and the editor note that goes with them. */
+    private data class Outgoing(val text: String, val images: List<ImageAttachment>, val context: String?)
+
     /** Messages written into a turn that would not take them in (see [steer]): sent when it ends. */
-    private val afterTurn = ArrayList<Pair<String, List<ImageAttachment>>>()
+    private val afterTurn = ArrayList<Outgoing>()
+
+    /** The name the person gave, as this process last wrote it into the thread - see [nameAfterPerson]. */
+    @Volatile
+    private var namedAs: String? = null
+
+    /** The name the model gave, as this process wrote it - its echo is not a rename (see [notification]). */
+    @Volatile
+    private var modelNamed: String? = null
+
+    /** The last turn of this conversation that has ended - what a side question forks through (see [askAside]). */
+    @Volatile
+    private var lastEndedTurn: String? = null
+
+    /** Side questions in flight, by the panel's id for them - see [askAside]. */
+    private val asides = ConcurrentHashMap<String, Aside>()
+
+    /** The same, by the id of the ephemeral thread each one is asked in. */
+    private val asideThreads = ConcurrentHashMap<String, Aside>()
+
+    private class Aside(
+        val id: String,
+        val question: String,
+        val history: List<SideQuestion.Exchange>,
+        val onProgress: (SideQuestion.Progress) -> Unit,
+        val onEnd: (SideQuestion.Answer) -> Unit,
+    ) {
+        @Volatile var thread: String? = null
+        @Volatile var turn: String? = null
+        @Volatile var text: String = ""
+        @Volatile var notice: String? = null
+        @Volatile var attempts: Int = 0
+        @Volatile var cancelled: Boolean = false
+        @Volatile var timeout: java.util.concurrent.ScheduledFuture<*>? = null
+    }
 
     private val stream = CodexStream(emit = ::emit, model = ::currentModel, threadId = { conversationId.orEmpty() })
 
@@ -174,6 +242,14 @@ internal class CodexSession(
 
     private var titleAsked = false
 
+    /** The thread this process holds was opened by `thread/resume` rather than started or forked. */
+    @Volatile
+    private var resumed = false
+
+    /** [roleChange] has been said into the thread - once per session, whatever restarts in between. */
+    @Volatile
+    private var roleSaid = false
+
     private enum class Kind { COMMAND, FILE, ASK, PLAN, PERMISSIONS, ELICITATION }
 
     private data class Pending(
@@ -194,40 +270,50 @@ internal class CodexSession(
 
     // --- Sending ---------------------------------------------------------------------------------
 
-    fun sendPrompt(text: String, images: List<ImageAttachment> = emptyList()) {
+    /**
+     * A message from the person. [context] is the editor note that goes with it (see IdeContextPrompt) - a
+     * text item of its own after the words, never mixed into them.
+     */
+    fun sendPrompt(text: String, images: List<ImageAttachment> = emptyList(), context: String? = null) {
         if (server == null && start() == null) {
             endTurn()
             return
         }
         busy = true
-        whenOpen { deliver(text, images) }
+        whenOpen { deliver(Outgoing(text, images, context)) }
     }
 
     /**
      * What a message is decides where it goes (see CodexCommands): the commands that are actions become
      * the requests that do them, everything else is a turn - or, while one is running, words steered into it.
      */
-    private fun deliver(text: String, images: List<ImageAttachment>) {
+    private fun deliver(message: Outgoing) {
+        val (text, images, context) = message
         when (val command = CodexCommands.parse(text, CodexHome.of(workingDirectory).promptsDirectory, CodexSkills.of(workingDirectory))) {
             CodexCommands.Command.Compact -> compact()
             CodexCommands.Command.Clear -> clear()
             CodexCommands.Command.Init -> startTurn(CodexLaunch.INIT_PROMPT, emptyList(), emptyList())
             is CodexCommands.Command.Review -> review(command.target)
+            is CodexCommands.Command.Rename -> {
+                rename(command.title)
+                onRenamed(command.title)
+                endTurn()
+            }
             is CodexCommands.Command.Say ->
-                if (activeTurn != null) steer(command.text, images, command.skills) else startTurn(command.text, images, command.skills)
+                if (activeTurn != null) steer(command.text, images, command.skills, context) else startTurn(command.text, images, command.skills, context)
         }
     }
 
-    private fun startTurn(text: String, images: List<ImageAttachment>, skills: List<CodexCommands.Skill>) {
+    private fun startTurn(text: String, images: List<ImageAttachment>, skills: List<CodexCommands.Skill>, context: String? = null) {
         val srv = server ?: return endTurn()
         val thread = conversationId ?: return endTurn()
         val policy = PermissionModes.policyOf(permissionMode)
 
         val params = buildJsonObject {
             put("threadId", thread)
-            put("input", inputOf(text, images, skills))
+            put("input", inputOf(text, images, skills, context))
             put("approvalPolicy", policy.approval)
-            put("sandboxPolicy", policy.sandboxPolicy())
+            put("sandboxPolicy", policy.sandboxPolicy(CodexConfigDesk.workspaceWrite(workingDirectory)))
             modelOnWire()?.let { put("model", it) }
             val wired = EffortLevels.wire(effort)
             when {
@@ -237,7 +323,9 @@ internal class CodexSession(
                 }
                 effortSent -> put("effort", JsonNull)
             }
-            put("summary", "auto")
+            // The panel draws the reasoning, so it asks for a summary of it - unless the person's own config
+            // says what kind they want (`model_reasoning_summary`), which then decides by itself.
+            if (!CodexConfigDesk.setsSummary(workingDirectory)) put("summary", "auto")
             // Plan mode is a collaboration mode, and a sticky one: leaving it has to be said as much as
             // entering it, or the next turn would still be planning.
             if (policy.plan || planSent) {
@@ -277,32 +365,43 @@ internal class CodexSession(
      * Words written into a running turn go INTO it, the way Codex's terminal steers: the agent reads them
      * at its next step. A turn that cannot be steered (a review, a compaction) keeps them until it ends.
      */
-    private fun steer(text: String, images: List<ImageAttachment>, skills: List<CodexCommands.Skill>) {
+    private fun steer(text: String, images: List<ImageAttachment>, skills: List<CodexCommands.Skill>, context: String?) {
         val srv = server ?: return
         val thread = conversationId ?: return
-        val turn = activeTurn ?: return startTurn(text, images, skills)
+        val turn = activeTurn ?: return startTurn(text, images, skills, context)
 
         srv.request(
             "turn/steer",
             buildJsonObject {
                 put("threadId", thread)
-                put("input", inputOf(text, images, skills))
+                put("input", inputOf(text, images, skills, context))
                 put("expectedTurnId", turn)
             },
             onError = {
-                synchronized(afterTurn) { afterTurn += text to images }
+                // The note goes along with the words it was taken for, so a message sent after the turn
+                // still says what the editor showed when it was written.
+                synchronized(afterTurn) { afterTurn += Outgoing(text, images, context) }
                 // The turn may have ended between the send and the refusal: then nobody else will drain.
                 if (activeTurn == null) drainAfterTurn()
             },
         )
     }
 
-    private fun inputOf(text: String, images: List<ImageAttachment>, skills: List<CodexCommands.Skill>): JsonArray =
+    private fun inputOf(text: String, images: List<ImageAttachment>, skills: List<CodexCommands.Skill>, context: String? = null): JsonArray =
         buildJsonArray {
             addJsonObject {
                 put("type", "text")
                 put("text", text)
                 putJsonArray("text_elements") {}
+            }
+            // After the words rather than before them: a thread's preview is the start of its first
+            // message, and every history row would otherwise begin with the same heading (see IdeContextPrompt).
+            context?.takeIf { it.isNotBlank() }?.let { note ->
+                addJsonObject {
+                    put("type", "text")
+                    put("text", note)
+                    putJsonArray("text_elements") {}
+                }
             }
             for (image in images) {
                 addJsonObject {
@@ -380,6 +479,7 @@ internal class CodexSession(
                 val id = AppServer.text(thread?.get("id"))
                 if (id.isNotEmpty()) {
                     conversationId = id
+                    hasHistory = false
                     lastTokenUsage = null
                     titleAsked = false
                     awaitingPermission.clear()
@@ -410,7 +510,13 @@ internal class CodexSession(
         val thread = conversationId ?: return
         CodexTitles.ask(srv, workingDirectory, currentModel(), description) { title ->
             if (title.isBlank() || conversationId != thread) return@ask
+            // Asked again: the person may have named the tab in the seconds the model took, and a name
+            // given by hand is never overwritten by the model's - not on the tab, and not in Codex's
+            // record either, where the history and `codex resume` would read the model's instead.
+            if (!titleWanted()) return@ask
             onTitle(title)
+            modelNamed = title
+            AppExecutorUtil.getAppExecutorService().execute { AutoTitles(workingDirectory).note(thread, title) }
             srv.request(
                 "thread/name/set",
                 buildJsonObject {
@@ -418,6 +524,276 @@ internal class CodexSession(
                     put("name", title)
                 },
             )
+        }
+    }
+
+    /**
+     * The name the person gave the tab, into Codex's record of the thread - so the history, the search
+     * and `codex resume` in a terminal show it too.
+     *
+     * Through this conversation's process while it has one. Without one, through the shared catalog
+     * process (see CodexCatalog), off the caller's thread; and whichever process opens the thread next
+     * writes it again if it is not there yet (see [nameAfterPerson]), which covers the one that could not.
+     */
+    fun rename(title: String) {
+        val name = title.trim().takeIf { it.isNotEmpty() } ?: return
+        val thread = conversationId ?: return
+        val params = buildJsonObject {
+            put("threadId", thread)
+            put("name", name)
+        }
+
+        val srv = server
+        if (srv != null && open) {
+            namedAs = name
+            srv.request("thread/name/set", params)
+            return
+        }
+
+        AppExecutorUtil.getAppExecutorService().execute {
+            runCatching { CodexCatalog.call("thread/name/set", params) }
+        }
+    }
+
+    /** The person's name for the tab, written into the thread a process has just opened - see [ownTitle]. */
+    private fun nameAfterPerson() {
+        val title = ownTitle()?.trim()?.takeIf { it.isNotEmpty() } ?: return
+        if (title == namedAs) return
+        rename(title)
+    }
+
+    // --- Side questions ----------------------------------------------------------------------------
+
+    /**
+     * A question beside the conversation - the panel's `/btw`, Codex's own `/side` (see SideQuestion).
+     *
+     * Asked in an ephemeral fork of this thread, in this process: the fork knows everything the
+     * conversation does, and the conversation knows nothing of the fork - the agent never sees the
+     * question, nothing is written to disk, and a turn under way carries on. A conversation with no
+     * thread on disk yet has nothing to fork; then the question goes to an ephemeral thread of its own,
+     * as a new conversation would answer it.
+     *
+     * [onProgress] hears that the answer is under way and of the model being asked again; [onEnd] hears
+     * the outcome exactly once - answered, empty, cancelled, or failed, including when this process goes
+     * away first (see [abandonAsides]).
+     */
+    fun askAside(
+        id: String,
+        question: String,
+        history: List<SideQuestion.Exchange>,
+        onProgress: (SideQuestion.Progress) -> Unit,
+        onEnd: (SideQuestion.Answer) -> Unit,
+    ) {
+        if (server == null && start() == null) {
+            onEnd(SideQuestion.Answer.Failed(SideQuestion.Reason.ENDED, "The conversation could not be started."))
+            return
+        }
+
+        val aside = Aside(id, question, history, onProgress, onEnd)
+        asides[id] = aside
+        aside.timeout = AppExecutorUtil.getAppScheduledExecutorService().schedule(
+            {
+                interruptAside(aside)
+                finishAside(aside, SideQuestion.Answer.Failed(SideQuestion.Reason.TIMEOUT, "No answer in time."))
+            },
+            SideQuestion.TIMEOUT_SECONDS,
+            TimeUnit.SECONDS,
+        )
+        whenOpen { forkForAside(aside, through = null) }
+    }
+
+    /** The person closed the question before its answer. Said at once; the fork is stopped behind it. */
+    fun cancelAside(id: String) {
+        val aside = asides[id] ?: return
+        aside.cancelled = true
+        interruptAside(aside)
+        finishAside(aside, SideQuestion.Answer.Cancelled)
+    }
+
+    /**
+     * Fork this thread for one question. [through] is the last turn that has ended, for a second try when
+     * Codex would not fork across a turn still under way; without it the fork takes everything there is.
+     */
+    /**
+     * Open the thread a side question is asked in. A fork of this conversation, through [through] - the
+     * last turn that has ended - when Codex would not fork across a turn still under way; or, when [alone],
+     * an ephemeral thread of its own, for a conversation with nothing on disk to fork yet.
+     */
+    private fun forkForAside(aside: Aside, through: String? = null, alone: Boolean = false) {
+        if (aside.cancelled) return
+        val srv = server ?: return finishAside(aside, SideQuestion.Answer.Failed(SideQuestion.Reason.ENDED, "The conversation is not running."))
+        val parent = conversationId.takeUnless { alone }
+
+        val params = buildJsonObject {
+            if (parent != null) {
+                put("threadId", parent)
+                put("excludeTurns", true)
+                through?.let { put("lastTurnId", it) }
+            }
+            // Read-only and asking nobody, on the conversation's model, and without the tools the sandbox
+            // does not hold (see SideQuestion.configOverrides).
+            workingDirectory?.let { put("cwd", it) }
+            modelOnWire()?.let { put("model", it) }
+            put("ephemeral", true)
+            put("approvalPolicy", "never")
+            put("sandbox", PermissionModes.SANDBOX_READ_ONLY)
+            put("developerInstructions", SideQuestion.INSTRUCTIONS)
+            put("config", SideQuestion.configOverrides(mcpStartup.keys))
+        }
+
+        srv.request(
+            if (parent != null) "thread/fork" else "thread/start",
+            params,
+            timeoutSeconds = THREAD_OPEN_TIMEOUT_SECONDS,
+            onResult = { result ->
+                val thread = AppServer.text(((result as? JsonObject)?.get("thread") as? JsonObject)?.get("id"))
+                if (thread.isEmpty()) {
+                    finishAside(aside, SideQuestion.Answer.Failed(SideQuestion.Reason.REFUSED, "Codex opened no thread for the question."))
+                    return@request
+                }
+                aside.thread = thread
+                asideThreads[thread] = aside
+                if (aside.cancelled) finishAside(aside, SideQuestion.Answer.Cancelled) else askInFork(srv, aside, thread, injected = parent != null)
+            },
+            onError = { error ->
+                when {
+                    // Nothing on disk to fork: the conversation has not said a word yet.
+                    parent != null && error.message.contains("rollout", ignoreCase = true) -> forkForAside(aside, alone = true)
+                    // A turn under way that the fork would not cross: through the last one that ended.
+                    parent != null && through == null && lastEndedTurn != null -> forkForAside(aside, through = lastEndedTurn)
+                    else -> finishAside(aside, SideQuestion.Answer.Failed(SideQuestion.Reason.REFUSED, error.message))
+                }
+            },
+        )
+    }
+
+    /**
+     * The boundary and the earlier exchanges into the fork, then the question as its turn. When Codex would
+     * not take the items - or there was no inherited history for a boundary to close - the same words go
+     * ahead of the question instead (see SideQuestion.inlined), which costs nothing but their place.
+     */
+    private fun askInFork(srv: AppServer, aside: Aside, thread: String, injected: Boolean) {
+        if (!injected && aside.history.isEmpty()) return startAsideTurn(srv, aside, thread, aside.question)
+
+        srv.request(
+            "thread/inject_items",
+            buildJsonObject {
+                put("threadId", thread)
+                put("items", SideQuestion.items(aside.history))
+            },
+            onResult = { startAsideTurn(srv, aside, thread, aside.question) },
+            onError = { startAsideTurn(srv, aside, thread, SideQuestion.inlined(aside.question, aside.history)) },
+        )
+    }
+
+    private fun startAsideTurn(srv: AppServer, aside: Aside, thread: String, text: String) {
+        if (aside.cancelled) return finishAside(aside, SideQuestion.Answer.Cancelled)
+
+        srv.request(
+            "turn/start",
+            buildJsonObject {
+                put("threadId", thread)
+                put("input", inputOf(text, emptyList(), emptyList()))
+                put("approvalPolicy", "never")
+                put("sandboxPolicy", PermissionModes.policyOf(PermissionModes.READ_ONLY).sandboxPolicy())
+                modelOnWire()?.let { put("model", it) }
+                EffortLevels.wire(effort)?.let { put("effort", it) }
+                // Its reasoning is shown nowhere - the card holds the answer alone.
+                put("summary", "none")
+            },
+            timeoutSeconds = TURN_START_TIMEOUT_SECONDS,
+            onResult = { result ->
+                val turn = AppServer.text(((result as? JsonObject)?.get("turn") as? JsonObject)?.get("id"))
+                if (turn.isNotEmpty() && aside.turn == null) aside.turn = turn
+                if (aside.cancelled) interruptAside(aside)
+            },
+            onError = { error -> finishAside(aside, SideQuestion.Answer.Failed(SideQuestion.Reason.REFUSED, error.message)) },
+        )
+    }
+
+    private fun interruptAside(aside: Aside) {
+        val srv = server ?: return
+        val thread = aside.thread ?: return
+        val turn = aside.turn ?: return
+        srv.request(
+            "turn/interrupt",
+            buildJsonObject {
+                put("threadId", thread)
+                put("turnId", turn)
+            },
+        )
+    }
+
+    /** The one outcome of a side question, and the fork let go of. */
+    private fun finishAside(aside: Aside, answer: SideQuestion.Answer) {
+        if (asides.remove(aside.id) == null) return
+        aside.timeout?.cancel(false)
+        aside.thread?.let { thread ->
+            asideThreads.remove(thread)
+            // An ephemeral thread stays loaded in the process until it is let go: a long day of questions
+            // would otherwise keep every one of them in memory.
+            server?.request("thread/unsubscribe", buildJsonObject { put("threadId", thread) })
+        }
+        aside.onEnd(answer)
+    }
+
+    /** The process is going: every question still waiting is answered as such, at once. */
+    private fun abandonAsides() {
+        for (aside in asides.values.toList()) {
+            finishAside(aside, SideQuestion.Answer.Failed(SideQuestion.Reason.ENDED, "The conversation stopped before answering."))
+        }
+    }
+
+    /** What the fork of a side question says, retold for the card that asked it. */
+    private fun asideNotification(aside: Aside, method: String, params: JsonObject) {
+        when (method) {
+            "turn/started" -> {
+                aside.turn = AppServer.text((params["turn"] as? JsonObject)?.get("id")).ifEmpty { aside.turn }
+                aside.onProgress(SideQuestion.Progress(aside.id, SideQuestion.STARTED, null, null, null, null))
+                if (aside.cancelled) interruptAside(aside)
+            }
+
+            "item/completed" -> {
+                val item = params["item"] as? JsonObject ?: return
+                if (AppServer.text(item["type"]) == "agentMessage") {
+                    AppServer.text(item["text"]).takeIf { it.isNotBlank() }?.let { aside.text = it }
+                }
+            }
+
+            "error" -> if (params["willRetry"] == JsonPrimitive(true)) {
+                aside.attempts += 1
+                val error = params["error"] as? JsonObject
+                // Codex says that it will try again, not how often or when; the card's line is filled in
+                // the way the conversation's own retry card is (see CodexStream.error).
+                aside.onProgress(
+                    SideQuestion.Progress(
+                        requestId = aside.id,
+                        status = SideQuestion.API_RETRY,
+                        attempt = aside.attempts,
+                        maxRetries = CodexStream.MAX_RETRIES_SHOWN,
+                        delayMs = 0,
+                        errorStatus = CodexErrors.httpStatus(error?.get("codexErrorInfo")),
+                    ),
+                )
+            }
+
+            "model/rerouted" -> aside.notice = CodexDialect.rerouteReason(AppServer.text(params["reason"])).ifEmpty { null }
+
+            "turn/completed" -> {
+                val turn = params["turn"] as? JsonObject ?: return
+                val answer = when (AppServer.text(turn["status"])) {
+                    "completed" ->
+                        if (aside.text.isNotBlank()) SideQuestion.Answer.Answered(aside.text.trim(), aside.notice) else SideQuestion.Answer.Empty(null)
+                    "interrupted" ->
+                        if (aside.cancelled) SideQuestion.Answer.Cancelled
+                        else SideQuestion.Answer.Failed(SideQuestion.Reason.ENDED, "The answer was interrupted.")
+                    else -> SideQuestion.Answer.Failed(
+                        SideQuestion.Reason.REFUSED,
+                        AppServer.text((turn["error"] as? JsonObject)?.get("message")).ifEmpty { "Codex could not answer." },
+                    )
+                }
+                finishAside(aside, answer)
+            }
         }
     }
 
@@ -465,7 +841,7 @@ internal class CodexSession(
         srv.request(
             "model/list",
             buildJsonObject { put("includeHidden", false) },
-            onResult = { onResult(CodexShapes.models(it)) },
+            onResult = { onResult(CodexShapes.models(it, CodexSettings.effective(workingDirectory, "model"), CodexSettings.effective(workingDirectory, "model_reasoning_effort"))) },
             onError = { onFailure(it.message) },
         )
     }
@@ -554,8 +930,7 @@ internal class CodexSession(
         srv.request(
             "account/rateLimits/read",
             onResult = { result ->
-                val snapshot = (result as? JsonObject)?.get("rateLimits") as? JsonObject
-                onUsage(CodexShapes.usage(snapshot, CodexShapes.contextOf(lastTokenUsage)?.second))
+                onUsage(CodexShapes.usageAnswer(result as? JsonObject, CodexShapes.contextOf(lastTokenUsage)?.second))
             },
             onError = { onFailure(it.message) },
         )
@@ -609,6 +984,7 @@ internal class CodexSession(
 
     fun stop() {
         val srv = server ?: return
+        abandonAsides()
         server = null
         busy = false
         open = false
@@ -635,7 +1011,7 @@ internal class CodexSession(
         } ?: return
         busy = true
         onTurnStarted()
-        whenOpen { deliver(next.first, next.second) }
+        whenOpen { deliver(next) }
     }
 
     // --- Permissions --------------------------------------------------------------------------------
@@ -816,11 +1192,15 @@ internal class CodexSession(
         server = created
         startedAt = System.currentTimeMillis()
         open = false
+        // The settings every turn of this conversation goes by, read while the thread opens (see
+        // CodexConfigDesk.workspaceWrite) - the first turn should not have to go without them.
+        CodexConfigDesk.warm(workingDirectory)
         openThread(created)
         return created
     }
 
     private fun exited(process: AppServer, code: Int, requested: Boolean) {
+        if (server === process) abandonAsides()
         if (server === process) server = null
         val wasBusy = busy
         busy = false
@@ -844,6 +1224,7 @@ internal class CodexSession(
 
     /** The thread this process holds: a new one, the one being continued, or a fork of the parent. */
     private fun openThread(srv: AppServer) {
+        resumed = conversationId != null
         val (method, params) = when {
             conversationId != null -> "thread/resume" to buildJsonObject {
                 put("threadId", conversationId)
@@ -910,11 +1291,46 @@ internal class CodexSession(
             ),
         )
 
-        val waiting = synchronized(waitingForThread) {
-            open = true
-            waitingForThread.toList().also { waitingForThread.clear() }
+        // A new role is said before anything else is: the turns waiting for the thread are the first ones
+        // the role applies to.
+        val role = roleChange?.takeIf { resumed && !roleSaid }
+        if (role != null) {
+            roleSaid = true
+            val srv = server
+            if (srv == null) {
+                releaseWaiting()
+            } else {
+                srv.request(
+                    "thread/inject_items",
+                    buildJsonObject {
+                        put("threadId", id)
+                        put("items", buildJsonArray {
+                            addJsonObject {
+                                put("type", "message")
+                                put("role", "developer")
+                                putJsonArray("content") {
+                                    addJsonObject {
+                                        put("type", "input_text")
+                                        put("text", "$ROLE_CHANGE\n\n$role")
+                                    }
+                                }
+                            }
+                        })
+                    },
+                    onResult = { releaseWaiting() },
+                    onError = { error ->
+                        DiagnosticsLog.note(DiagnosticsLog.AGENT, "codex would not take a new role into the thread")
+                        thisLogger().info("Codex did not take the role change: ${error.message}")
+                        releaseWaiting()
+                    },
+                )
+            }
+        } else {
+            releaseWaiting()
         }
-        waiting.forEach { it() }
+
+        namedAs = null
+        nameAfterPerson()
 
         // A conversation continued from the history knows how full its window is only after its next turn;
         // until then the meter would stand empty over a conversation that may be nearly full. Codex wrote
@@ -927,6 +1343,15 @@ internal class CodexSession(
                 CodexShapes.contextOf(remembered)?.let { (used, max) -> onContext(used, max) }
             }
         }
+    }
+
+    /** The thread is ready for turns: everything that waited for it goes now. */
+    private fun releaseWaiting() {
+        val waiting = synchronized(waitingForThread) {
+            open = true
+            waitingForThread.toList().also { waitingForThread.clear() }
+        }
+        waiting.forEach { it() }
     }
 
     private fun whenOpen(action: () -> Unit) {
@@ -946,13 +1371,15 @@ internal class CodexSession(
         // Another thread of this process - a title being asked for (see CodexTitles), a subagent Codex
         // spawned. Their items are not this conversation's feed.
         if (thread.isNotEmpty() && thread != conversationId) {
-            CodexTitles.notification(method, params)
+            val aside = asideThreads[thread]
+            if (aside != null) asideNotification(aside, method, params) else CodexTitles.notification(method, params)
             return
         }
 
         when (method) {
             "turn/started" -> {
                 val turn = params["turn"] as? JsonObject ?: return
+                hasHistory = true
                 stream.turnStarted(turn)
                 activeTurn = AppServer.text(turn["id"]).ifEmpty { activeTurn }
                 if (!busy) {
@@ -987,6 +1414,7 @@ internal class CodexSession(
             "turn/completed" -> {
                 val turn = params["turn"] as? JsonObject ?: return
                 stream.turnCompleted(turn)
+                AppServer.text(turn["id"]).takeIf { it.isNotEmpty() }?.let { lastEndedTurn = it }
                 endTurn()
                 drainAfterTurn()
             }
@@ -1004,9 +1432,28 @@ internal class CodexSession(
                 AppServer.text(params["reason"]),
             )
 
-            "thread/name/updated" -> AppServer.text(params["threadName"]).takeIf { it.isNotBlank() }?.let(onTitle)
+            // The echo of a name this process wrote is nothing new. The model's name is the model's. Any other
+            // name was given somewhere else - another Codex client, a terminal - and only a person names a
+            // thread there (see AutoTitles), so the tab takes it on as one.
+            "thread/name/updated" -> AppServer.text(params["threadName"]).trim().takeIf { it.isNotBlank() }?.let { name ->
+                when (name) {
+                    namedAs -> Unit
+                    modelNamed -> onTitle(name)
+                    else -> {
+                        namedAs = name
+                        onRenamed(name)
+                    }
+                }
+            }
 
             "account/rateLimits/updated" -> (params["rateLimits"] as? JsonObject)?.let { snapshot ->
+                // About another bucket than the plan's own: its windows are not the five-hour and weekly
+                // ones, and its "reached" is not the plan's. The whole picture is asked again instead, which
+                // draws that bucket on a ring of its own (see CodexShapes.usage).
+                if (!CodexShapes.isMainBucket(snapshot)) {
+                    requestUsage(onUsage = onRateLimits)
+                    return
+                }
                 // A rolling update is sparse: an empty window means "not said this time", not "zero", and
                 // passed on it would wipe the rings the last full answer drew.
                 if (LIMIT_FIELDS.any { snapshot[it] is JsonObject }) onRateLimits(CodexShapes.usage(snapshot))
@@ -1142,30 +1589,7 @@ internal class CodexSession(
     private fun question(ours: String, id: JsonElement, params: JsonObject): Pending {
         val itemId = AppServer.text(params["itemId"]).ifEmpty { "ask-$ours" }
         val asked = (params["questions"] as? JsonArray)?.mapNotNull { it as? JsonObject }.orEmpty()
-        val ids = LinkedHashMap<String, String>()
-
-        val input = buildJsonObject {
-            putJsonArray("questions") {
-                for (question in asked) {
-                    val text = AppServer.text(question["question"])
-                    ids[text] = AppServer.text(question["id"])
-                    addJsonObject {
-                        put("question", text)
-                        put("header", AppServer.text(question["header"]))
-                        put("multiSelect", false)
-                        putJsonArray("options") {
-                            (question["options"] as? JsonArray)?.forEach { option ->
-                                val o = option as? JsonObject ?: return@forEach
-                                addJsonObject {
-                                    put("label", AppServer.text(o["label"]))
-                                    put("description", AppServer.text(o["description"]))
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        val (input, ids) = CodexDialect.askInput(asked)
 
         CodexDialect.toolUses(listOf(CodexDialect.ToolCall(itemId, CodexLaunch.ASK_TOOL, input)), currentModel(), uuid = itemId)
             ?.let(::emit)
@@ -1265,6 +1689,10 @@ internal class CodexSession(
         const val INTERRUPT_TIMEOUT_SECONDS = 20L
         const val MCP_LOGIN_TIMEOUT_SECONDS = 60L
         const val PLAN_FOLLOW_UP_DELAY_MS = 150L
+
+        /** What a role change is introduced by - see [roleChange]. */
+        const val ROLE_CHANGE =
+            "Your role in this conversation has changed. These are your instructions from now on, and they replace the earlier ones:"
 
         /** The parts of a limits update that carry figures - see the rolling update in [notification]. */
         val LIMIT_FIELDS = listOf("primary", "secondary", "individualLimit")

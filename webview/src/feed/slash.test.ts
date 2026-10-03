@@ -234,6 +234,31 @@ describe('enterSends', () => {
 })
 
 describe('localCommand', () => {
+  // The panel's own /btw (see feed/side): its question is prose, and the lines of it stay its own - the
+  // split every other command's value goes through would glue them into one.
+  it('takes a side question whole, line breaks and all', () => {
+    expect(localCommand(en, '/btw what port is it on?')).toEqual({ name: 'btw', argument: 'what port is it on?' })
+    expect(localCommand(en, '/btw first\n  second')).toEqual({ name: 'btw', argument: 'first\n  second' })
+    expect(localCommand(en, '/btw')).toEqual({ name: 'btw', argument: '' })
+  })
+
+  it('offers /btw in the hint as a panel command with its argument', () => {
+    const entry = buildCommands(en, []).find((command) => command.id === 'btw')
+    expect(entry).toMatchObject({ group: 'panel', local: true, argumentHint: en.commands.btwArgument })
+  })
+
+  // Alone the CLI prints a usage text in a stream; with key=value it does exactly what was asked.
+  it('opens the settings screen for a bare /config and leaves key=value to the CLI', () => {
+    expect(localCommand(en, '/config')).toEqual({ name: 'config', argument: '' })
+    expect(localCommand(en, '/config autoCompact=false')).toBeNull()
+  })
+
+  // The CLI's /rename never reaches the tab, and with no name it makes one up - so the panel runs it.
+  it('keeps /rename to the panel, with a name and without one', () => {
+    expect(localCommand(en, '/rename')).toEqual({ name: 'rename', argument: '' })
+    expect(localCommand(en, '/rename  Parser   fixes ')).toEqual({ name: 'rename', argument: 'Parser fixes' })
+  })
+
   it('recognises the commands the panel runs itself', () => {
     expect(localCommand(en, '/login')).toEqual({ name: 'login', argument: '' })
     expect(localCommand(en, '  /fork  ')).toEqual({ name: 'fork', argument: '' })

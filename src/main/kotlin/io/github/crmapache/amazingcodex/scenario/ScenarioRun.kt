@@ -66,6 +66,8 @@ internal object RunFailure {
     const val STOPPED = "stopped"
     /** The card did not meet its definition of done and the head gave up on it. */
     const val UNDONE = "undone"
+    /** The head took over the work of a card its session could not finish, and could not finish it either. */
+    const val HEAD_GAVE_UP = "headGaveUp"
 }
 
 @Serializable
@@ -160,7 +162,10 @@ internal data class RunStep(
     val slots: Map<String, String> = emptyMap(),
     /** The prompt as it was actually said, with the inputs and the slots written in. */
     val prompt: String = "",
-    /** What the agent is saying right now, cut short - one line while the turn is open. */
+    /**
+     * What the agent is saying right now while the turn is open: its newest words, a paragraph per block
+     * of text (see LiveWords).
+     */
     val said: String = "",
     /** The last thing it said, once the turn is over. What the row reads when nothing is moving. */
     val summary: String = "",
@@ -176,6 +181,17 @@ internal data class RunStep(
     val cost: Double = 0.0,
     /** How many tokens this card's session burnt - see [ScenarioRun.tokens]. */
     val tokens: Long = 0,
+    /**
+     * Why the head took this card's work over from its own session, cut short - and empty when it never
+     * had to (see HeadSettings.onGiveUp).
+     *
+     * A reason rather than a flag, because the morning's question about such a row is not "was it taken
+     * over" but "what did the card get stuck on", and that is the one thing the verdict written over it
+     * afterwards no longer says. The head's own spending stays on the run rather than on the step: its
+     * running total is one conversation's, and a share of it moved onto a card would be counted twice
+     * the next time the run is picked up (see ScenarioEngine.carryOn).
+     */
+    val takeOver: String = "",
 )
 
 /**
@@ -254,6 +270,8 @@ internal data class RunSummary(
     val nudges: Int = 0,
     /** What it has stopped to ask, in the CLI's own words. Empty when it is not standing on anything. */
     val asking: String = "",
+    /** Whether the card it is on is being finished by the head itself (see RunStep.takeOver). */
+    val takingOver: Boolean = false,
 )
 
 internal fun ScenarioRun.summarise(): RunSummary {
@@ -293,5 +311,6 @@ internal fun ScenarioRun.summarise(): RunSummary {
         // The words rather than the tool's name: a row that says "Bash" has said nothing about what it is
         // being asked. The tool is the fallback for a permission the CLI worded no other way.
         asking = question?.let { it.title.ifBlank { it.tool } }.orEmpty(),
+        takingOver = here != null && here.takeOver.isNotEmpty() && !StepState.over(here.state),
     )
 }

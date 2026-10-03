@@ -33,28 +33,38 @@ internal object CodexCatalog {
 
     private var sweep: ScheduledFuture<*>? = null
 
+    /** What a question came back with: the answer, or Codex's own words for why there is none. */
+    data class Answer(val result: JsonElement?, val error: String?)
+
     /**
      * Ask, and wait for the answer on this thread - which must not be the IDE's UI thread. Null when there
      * is no answer: Codex is not installed, the question failed, or it took longer than [timeoutSeconds].
      */
-    fun call(method: String, params: JsonElement? = null, timeoutSeconds: Long = DEFAULT_TIMEOUT_SECONDS): JsonElement? {
+    fun call(method: String, params: JsonElement? = null, timeoutSeconds: Long = DEFAULT_TIMEOUT_SECONDS): JsonElement? =
+        ask(method, params, timeoutSeconds).result
+
+    /**
+     * The same, keeping Codex's words when it refuses - for a question whose refusal the person has to
+     * read, such as a setting that would not be written (see CodexConfigDesk).
+     */
+    fun ask(method: String, params: JsonElement? = null, timeoutSeconds: Long = DEFAULT_TIMEOUT_SECONDS): Answer {
         check(!ApplicationManager.getApplication().isDispatchThread) { "CodexCatalog.call on the UI thread" }
-        val srv = ensure() ?: return null
+        val srv = ensure() ?: return Answer(null, "Codex is not available.")
         lastUsed = System.currentTimeMillis()
 
-        val answer = CompletableFuture<JsonElement?>()
+        val answer = CompletableFuture<Answer>()
         srv.request(
             method,
             params,
             timeoutSeconds,
-            onResult = { answer.complete(it) },
+            onResult = { answer.complete(Answer(it, null)) },
             onError = { error ->
                 thisLogger().info("Codex catalog: $method failed: ${error.message}")
-                answer.complete(null)
+                answer.complete(Answer(null, error.message))
             },
         )
 
-        return runCatching { answer.get(timeoutSeconds + 5, TimeUnit.SECONDS) }.getOrNull()
+        return runCatching { answer.get(timeoutSeconds + 5, TimeUnit.SECONDS) }.getOrElse { Answer(null, "Codex did not answer in time.") }
     }
 
     /** Take the process down now - the plugin is being unloaded, or the account changed under it. */

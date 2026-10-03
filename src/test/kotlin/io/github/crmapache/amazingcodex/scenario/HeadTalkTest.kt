@@ -77,6 +77,72 @@ class HeadTalkTest {
         assertNull(HeadTalk.read("   ").body)
     }
 
+    // A style hook after the head finished a card's work: its last words are about the style pass.
+    @Test
+    fun `a turn sent back by a hook keeps the object it already gave`() {
+        val reply = HeadTalk.read(
+            listOf(
+                "The migration is on both projects. {\"done\": true, \"handoff\": \"PR #42\"}",
+                "Went over the style once more, nothing to fix.",
+            ),
+        )
+
+        assertEquals("true", reply.body?.get("done")?.toString())
+        assertEquals("The migration is on both projects.", reply.words)
+    }
+
+    @Test
+    fun `of two endings with an object the later one counts`() {
+        val reply = HeadTalk.read(listOf("{\"done\": false}", "Fixed it after all. {\"done\": true}"))
+
+        assertEquals("true", reply.body?.get("done")?.toString())
+        assertEquals("Fixed it after all.", reply.words)
+    }
+
+    @Test
+    fun `endings with no object at all are prose`() {
+        val reply = HeadTalk.read(listOf("First.", "Second."))
+
+        assertNull(reply.body)
+        assertEquals("First.\n\nSecond.", reply.words)
+    }
+
+    /*
+     * Recorded live: a card's report followed by a hook's style pass reached the head as the style note
+     * alone, and the head sent a finished card back for a report it had already written.
+     */
+    @Test
+    fun `a verdict on a turn that ended twice shows both endings and says why`() {
+        val asked = HeadTalk.verdictRequest(
+            card,
+            listOf("Built and committed. DOD: all met.", "Went over the style once more."),
+            ok = true,
+            nudgesLeft = 1,
+        )
+
+        assertTrue("Built and committed. DOD: all met." in asked)
+        assertTrue("Went over the style once more." in asked)
+        assertTrue("--- ending 1 of 2" in asked)
+        assertTrue("a hook of the project sent it back to work" in asked)
+        assertTrue(asked.indexOf("DOD: all met") < asked.indexOf("style once more"))
+    }
+
+    @Test
+    fun `a verdict on a single ending reads as before`() {
+        val asked = HeadTalk.verdictRequest(card, listOf("Done."), ok = true, nudgesLeft = 1)
+
+        assertTrue("---\nDone.\n---" in asked)
+        assertTrue("ending 1" !in asked)
+        assertTrue("hook" !in asked)
+    }
+
+    @Test
+    fun `a verdict on a turn that said nothing says so`() {
+        val asked = HeadTalk.verdictRequest(card, emptyList(), ok = false, nudgesLeft = 1)
+
+        assertTrue("(it said nothing at all)" in asked)
+    }
+
     /*
      * Both of these travel as a command-line argument, and on Windows a newline or a quotation mark ends
      * the command there - silently, with everything after it lost (see CodexLaunch). Everything with any
@@ -84,10 +150,67 @@ class HeadTalkTest {
      */
     @Test
     fun `what travels as an argument survives a shell nobody asked for`() {
-        for (briefing in listOf(HeadTalk.HEAD_BRIEFING, HeadTalk.CARD_BRIEFING)) {
+        for (briefing in listOf(HeadTalk.HEAD_BRIEFING, HeadTalk.CARD_BRIEFING, HeadTalk.TAKE_OVER_BRIEFING)) {
             assertTrue('\n' !in briefing, "a newline in a launch argument ends the command there")
             assertTrue('"' !in briefing, "a quotation mark in a launch argument breaks the quoted run")
             assertTrue('\'' !in briefing, "an apostrophe in a launch argument breaks the quoted run")
         }
+    }
+
+    private val card = Card(id = "c1", title = "Deliver it", prompt = "/ship", dod = "Main is on dev and pushed.")
+
+    /*
+     * The second way of saying no is the whole of how a scenario's hard stops survive the fence coming
+     * down: offered where giving up hands the card over, and nowhere else - elsewhere every no is a stop.
+     */
+    @Test
+    fun `a verdict that hands the card over offers a stop that is not taken over`() {
+        val handing = HeadTalk.verdictRequest(card, listOf("CI on dev is red."), ok = true, nudgesLeft = 0, handsOver = true)
+        val ending = HeadTalk.verdictRequest(card, listOf("CI on dev is red."), ok = true, nudgesLeft = 0)
+
+        assertTrue("\"stop\": true" in handing)
+        assertTrue("finish it yourself" in handing)
+        assertTrue("\"stop\"" !in ending)
+        assertTrue("The run stops here" in ending)
+    }
+
+    @Test
+    fun `the hand-over lifts the role in the conversation and says what the card was for`() {
+        val said = HeadTalk.takeOverRequest(
+            card = card,
+            prompt = "/ship https://example.com/pull/7",
+            why = "it ran past its time",
+            said = "Waiting for the checks on dev.",
+            transcript = "/tmp/transcripts/abc.jsonl",
+        )
+
+        assertTrue("the rule that the main thread never writes to disk is lifted" in said)
+        assertTrue("Do not start the card over" in said)
+        assertTrue("it ran past its time" in said)
+        assertTrue("/ship https://example.com/pull/7" in said)
+        assertTrue("Main is on dev and pushed." in said)
+        assertTrue("Waiting for the checks on dev." in said)
+        assertTrue("/tmp/transcripts/abc.jsonl" in said)
+        assertTrue("stays a stop" in said)
+    }
+
+    // A card the head just judged: its last words are in the verdict above, and saying them twice is a
+    // few thousand tokens for nothing.
+    @Test
+    fun `a card already judged is not quoted again`() {
+        val said = HeadTalk.takeOverRequest(card, prompt = "/ship", why = "not done", said = null, transcript = null)
+
+        assertTrue("in the message that asked you for your verdict" in said)
+        assertTrue("What it was saying when it stopped" !in said)
+        assertTrue("Its whole conversation" !in said)
+    }
+
+    @Test
+    fun `the opening names the exception only where the scenario makes it`() {
+        val plain = Scenario(name = "Night", stages = listOf(Stage(id = "g", cards = listOf(card))))
+        val handing = plain.copy(head = HeadSettings(onGiveUp = HeadSettings.ON_GIVE_UP_HEAD))
+
+        assertTrue("One exception" !in HeadTalk.opening(plain, "/repo", emptyMap(), 1))
+        assertTrue("One exception" in HeadTalk.opening(handing, "/repo", emptyMap(), 1))
     }
 }

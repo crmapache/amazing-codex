@@ -7,6 +7,7 @@ import java.io.File
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /**
  * What a typed message means before it goes to Codex: the app-server has none of the terminal's slash
@@ -31,7 +32,10 @@ class CodexCommandsTest {
         assertEquals(Command.Clear, parse("/clear"))
         assertEquals(Command.Clear, parse("/new"))
         assertEquals(Command.Init, parse("/init"))
-        assertEquals(listOf("compact", "clear", "new", "init", "review"), CodexCommands.BUILT_IN)
+        assertEquals(listOf("compact", "clear", "new", "init", "review", "rename"), CodexCommands.BUILT_IN)
+        assertEquals(CodexCommands.Command.Rename("Search fix"), parse("/rename Search fix"))
+        // Nothing to name it with: it goes as text, and Codex says what it makes of it.
+        assertTrue(parse("/rename") is CodexCommands.Command.Say)
     }
 
     @Test

@@ -175,6 +175,22 @@ internal class ProjectCatalog(
     }
 
     /**
+     * Which indicators around the input field are switched off. A fact of its own for the second of the
+     * calm colours' two reasons only: the setting is machine-wide, so another window has to apply a change
+     * at once rather than after a restart. The first reason does not apply - it is not in the phone's
+     * list (RemoteFeed.PROJECT_FACTS), because the phone has neither the counter nor the buttons, and its
+     * rings are its own business - so a joining panel learns it from `init`, and nothing else needs it.
+     */
+    fun sendIndicators() {
+        hub.broadcastProject(
+            buildJsonObject {
+                put("type", "indicators")
+                putJsonArray("hidden") { CodexPreferences.hiddenIndicators.forEach { add(it) } }
+            }.toString(),
+        )
+    }
+
+    /**
      * The models added by hand, as a fact of their own beside the two above - and for the same two
      * reasons: a phone is never sent `init`, and a list changed in one window has to reach the others
      * without waiting for a restart.
@@ -193,17 +209,19 @@ internal class ProjectCatalog(
     }
 
     /**
-     * What a new tab starts with: the two pins and the permission mode.
+     * What a new tab starts with: the two pins, the permission mode, and the answers worked out of them.
      *
      * A message of its own beside `init`, for the reason the colour mode has one - the setting is
      * machine-wide, so a change made in one window has to reach the others without waiting for a
-     * restart (see announceNewTabDefaults in SessionCommands).
+     * restart (see CodexSessionHub.announceNewTabDefaults).
      *
-     * The pins travel as they are, empty included: empty is the answer that means "whatever was last
-     * chosen", which is what the panel does when nothing is pinned. The mode is resolved rather than
-     * passed on, exactly as it is in `init` - the selector has to name the value the process will
-     * genuinely come up with, and never having chosen one means Claude Code's own (see
-     * PermissionDefaultMode).
+     * The pins travel as they are, empty included: empty means "whatever was last chosen", and that is
+     * what the "New chats" screen ticks. What an untouched tab is DRAWN by travels beside them already
+     * worked out, and never by the panel: the answer reads the account in use, what it remembers and
+     * which models it can run (see StartingChoice), and a second copy of that in the panel is exactly
+     * what used to draw Sonnet over a tab that came up on Opus. The mode is resolved rather than passed
+     * on, exactly as it is in `init` - the selector has to name the value the process will genuinely
+     * come up with, and never having chosen one means Codex's own (see PermissionDefaultMode).
      */
     fun sendNewTabDefaults() {
         hub.broadcastProject(
@@ -211,6 +229,10 @@ internal class ProjectCatalog(
                 put("type", "newTabDefaults")
                 put("model", CodexPreferences.newTabModel)
                 put("effort", CodexPreferences.newTabEffort)
+                put("startingModel", StartingChoice.model())
+                put("startingEffort", StartingChoice.effort())
+                put("unpinnedModel", StartingChoice.unpinnedModel())
+                put("unpinnedEffort", StartingChoice.unpinnedEffort())
                 put(
                     "mode",
                     PermissionModes.resolve(
@@ -239,14 +261,19 @@ internal class ProjectCatalog(
                 // The choice of model and the rest outlives an IDE restart: looking for it again after
                 // every opening is the same as not saving it at all.
                 putJsonObject("preferences") {
-                    put("model", preferences.model)
-                    put("effort", preferences.effort)
+                    // What "as last chosen" comes to right now - the account in use first, the machine's
+                    // last pick after it - rather than the machine's pick alone (see StartingChoice).
+                    put("model", StartingChoice.unpinnedModel())
+                    put("effort", StartingChoice.unpinnedEffort())
                     // What a new tab is PINNED to, beside what was last chosen above. Two values rather
-                    // than one, and the empty one is the point: empty means "whatever was last chosen",
-                    // so the panel draws an untouched tab by the pick above and a pinned one by these
+                    // than one, and the empty one is the point: empty means "whatever was last chosen"
                     // (see CodexPreferences.newTabModel).
                     put("newTabModel", preferences.newTabModel)
                     put("newTabEffort", preferences.newTabEffort)
+                    // And the answer an untouched tab is drawn by, worked out here and only here - the
+                    // chip over it promises the process the IDE will launch (see sendNewTabDefaults).
+                    put("startingModel", StartingChoice.model())
+                    put("startingEffort", StartingChoice.effort())
                     // With the same value the process will genuinely come up with: the selector in the
                     // panel has to tell the truth from the first second. Never chosen at all - we take
                     // Codex's own default, the way the terminal takes it (see
@@ -269,6 +296,9 @@ internal class ProjectCatalog(
                     // And how much colour the gauges keep. Unconditional like the send key: a hundred is
                     // an answer rather than a missing one - a panel nobody has asked draws the ladder.
                     put("calmVivid", preferences.gaugeVivid)
+                    // And which indicators around the field are switched off. Unconditional too: an empty
+                    // list says "all of them shown", the answer a panel nobody has asked gives by itself.
+                    putJsonArray("hiddenIndicators") { preferences.hiddenIndicators.forEach { add(it) } }
                     // Two values rather than one, and the empty one is not the useless one: `language`
                     // is the explicit choice and is usually empty, `ideLanguage` is what the IDE itself
                     // is set to. Empty means "speak whatever the IDE speaks", and the picker needs the
@@ -276,6 +306,12 @@ internal class ProjectCatalog(
                     // something unnamed.
                     put("language", preferences.language)
                     put("ideLanguage", IdeLanguage.current())
+                    // Whether the tabs come back after a restart. Unconditional: "on" is the answer a
+                    // panel nobody has asked gives, and it is a real one (see CodexPreferences.restoreTabs).
+                    put("restoreTabs", preferences.restoreTabs)
+                    // Whether a message carries what the editor shows. Unconditional for the same reason:
+                    // "on" is the default (see CodexPreferences.shareEditor).
+                    put("shareEditor", preferences.shareEditor)
                 }
                 // What the improve button asks for. Both texts: the screen shows the built-in one as what
                 // is in force while nothing of one's own has been put in, and it is also what the restore
@@ -599,13 +635,11 @@ internal class ProjectCatalog(
                                 put("title", entry.title)
                                 put("updatedAt", entry.updatedAt)
                                 put("messages", entry.messages)
-                                // Where the name came from: a conversation opened in a tab keeps it,
-                                // and a guess is worth replacing with the model's own name once the
-                                // conversation carries on (see CodexSession.requestTitle).
-                                put(
-                                    "titleSource",
-                                    if (entry.named) SessionSnapshot.TITLE_LLM else SessionSnapshot.TITLE_HEURISTIC,
-                                )
+                                // Where the name came from: a conversation opened in a tab keeps it at
+                                // that rank - a guess is worth replacing with the model's own name once
+                                // the conversation carries on (see CodexSession.requestTitle), and the
+                                // person's own is replaced by nobody but them.
+                                put("titleSource", entry.titleSource)
                             }
                         }
                     }

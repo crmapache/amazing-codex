@@ -1,70 +1,41 @@
 #!/usr/bin/env bash
-# Put what is in this working tree onto the development relay - wss://relay-dev.mzpizote.com.
+# This fork's relay on this machine, at http://localhost:4450, serving the phone client built from this
+# working tree - the same two things the image carries, with no server anywhere in the loop.
 #
-# It exists so that trying a change to the relay or to the phone's client never means deploying to the
-# one strangers are paired with. The two are the same image built from the same sources; what differs
-# is the address, the VAPID pair and who is pointed at it. Nothing here touches the public relay.
+#   ./scripts/relay-dev.sh            # the phone's client is rebuilt, then the relay, then it runs
+#   ./scripts/relay-dev.sh --no-web   # relay only, when only relay/src has moved
 #
-#   ./scripts/relay-dev.sh            # the phone's client is rebuilt, then the server
-#   ./scripts/relay-dev.sh --no-web   # server only, when only relay/src has moved
+# It stays in the foreground; Ctrl-C stops it. Point a sandbox at it:
 #
-# Afterwards, point the plugin at it once: panel menu -> Remote access -> relay address ->
-# wss://relay-dev.mzpizote.com. The phone follows by itself - it dials whichever host served it the
-# client - but it is a different origin, so it pairs separately from the public one.
+#   ./gradlew runIde -PopenProject=sandbox-project -PremoteRelay=ws://localhost:4450
+#
+# and open http://localhost:4450 in a browser on this machine for the phone's side. A browser counts
+# localhost as a secure context, so pairing and the encryption work there exactly as on a phone. A real
+# phone cannot reach this machine's loopback; for that the relay has to be deployed
+# (scripts/relay-deploy.sh, which is the only script here that touches a server).
+#
+# Push notifications are off here - no VAPID pair in the environment - and the relay says so in
+# /v1/push/key rather than failing. The port is this project's own in ~/.claude/ports.md and is taken
+# strictly: something already listening there is a stale run to stop, not a reason to move.
 set -euo pipefail
 
-# This copy of the script belongs to the Codex fork, and the fork has no relay of its own yet. Every
-# address below is the Claude project's development relay: running this from here would replace that
-# relay's phone client with this fork's build. So it refuses until a relay for the fork exists and the
-# constants below are pointed at it (see relay/README.md).
-if [ "${AMAZING_CODEX_RELAY_READY:-}" != "1" ]; then
-  echo "The Codex fork has no development relay of its own yet - see relay/README.md." >&2
-  echo "The addresses in this script still belong to the Claude project; refusing to deploy there." >&2
-  exit 1
-fi
-
-SERVER=root@40.160.85.25
-APP_UUID=i08vmywo3dw38aa7pmkhrche
-IMAGE=127.0.0.1:5000/acc-relay-dev:local
+PORT=4450
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-cd "$HERE"
-
-if [ "${1:-}" != "--no-web" ]; then
-  echo "==> building the phone's client"
-  pnpm build:mobile
-  rm -rf relay/public
-  mkdir -p relay/public
-  cp -R webview/dist-mobile/. relay/public/
-fi
-
-if [ ! -d relay/public ]; then
-  echo "relay/public is missing - run without --no-web at least once." >&2
+if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "Port $PORT is already taken - see: lsof -nP -iTCP:$PORT -sTCP:LISTEN" >&2
   exit 1
 fi
 
-echo "==> packing the sources"
-# COPYFILE_DISABLE keeps macOS from packing its own metadata beside every file - those turn into
-# "._name" files inside the image and are served as if they were the client's.
-( cd relay && COPYFILE_DISABLE=1 tar czf /tmp/relay-dev.tgz --exclude=node_modules --exclude=dist . )
-scp -q /tmp/relay-dev.tgz "$SERVER:/root/apps/"
+if [ "${1:-}" = "--no-web" ]; then
+  "$HERE/scripts/relay-client.sh" --check
+else
+  "$HERE/scripts/relay-client.sh"
+fi
 
-echo "==> building the image on the server"
-# rm -rf before unpacking is not tidiness: the archive lands on top of what is already there, so a
-# file that has left the build would otherwise stay in the image for good.
-ssh "$SERVER" "cd /root/apps/acc-relay-dev && rm -rf public dist && tar xzf ../relay-dev.tgz 2>/dev/null && \
-  docker build -q -t $IMAGE . && docker push -q $IMAGE" >/dev/null
+echo "==> building the relay"
+(cd "$HERE/relay" && pnpm build)
 
-echo "==> deploying"
-python3 "$HOME/Documents/railway-migration/scripts/cool.py" POST "/deploy?uuid=$APP_UUID&force=true" >/dev/null
-
-for _ in $(seq 1 30); do
-  sleep 6
-  if [ "$(curl -sS -m 10 https://relay-dev.mzpizote.com/healthz || true)" = "ok" ]; then
-    echo "==> up: $(curl -sS -m 10 https://relay-dev.mzpizote.com/ | grep -o 'assets/mobile-[A-Za-z0-9_-]*\.js' | head -1)"
-    exit 0
-  fi
-done
-
-echo "the relay did not answer /healthz in three minutes - look at the deploy log" >&2
-exit 1
+echo "==> http://localhost:$PORT - Ctrl-C stops it"
+cd "$HERE/relay"
+PORT="$PORT" RELAY_STATIC_DIR=./public exec node dist/index.js

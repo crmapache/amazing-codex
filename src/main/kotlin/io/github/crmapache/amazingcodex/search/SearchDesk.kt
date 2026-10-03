@@ -4,8 +4,10 @@ import io.github.crmapache.amazingcodex.codex.CodexOneShot
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.project.Project
+import io.github.crmapache.amazingcodex.codex.AutoTitles
 import io.github.crmapache.amazingcodex.codex.CodexHistory
 import io.github.crmapache.amazingcodex.codex.CodexSessionHub
+import io.github.crmapache.amazingcodex.codex.SessionSnapshot
 import io.github.crmapache.amazingcodex.feedback.DiagnosticsLog
 import io.github.crmapache.amazingcodex.stats.StatsLedger
 import com.intellij.util.concurrency.AppExecutorUtil
@@ -39,6 +41,7 @@ internal class SearchDesk(private val project: Project, private val hub: CodexSe
             directoryFor(project),
             transcripts = { SearchIndex.transcriptsOf(project.basePath) },
             names = { CodexHistory.threadNames(project.basePath) },
+            givenByModel = { AutoTitles(project.basePath).all() },
         )
     }
 
@@ -247,7 +250,12 @@ internal class SearchDesk(private val project: Project, private val hub: CodexSe
         put("speaker", message.speaker.wire)
         put("at", message.at)
         put("title", index.titleOf(message.conversation))
-        put("named", index.isNamed(message.conversation))
+        val titleSource = index.titleSourceOf(message.conversation)
+        // Whether the title is a conversation's own name rather than a guess - what a phone built before
+        // `titleSource` reads. The panel goes by `titleSource`: the person's name has to reach the tab it
+        // opens in as the person's, or the model's would be free to replace it.
+        put("named", titleSource != SessionSnapshot.TITLE_HEURISTIC)
+        put("titleSource", titleSource)
         // What the list says under a conversation's title when it groups by conversation.
         put("messages", index.messagesIn(message.conversation))
         put("snippet", hit.snippet)

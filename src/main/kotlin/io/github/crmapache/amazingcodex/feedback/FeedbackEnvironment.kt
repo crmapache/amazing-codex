@@ -78,6 +78,13 @@ internal object FeedbackEnvironment {
         ).joinToString(" ")
     }
 
+    /**
+     * The CLI's version alone - "0.152.0" - or empty while it is still being read or could not be. The
+     * usage report sends this rather than the line above: a number, with nothing around it - and Codex
+     * puts its own name in front of it ("codex-cli 0.152.0"), which is not part of the number either.
+     */
+    fun cliNumber(): String = cliVersion.orEmpty().substringBefore(" (").trim().removePrefix("codex-cli").trim()
+
     private fun codex(): String = when (val version = cliVersion) {
         null -> "Codex (still reading its version)"
         "" -> "Codex (version could not be read)"

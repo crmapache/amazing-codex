@@ -1,10 +1,11 @@
 # Privacy
 
-_Last updated: 19 September 2026_
+_Last updated: 2 October 2026_
 
-Amazing Codex GUI is a panel for OpenAI's Codex CLI inside JetBrains IDEs. With three exceptions, all
+Amazing Codex GUI is a panel for OpenAI's Codex CLI inside JetBrains IDEs. With four exceptions, all
 described below, it sends nothing anywhere: the agent runs on your machine, the conversation stays on
-your machine, and the plugin has no analytics, no telemetry and no account of any kind.
+your machine, and the plugin has no account of any kind. It collects no analytics unless you allow the
+anonymous usage statistics described in the fourth exception.
 
 The first exception is **remote access**, which lets you answer your agent from your phone. It is off
 when the plugin is installed and stays off until you turn it on. Most of this page is about what
@@ -17,6 +18,10 @@ The third is **voice input** - dictation with a Deepgram key of your own. It is 
 on and add a key, and it records only while you hold the hotkey or the microphone button is lit; see
 "Voice input" below.
 
+The fourth is **anonymous usage statistics**: daily counts of how the panel is used, which help the
+author decide what to work on. The panel asks once, and nothing is sent unless you press Allow; see
+"Usage statistics" below.
+
 ## What travels, and where
 
 When remote access is on, your conversations travel to the devices you have paired - your phone -
@@ -26,7 +31,7 @@ cannot reach each other directly.
 What travels is the conversation itself. That means everything the agent reads and writes: **your
 source code**, file paths, the output of commands it runs, your messages and its answers.
 
-The relay is at `wss://relay.mzpizote.com`, run by the plugin's author on a server rented from OVH
+The relay is at `wss://relay-codex.mzpizote.com`, run by the plugin's author on a server rented from OVH
 and located in the United States (Virginia). Its source is public, and you can point the plugin at a
 relay of your own instead - see "Running your own relay" below.
 
@@ -178,6 +183,78 @@ microphone on your work machine.
 The plugin installs no system-wide hook and asks for no accessibility permission: a key pressed in
 another application is never seen by it.
 
+## Usage statistics
+
+Usage statistics are off until you say otherwise. The panel asks once, with a small card above the input
+field and two buttons, Allow and No thanks, and nothing is sent until you press Allow. You can change the
+answer at any time: menu → Settings → Usage statistics. The same screen shows the whole report as it
+would go next, so you can read exactly what leaves before allowing it and at any point after.
+
+**When.** The first report goes when you press Allow, and after that a few times a day, but only while
+you are using the panel: a message sent, an answer finished or the panel opened is what sets one off. An
+IDE left open and idle sends nothing. Each report carries the days that changed since the last one,
+going back at most two weeks and never to a day before you allowed it.
+
+**What is sent.** For each day:
+
+- counts: minutes with something going on in the panel, messages sent, answers finished and how long
+  Codex worked on them in total, conversations, the longest one in minutes, forks, edits that landed and
+  the lines they added and removed, how many distinct files were edited (a number, not which files),
+  permission questions and how many were refused, plans approved, task lists finished, attachments and
+  quotes, messages sent from a paired phone and how many things were done from it in all (messages,
+  answers, approvals, stops, as one number), how often a paired phone started following the work, how
+  often the five-hour limit ran out, and the most MCP servers connected and plugins installed at once;
+- how long each stretch of work lasted, in minutes. A stretch ends at a gap of more than half an hour.
+  When a stretch began is not sent;
+- which of the panel's features were used and how many times: the voice button, a fork, the history
+  screen, a scenario run, trusting a project, a setting changed and so on, named from a fixed list the
+  plugin defines;
+- the tools Codex used, under the names the panel shows them by (Read, Edit, Bash and so on), with every
+  MCP tool counted as one "MCP";
+- the models that answered, by their name in Codex's own list, such as `gpt-5.6-sol` or `o3`. A model you
+  added to the panel by hand travels as "Other", and so does any name that does not look like one of
+  OpenAI's;
+- the panel's built-in commands used, such as `/compact`, `/review` or `/init`, with your own prompts
+  (`/prompts:...`) and skills counted as "custom".
+
+And once per report:
+
+- the versions of the plugin, your IDE and the Codex CLI, your operating system's family and processor
+  architecture, and the panel's language;
+- how the panel is set up: whether remote access and voice input are on, the input field's layout, the
+  send key, the theme, the mode new chats start in, whether tabs come back on start, how many Codex
+  accounts and paired phones there are, and similar. These travel as the plugin's own words, as counts, or
+  as yes and no. Where a setting holds something you typed, such as a custom model's name or your own
+  improve-prompt text, only whether it is set is sent;
+- a random identifier, made on your machine when you press Allow. It is derived from nothing: not your
+  hardware, not your account, not your name. Its only job is to tell one machine's days from another's.
+  All JetBrains IDEs on one machine share it, as they share the answer to the question. It is this
+  plugin's own: if you also use Amazing Claude Code GUI, that plugin asks its own question and makes its
+  own identifier, and nothing links the two.
+
+**What is never sent**: your messages or the agent's answers, code, file names, paths, project names,
+the names of your own prompts, skills, MCP servers or the models you added, your Codex or ChatGPT
+account, your email address or API key, token counts, costs, and the time of day you work.
+
+The counts come from the statistics the plugin already keeps on your machine for its Statistics tab.
+That file stays where it is; the report picks numbers out of it by name and copies nothing else.
+
+**Where it goes.** To `usage.mzpizote.com`, a service run by the plugin's author on the same server as
+the relay (OVH, Virginia, United States). It is the same service that receives the statistics of Amazing
+Claude Code GUI, the plugin this one is forked from. Each report says which of the two plugins sent it,
+and the service keeps their figures apart: every stored row is marked with its plugin, the two are never
+added together, and a deletion asked for by one plugin cannot touch the other's. It stores the counts
+under the random identifier and nothing else. It does not store your IP address: the address is
+used only in memory, to limit how many reports one address can send in an hour, and the service's log
+shows its first few characters. Reports are kept for two years and then deleted automatically. The
+author reads them as totals across all machines, on a page behind a password.
+
+**Turning it off.** Switching it off stops the reports at once, in every JetBrains IDE on the machine,
+and asks the service to delete everything this plugin sent under your identifier. If the service cannot
+be reached at that moment, the plugin keeps asking until it confirms, even with the reports off. The
+identifier is forgotten too: if you allow the reports again later, a new one is made, and nothing links
+it to the old one.
+
 ## Several Codex accounts
 
 You can add more than one Codex account - a ChatGPT sign-in or an API key - and switch between them
@@ -221,6 +298,8 @@ cannot add an account or sign in: that happens in a terminal and a browser on yo
 - You can run your own relay.
 - Voice input is off by default, needs a key of your own, and records only while you are dictating.
   Removing the key ("Forget this key") takes it out of the keychain.
+- Usage statistics are sent only after you press Allow, and you can read the whole report first. Turning
+  them off in Settings stops them and deletes what this plugin already sent.
 
 ## Contact
 

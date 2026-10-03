@@ -22,6 +22,8 @@ import { plan } from '../scenarios/rules'
  */
 
 let shelves: Scenario[] = []
+/** How many copies have been made, so each gets an identifier of its own (see scenarioDuplicate). */
+let copies = 0
 let runs: ScenarioRunSummary[] = []
 let records: Record<string, ScenarioRun> = {}
 /**
@@ -363,17 +365,33 @@ const finishedRun = (): ScenarioRun => {
           : step.cardId === 'c-review'
             ? `Review the changes on mzolotoi/checkout-totals and write every finding to ${findings}.`
             : `Fix the findings written in ${findings}. Leave the ones you disagree with.`,
+      // Written the way a card really answers - in markdown, with a heading, code spans and a list - since
+      // that is what the row has to make readable.
       summary:
         step.cardId === 'c-review'
-          ? 'Four findings, two of them in the totals: a discount larger than the subtotal, and rounding done twice.'
-          : 'Both totals findings are fixed and the tests pass.',
+          ? [
+              '**4. The report**',
+              '',
+              'Verdict: the branch is **not ready**. Four findings, two of them in `checkout/totals.ts`:',
+              '',
+              '- a discount larger than the subtotal makes the total negative;',
+              '- rounding is done twice, once in `subtotal()` and again in `total()`;',
+              '- the empty basket is never tested.',
+            ].join('\n')
+          : 'Both totals findings are fixed in `checkout/totals.ts` and **the tests pass**.',
       verdictReason:
-        step.cardId === 'c-review' ? 'The findings name a file and a line each.' : 'Everything it was handed is answered.',
+        step.cardId === 'c-review'
+          ? `Every finding names a file and a line, and all of them are written to \`${findings}\`.`
+          : 'Everything it was handed is answered.',
       handoff: step.cardId === 'c-review' ? findings : '',
     }
   })
   run.notes = [
-    { at: started + 60_000, stepKey: '', text: 'Read the briefing. This is a review of one branch, and nothing is to be pushed.' },
+    {
+      at: started + 60_000,
+      stepKey: '',
+      text: 'Read the briefing. This is a review of `mzolotoi/checkout-totals` at `fc649af`, and **nothing is to be pushed**.',
+    },
     { at: started + 9 * 60 * 1000, stepKey: 's-round:c-review:1', text: `Pointing the reviewer at ${findings}, which is empty so far.` },
     {
       at: started + 16 * 60 * 1000,
@@ -458,11 +476,18 @@ const sendQueue = (): void => send({ type: 'scenarioQueue', queue })
  * The rule is the IDE's, written small (see QueueRules.step): nothing starts while the turn before it is
  * going; a turn that wants a clean ending and does not get one stops the queue; a turn whose time has come
  * while a run started from the shelf is going stands behind that run instead of starting beside it; and a
- * stop is lifted by a person and by nothing else. Every third turn raised here "fails" instead, because a
- * queue that never stops shows none of the band that exists for the stop.
+ * stop is lifted by a person, or by the run it was about being picked up and going again. Every third turn
+ * raised here "fails" instead, because a queue that never stops shows none of the band that exists for the
+ * stop.
  */
 const stepQueue = (): void => {
-  if (queue.held) return
+  if (queue.held) {
+    // A stop is a verdict about an ENDING, and picking that run up takes the ending back: it is going
+    // again, so the stop goes with it and the queue stands behind it once more (see QueueRules.step).
+    if (!(queue.runId && live.includes(queue.runId))) return
+    queue = { ...queue, held: false, heldWhy: '', heldName: '' }
+    return sendQueue()
+  }
   if (queue.runId && live.includes(queue.runId)) return
 
   const next = queue.waiting[0]
@@ -535,13 +560,8 @@ const stepQueue = (): void => {
  */
 const sendLive = (): void => {
   const going = live.map((id) => records[id]).filter((run): run is ScenarioRun => run !== undefined)
-  // And the newest run that is over, exactly as the IDE sends it (see ScenarioDesk.sendLive): it is what
-  // a project's card on a phone says when nothing is going, and the shelves never reach that screen.
-  const over = Object.values(records)
-    .filter((run) => !live.includes(run.id))
-    .sort((first, second) => second.startedAt - first.startedAt)[0]
 
-  send({ type: 'scenarioLive', runs: going.map(summarise), last: over ? summarise(over) : undefined })
+  send({ type: 'scenarioLive', runs: going.map(summarise) })
 }
 
 /**
@@ -676,7 +696,17 @@ const walk = (id: string, from = 0, startIn: 'run' | 'judge' = 'run'): void => {
                 conversationId: `conv-${one.key}`,
                 slots: one.cardId === 'c-diff' ? ({} as Record<string, string>) : { findings: '/tmp/acc/findings.md' },
                 prompt: `${one.title}: what the card's own session was told, with the inputs written in.`,
-                said: 'Reading the files it was pointed at…',
+                said: [
+                  '**Context.**',
+                  '',
+                  '**Finding 1:** the history of nights by the change key.',
+                  '',
+                  'Reading the migration.',
+                  '',
+                  'Writing the red tests for finding 1.',
+                  '',
+                  'Both tests are red, as expected. Fixing `migration.ts` and the schema.',
+                ].join('\n'),
               }
             : one,
         ),
@@ -903,7 +933,31 @@ export const answerScenarios = (message: WebviewMessage): void => {
   if (message.type === 'scenarioDuplicate') {
     const source = shelves.find((one) => one.id === message.id)
     if (!source) return
-    shelves = [...shelves, { ...structuredClone(source), id: `${source.id}-copy`, name: `${source.name} copy` }]
+    // A fresh identifier each time, as the IDE gives one: copying twice under one name made two rows that
+    // answered to the same key, and a drag picked up both.
+    const id = `${source.id}-copy-${(copies += 1)}`
+    shelves = [...shelves, { ...structuredClone(source), id, name: `${source.name} copy` }]
+    return sendList()
+  }
+
+  /*
+   * A row dragged to a new place, as ScenarioStore.place does it: onto the other shelf only when that shelf
+   * has nothing under the same identifier, and then before the row it was dropped above, or last.
+   */
+  if (message.type === 'scenarioPlace') {
+    const moving = shelves.find((one) => one.id === message.id && one.scope === message.from)
+    if (!moving) return send({ type: 'scenarioOutcome', ok: false, code: 'scenarioGone' })
+    if (message.from !== message.to && shelves.some((one) => one.id === message.id && one.scope === message.to)) {
+      send({ type: 'scenarioOutcome', ok: false, code: 'scenarioOnBothShelves' })
+      return sendList()
+    }
+
+    const rest = shelves.filter((one) => one !== moving)
+    const before = rest.findIndex((one) => one.id === message.before && one.scope === message.to)
+    const last = rest.map((one) => one.scope).lastIndexOf(message.to)
+    const at = before >= 0 ? before : last >= 0 ? last + 1 : rest.length
+    rest.splice(at, 0, { ...moving, scope: message.to })
+    shelves = rest
     return sendList()
   }
 
@@ -1127,6 +1181,9 @@ export const answerScenarios = (message: WebviewMessage): void => {
     })
     walk(message.runId, from, cut >= 0 ? 'judge' : 'run')
     sendList()
+    // A queue that stopped on THIS run has just had the ending it stopped on taken back, exactly as the
+    // IDE works it out (see ScenarioDesk.carryOn).
+    stepQueue()
     return
   }
 

@@ -5,6 +5,7 @@ import com.intellij.openapi.util.Disposer
 import com.intellij.util.concurrency.AppExecutorUtil
 import io.github.crmapache.amazingcodex.codex.accounts.CodexAccounts
 import io.github.crmapache.amazingcodex.feedback.DiagnosticsLog
+import io.github.crmapache.amazingcodex.scenario.ScenarioConversations
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
@@ -35,10 +36,19 @@ internal class CodexSessions(
     private val onTitle: (sessionId: String, title: String) -> Unit = { _, _ -> },
     /** Whether this conversation still needs a name of its own - see CodexSession.titleWanted. */
     private val titleWanted: (sessionId: String) -> Boolean = { true },
+    /** The name the person gave the tab by hand, if any - see CodexSession.ownTitle. */
+    private val ownTitle: (sessionId: String) -> String? = { null },
+    /** The CLI renamed the conversation itself by `/rename` - see CodexSession.onRenamed. */
+    private val onRenamed: (sessionId: String, title: String) -> Unit = { _, _ -> },
     /** The turn ended - the panel should clear its work; see CodexSession.onTurnEnded. */
     private val onTurnEnded: (sessionId: String) -> Unit = {},
     /** The turn started on its own, without a send from the panel; see CodexSession.onTurnStarted. */
     private val onTurnStarted: (sessionId: String) -> Unit = {},
+    /**
+     * The repository's settings outrank the account a conversation came up on, and these are the names
+     * doing it - see CodexSession.onAccountOutranked.
+     */
+    private val onAccountOutranked: (sessionId: String, names: List<String>) -> Unit = { _, _ -> },
     /**
      * A conversation has just been born, and this is the effort it was born with.
      *
@@ -142,7 +152,13 @@ internal class CodexSessions(
         Disposer.register(parentDisposable, this)
     }
 
-    fun prompt(sessionId: String, text: String, images: List<ImageAttachment> = emptyList()) {
+    fun prompt(
+        sessionId: String,
+        text: String,
+        images: List<ImageAttachment> = emptyList(),
+        /** What the editor showed, for the agent alone - see CodexSession.userMessage. */
+        context: String? = null,
+    ) {
         // Before anything is said into it: a move this tab was asked to make and has not made yet
         // happens now, so the words below are billed to the account the person chose (see
         // [applyPendingAccount]).
@@ -150,7 +166,7 @@ internal class CodexSessions(
         // And a restart it was asked for and has not made either - so that what is said below goes into
         // a process holding the servers as they stand now (see [applyPendingRestart]).
         applyPendingRestart(sessionId)
-        session(sessionId).sendPrompt(releasedRole(sessionId, text), images)
+        session(sessionId).sendPrompt(releasedRole(sessionId, text), images, context)
     }
 
     /**
@@ -171,8 +187,21 @@ internal class CodexSessions(
      * get. What the panel shows is their own message, because the echo has already gone out by now (see
      * CodexSessionHub.prompt) - the frame belongs to the agent, not to the screen.
      */
-    private fun releasedRole(sessionId: String, text: String): String =
-        if (roleStillHeld.remove(sessionId)) "${CodexLaunch.AFTER_SCENARIO_HEAD}\n\n$text" else text
+    private fun releasedRole(sessionId: String, text: String): String {
+        if (!roleStillHeld.remove(sessionId)) return text
+
+        /*
+         * And the conversation goes back into the history with it. It was left out of that list as a
+         * conversation of the plugin's rather than of anybody's (see ScenarioConversations), which it
+         * was until this moment: somebody has now opened it in a tab of their own and written into it,
+         * and what they write next is theirs. Hidden still, their own work would be reachable only
+         * through the run it began as - and going on with something the run never did is the whole
+         * reason that door is there.
+         */
+        sessions[sessionId]?.conversationId?.let { ScenarioConversations(workingDirectory).release(it) }
+
+        return "${CodexLaunch.AFTER_SCENARIO_HEAD}\n\n$text"
+    }
 
     /**
      * A branch off another conversation: the branch gets its whole transcript and an identifier of its
@@ -257,6 +286,11 @@ internal class CodexSessions(
      * what pressing Select says. Nothing written is lost by it: the CLI closes the interrupted call and
      * puts a "[Request interrupted by user]" line into the transcript, so the process raised on the new
      * account resumes onto everything that was said.
+     *
+     * Unless the account chosen is the one the tab is already on under another row - the CLI's own
+     * sign-in holding the very account of an added row, which is what a merge leaves behind (see
+     * CodexAccounts.sameAccount). Nobody is billed differently by that, so the turn is let finish and
+     * the process is replaced after it, the way a renewal waits (see [relaunchOn]).
      *
      * A tab with no process at all is left alone: it has nothing to move, and whenever it does start it
      * reads the register itself - which by then says exactly this.
@@ -397,7 +431,8 @@ internal class CodexSessions(
         told: Boolean = false,
     ) {
         val session = sessions[sessionId] ?: return
-        val accountId = CodexAccounts.getInstance().currentId
+        val accounts = CodexAccounts.getInstance()
+        val accountId = accounts.currentId
 
         if (session.accountId == accountId && !renew) {
             // Already where it should be, so any move still outstanding for it is void - and the deadline
@@ -417,7 +452,13 @@ internal class CodexSessions(
             // subscription on both sides of this - so a turn stopped mid-sentence would cost the person
             // an answer to buy nothing at all. It runs on the token the process is already holding, and
             // the new drawer is waiting for the process after it (see [relaunchOn]).
-            if (session.accountId == accountId) {
+            //
+            // And "the account" is the subscription, not the row. A merge moves a tab off an added row onto
+            // the CLI's own sign-in holding that very account (see AccountDesk.mergeTwin); the ids differ,
+            // the bill does not, and a turn stopped for it - "Stopped to switch account" under work nobody
+            // had touched - bought nothing either. It waits with the renewals: the row it is leaving is
+            // gone, so the process after the turn has to come up over the drawer that stays.
+            if (accounts.sameAccount(session.accountId, accountId)) {
                 pendingRenewals.add(sessionId)
                 return
             }
@@ -460,10 +501,10 @@ internal class CodexSessions(
         val forkFrom = if (conversationId == null) session.forkFrom else null
 
         val carried = SessionLaunch(
-            // Clamped to what the account it is moving ONTO can actually run - see [modelFor]. Carried
+            // Clamped to what the account it is moving ONTO can actually run - see StartingChoice.clamp. Carried
             // whole, a tab left an account whose plan had the model and arrived at one whose plan does
             // not, looking perfectly well and dying on the next message.
-            model = modelFor(accountId, session.model),
+            model = StartingChoice.clamp(accountId, session.model),
             effort = session.effort,
             mode = session.permissionMode.orEmpty(),
         )
@@ -518,56 +559,6 @@ internal class CodexSessions(
     }
 
     /**
-     * The model to start on, given the account that will pay - the carried one when it may be run there,
-     * and that account's own otherwise.
-     *
-     * The CLI does not refuse a model an account has no access to at launch: the process comes up, says
-     * the model in its init event, replays the transcript and looks perfectly well, and then dies on the
-     * person's first message with an HTTP 404 (see CodexAccounts.canRun). Nothing on the screen names
-     * the account, and nothing puts it right by itself - so it is put right here, before the process is
-     * raised, and the panel is told the model it actually got.
-     *
-     * Only a definite NO replaces anything. Unknown leaves the model alone, and that way round is not a
-     * coin toss: an unasked catalogue is the ordinary state of the first seconds of a project, and
-     * treating it as a refusal would throw away the model of every conversation opened from the history -
-     * including the one this rule exists to protect, an old chat on a million-token model. The catalogue
-     * is asked for when a conversation is born on an account and again when the accounts screen opens
-     * (see AccountDesk.round), which is the screen a person has to visit to switch at all.
-     */
-    private fun modelFor(accountId: String, model: String): String {
-        val accounts = CodexAccounts.getInstance()
-        if (accounts.canRun(accountId, model) != false) return model
-
-        // The same model at its ordinary window comes before any other model. The window mark is the one
-        // thing the catalogue is strict about (see ModelNames.holds): an account served plain Opus and not
-        // the large window used to be handed `opus[1m]` all the same, and the process died on the first
-        // message - and since a resumed conversation now carries the mark its transcript was held on (see
-        // CodexHistory.modelIdentity), every resume of such a conversation under such an account would go
-        // the same way. Without the mark it is what it was before the mark was read at all: the
-        // conversation, on its own model, in the window this account has.
-        val unmarked = ModelNames.unmarked(model)
-        if (unmarked != model && accounts.canRun(accountId, unmarked) != false) return unmarked
-
-        val own = accounts.account(accountId)?.model.orEmpty()
-        if (own.isNotEmpty() && accounts.canRun(accountId, own) != false) return own
-
-        // The machine's default gets the same test as the other two, and it is the case that matters
-        // most: every applied pick writes that default, so choosing Opus on a Max account is exactly what
-        // leaves it standing when the move lands on a Pro one. Unchecked, this branch handed back the
-        // very model the first branch had just refused - and an account nobody has chosen a model for
-        // (the ordinary sign-in among them, which has no record at all) reaches it every time.
-        val preferred = CodexPreferences.model
-        if (accounts.canRun(accountId, preferred) != false) return preferred
-
-        // Everything this tab could have asked for is refused, so what is left is the account's own
-        // default - NAMED rather than left out. Leaving the flag out is not the same thing here: a move
-        // resumes the transcript, and the CLI resumed without `--model` carries on at the model written
-        // in it, which is very likely the one just refused. Naming it is only possible when the account
-        // has answered with a catalogue at all; without one there is nothing honest left to say.
-        return DEFAULT_MODEL.takeIf { accounts.canRun(accountId, it) == true }.orEmpty()
-    }
-
-    /**
      * Which account this conversation's process runs on.
      *
      * A tab with no process yet answers with the account it WOULD start on rather than with the empty
@@ -605,8 +596,8 @@ internal class CodexSessions(
         // Clamped to what the account paying for it can run, and the answer is what was ACTUALLY adopted
         // so the caller tells the panel the truth. A transcript's model is a fact about the account it
         // used to run on, and since everything now runs on the account chosen today, that is regularly a
-        // different one - a model it may have no access to at all (see [modelFor]).
-        val adopted = modelFor(session.accountId, model)
+        // different one - a model it may have no access to at all (see StartingChoice.clamp).
+        val adopted = StartingChoice.clamp(session.accountId, model)
 
         session.adoptModel(adopted)
         return adopted
@@ -696,6 +687,30 @@ internal class CodexSessions(
 
     /** A conversation that definitely has a process: we start one and wake it if need be. */
     private fun awake(sessionId: String): CodexSession = session(sessionId).also { it.wake() }
+
+    /**
+     * A question beside the conversation - see [CodexSession.askAside].
+     *
+     * The conversation is brought up for it, as for MCP: the answer comes out of the context the process
+     * holds, and a sleeping one holds none. Woken from the history, it answers from the transcript it
+     * loads at start (checked live on 2.1.280: the code word from a resumed conversation came back with
+     * no turn in between).
+     */
+    fun askAside(
+        sessionId: String,
+        id: String,
+        question: String,
+        history: List<SideQuestion.Exchange>,
+        onProgress: (SideQuestion.Progress) -> Unit,
+        onEnd: (SideQuestion.Answer) -> Unit,
+    ) {
+        awake(sessionId).askAside(id, question, history, onProgress, onEnd)
+    }
+
+    /** Nothing to cancel in a conversation that is gone: its questions went with it, already answered as such. */
+    fun cancelAside(sessionId: String, id: String) {
+        sessions[sessionId]?.cancelAside(id)
+    }
 
     /** Interrupting a turn: the conversation stays alive, unlike closing the session. */
     fun interrupt(sessionId: String, onTimeout: () -> Unit = {}) {
@@ -798,6 +813,25 @@ internal class CodexSessions(
     }
 
     /**
+     * Every live conversation of this project, raised again over its own transcript.
+     *
+     * For a change that a process can only read at launch and that belongs to the project rather than to
+     * one tab: which of Codex's settings layers are loaded (see SettingSources). Left to the next
+     * launch, the choice would look like a setting that does nothing - the tabs already open are exactly
+     * the ones somebody has just been watching talk to the wrong gateway.
+     *
+     * Through [restart], so a running turn is not cut short: the layers are read when a process starts,
+     * so the turn in flight could not have used the new choice however fast we were.
+     *
+     * Only the live ones, as in [relaunchOn]: a tab with no process reads the setting when it raises one,
+     * and touching it here would cost every client a birth announcement for a conversation that has not
+     * changed.
+     */
+    fun restartAll() {
+        sessions.filterValues { it.isRunning }.keys.toList().forEach { restart(it) }
+    }
+
+    /**
      * The restart a running turn was holding - see [restart].
      *
      * Applied at the end of a turn and wherever a conversation is about to live, exactly as a waiting
@@ -881,6 +915,25 @@ internal class CodexSessions(
     fun conversationIdOf(sessionId: String): String? = sessions[sessionId]?.conversationId
 
     /**
+     * The conversation's id only once it has something on disk to come back to (see
+     * CodexSession.hasHistory) - what a tab is remembered by across a restart.
+     */
+    fun savedConversationIdOf(sessionId: String, otherwise: String?): String? {
+        val session = sessions[sessionId] ?: return otherwise
+        return if (session.hasHistory) session.conversationId else null
+    }
+
+    /**
+     * The name the person gave the tab, into the conversation behind it - see CodexSession.rename.
+     *
+     * Without creating a conversation, unlike [session]: a tab nobody has written into has no transcript
+     * to name, and its conversation takes the name with the first message (see CodexSession.ownTitle).
+     */
+    fun rename(sessionId: String, title: String) {
+        sessions[sessionId]?.rename(title)
+    }
+
+    /**
      * The model and the effort. The choice is remembered: new conversations will start with it.
      *
      * The conversation is started for this even if it does not exist yet - as with the permission mode:
@@ -912,6 +965,9 @@ internal class CodexSessions(
             if (remember && change.applied) {
                 CodexPreferences.model = change.model
                 CodexAccounts.getInstance().rememberChoice(accountOf(sessionId), model = change.model)
+                // Both are inputs to what the next tab starts on, and every window draws that answer
+                // over its untouched tabs (see StartingChoice).
+                CodexSessionHub.announceNewTabDefaults()
             }
             onApplied(change)
         }
@@ -927,6 +983,7 @@ internal class CodexSessions(
         if (remember) {
             CodexPreferences.effort = effort
             CodexAccounts.getInstance().rememberChoice(accountOf(sessionId), effort = effort)
+            CodexSessionHub.announceNewTabDefaults()
         }
         session(sessionId).setEffort(effort)
     }
@@ -1067,30 +1124,13 @@ internal class CodexSessions(
          */
         val account = accounts.currentId
 
-        // Per account rather than machine-wide, and that is not symmetry for its own sake. Every
-        // successful pick writes the machine's default, so a model chosen on a Max account decided what
-        // a tab on a Pro account launched with - and a plan that has no Opus cannot run one. An account
-        // nobody has chosen for falls back to the default.
-        val remembered = accounts.account(account)
-
-        // The pin stands above the account's memory and below the request, and that order is the whole
-        // of the setting: "start every new tab on this" is a decision somebody made in words, while what
-        // the account was last left on is a decision nothing was ever said about. Empty - the default -
-        // and the chain is exactly the one it has always been (see CodexPreferences.newTabEffort).
-        val effort = launch.effort
-            .ifEmpty { CodexPreferences.newTabEffort }
-            .ifEmpty { remembered?.effort.orEmpty() }
-            .ifEmpty { CodexPreferences.effort }
-        // A new conversation starts with whatever is chosen now: re-picking the model in every tab is
-        // work over nothing. A conversation opened from the history is the exception, and it is told
-        // its own model a moment later, once its transcript has been read (see adoptModel).
-        val model = modelFor(
-            account,
-            launch.model
-                .ifEmpty { CodexPreferences.newTabModel }
-                .ifEmpty { remembered?.model.orEmpty() }
-                .ifEmpty { CodexPreferences.model },
-        )
+        // By the one chain everything that shows this answer reads too - the chip over an empty tab, a
+        // phone's new chat, a scenario's head (see StartingChoice, and there the order and why). A new
+        // conversation starts with whatever is chosen now: re-picking the model in every tab is work over
+        // nothing. A conversation opened from the history is the exception, and it is told its own model a
+        // moment later, once its transcript has been read (see adoptModel).
+        val effort = StartingChoice.effort(account, requested = launch.effort)
+        val model = StartingChoice.model(account, requested = launch.model)
 
         onBorn(sessionId, effort, model, account)
 
@@ -1120,6 +1160,8 @@ internal class CodexSessions(
             onPermissionWithdrawn = { requestId -> onPermissionWithdrawn(sessionId, requestId) },
             onTitle = { title -> onTitle(sessionId, title) },
             titleWanted = { titleWanted(sessionId) },
+            ownTitle = { ownTitle(sessionId) },
+            onRenamed = { title -> onRenamed(sessionId, title) },
             onTurnEnded = { if (current()) onTurnEnded(sessionId) },
             onTurnStarted = { if (current()) onTurnStarted(sessionId) },
             onContext = { used, max -> if (current()) onContext(sessionId, used, max) },
@@ -1158,13 +1200,5 @@ internal class CodexSessions(
          */
         fun stillOwed(running: Boolean, startedAt: Long, waitedFor: Long): Boolean =
             running && startedAt == waitedFor
-
-        /**
-         * The CLI's own name for "whatever this account's default is" - the one model every plan can run.
-         *
-         * Its own word rather than ours: it is what the CLI lists in the model catalogue and what the
-         * panel's own menu sends when a person picks the first entry (see DEFAULT_MODEL in catalog.ts).
-         */
-        private const val DEFAULT_MODEL = "default"
     }
 }

@@ -26,15 +26,20 @@ import io.github.crmapache.amazingcodex.codex.CodexPreferences
 import io.github.crmapache.amazingcodex.codex.CodexSessionHub
 import io.github.crmapache.amazingcodex.codex.SessionClient
 import io.github.crmapache.amazingcodex.codex.accounts.CodexAccounts
+import io.github.crmapache.amazingcodex.editor.EditorContext
 import io.github.crmapache.amazingcodex.editor.OpenInEditor
 import io.github.crmapache.amazingcodex.editor.SelectionReference
 import io.github.crmapache.amazingcodex.feedback.DiagnosticsLog
 import io.github.crmapache.amazingcodex.feedback.FeedbackDesk
 import io.github.crmapache.amazingcodex.sound.AlertSounds
+import io.github.crmapache.amazingcodex.usage.UsageFeatures
+import io.github.crmapache.amazingcodex.usage.UsageReporter
 import io.github.crmapache.amazingcodex.voice.VoiceDesk
+import io.github.crmapache.amazingcodex.webview.DraftImages
 import io.github.crmapache.amazingcodex.webview.FilePicker
 import io.github.crmapache.amazingcodex.webview.IdeTypography
 import io.github.crmapache.amazingcodex.webview.ImageDownloads
+import io.github.crmapache.amazingcodex.webview.PanelTheme
 import io.github.crmapache.amazingcodex.webview.PastedFiles
 import io.github.crmapache.amazingcodex.webview.WebviewClipboard
 import io.github.crmapache.amazingcodex.webview.WebviewFileDrop
@@ -46,7 +51,9 @@ import javax.swing.BoxLayout
 import javax.swing.JButton
 import javax.swing.JComponent
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -56,6 +63,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonObject
 
 /**
  * The panel's contents: the interface in a browser, and the window's own half of the conversation with
@@ -88,6 +96,52 @@ internal class CodexPanel(
 
     /** The same, for the voice input settings - they are the machine's too (see VoiceDesk). */
     fun voiceSettingsChanged() = voice.sendConfig()
+
+    /**
+     * The same, for the theme and the text size. Nothing about them goes through the hub at all - they are
+     * this window's zoom and this window's page - so every window is told directly.
+     */
+    fun appearanceChanged() {
+        sendTheme()
+        sendTypography()
+    }
+
+    /** The same, for whether a message carries what the editor shows (see EditorContext). */
+    fun shareEditorChanged() {
+        webview?.send(
+            buildJsonObject {
+                put("type", "shareEditor")
+                put("on", CodexPreferences.shareEditor)
+            }.toString(),
+        )
+    }
+
+    /** The same, for whether the tabs come back after a restart (see TabMemory). */
+    fun restoreTabsChanged() {
+        webview?.send(
+            buildJsonObject {
+                put("type", "restoreTabs")
+                put("on", CodexPreferences.restoreTabs)
+            }.toString(),
+        )
+    }
+
+    /**
+     * The same, for the anonymous usage report: the answer to the question and when a report last went.
+     * Read off the machine's file each time rather than held here - another IDE may have answered.
+     */
+    fun usageChanged() {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val state = UsageReporter.getInstance().snapshot()
+            webview?.send(
+                buildJsonObject {
+                    put("type", "usageStats")
+                    put("consent", state.consent.wire)
+                    put("lastSent", state.lastSent)
+                }.toString(),
+            )
+        }
+    }
 
     /**
      * Whether the panel is still alive. The platform answers that same question only in a deprecated
@@ -157,6 +211,27 @@ internal class CodexPanel(
         watchDockAnchor()
         watchTypography()
         watchIdeActivation()
+        watchEditor()
+    }
+
+    /**
+     * The file in front of the person and the lines selected in it, for the chip in the field (see
+     * EditorContext). Only this window hears it, not the hub: it is about the editor beside this panel, and a
+     * phone across the city has nothing beside it - which is also why a phone's message never carries it
+     * (see CodexSessionHub.prompt).
+     */
+    private fun watchEditor() {
+        if (webview == null) return
+        EditorContext.getInstance(project).watch(parentDisposable, ::sendEditorContext)
+    }
+
+    private fun sendEditorContext(snapshot: EditorContext.Snapshot? = EditorContext.getInstance(project).now()) {
+        webview?.send(
+            buildJsonObject {
+                put("type", "editorContext")
+                if (snapshot != null) put("context", EditorContext.descriptor(snapshot))
+            }.toString(),
+        )
     }
 
     /** Whether the interface has said a single word to us - see [watchForSilence]. */
@@ -173,7 +248,7 @@ internal class CodexPanel(
     private var frame: JBPanel<JBPanel<*>>? = null
 
     private fun buildWebview(parentDisposable: Disposable): JComponent {
-        val host = WebviewHost(parentDisposable) { message -> handleWebviewMessage(message) }
+        val host = WebviewHost(parentDisposable, PanelTheme.current()) { message -> handleWebviewMessage(message) }
         webview = host
 
         // Dragging files into the panel: inside the IDE that goes past the embedded browser, so we take
@@ -279,6 +354,11 @@ internal class CodexPanel(
         /** A figure from the panel, or zero for "not said" - a line, a column (see OpenInEditor.Place). */
         val whole = { name: String -> payload[name]?.jsonPrimitive?.intOrNull ?: 0 }
 
+        // Which feature, if any, this press stands for - counted here, at the one door every message from
+        // this window comes through, rather than in each branch below (see UsageFeatures). A phone's
+        // messages are counted at theirs (see SessionCommands).
+        UsageFeatures.ofMessage(field("type"), payload)?.let { hub.stats.noteFeature(it) }
+
         when (field("type")) {
             "ready" -> {
                 thisLogger().info("Webview reported ready")
@@ -292,12 +372,19 @@ internal class CodexPanel(
                 // Whatever the page already has: after a reload of the page alone (the conversations
                 // outlive it now) only the tail is worth sending.
                 hub.attach(client.id, seenSequences(payload))
+                sendDrafts()
                 sendDockAnchor()
                 sendTypography()
+                sendTheme()
+                sendEditorContext()
                 // The menu's row carries the account in force, so the list has to be there before anybody
                 // opens the screen behind it - otherwise that row sits blank next to a full one for
                 // remote access, and the screen it opens jumps from a skeleton to its content mid-slide.
                 hub.accounts.sendList()
+                // Whether the usage question has been answered - the card that asks it is drawn off this.
+                usageChanged()
+                // The panel opening is somebody using the plugin: a report that is due may go now.
+                UsageReporter.getInstance().nudge()
             }
 
             "pick" -> pickAttachment()
@@ -315,6 +402,22 @@ internal class CodexPanel(
             // Which key sends a message out of the input field - "enter" or "modEnter" (see sendKey.ts).
             "setSendKey" -> CodexPreferences.sendKey = field("key")
 
+            // Codex's own settings - the screen `/config` opens (see CodexConfigDesk). Off the
+            // interface thread: every answer is a question to the shared Codex process.
+            "askCodexConfig" -> ApplicationManager.getApplication().executeOnPooledThread {
+                hub.codexConfig.send()
+            }
+
+            "setCodexConfig" -> ApplicationManager.getApplication().executeOnPooledThread {
+                hub.codexConfig.change(field("key"), field("value"))
+            }
+
+            // Trusting the project, or not - the same record Codex's terminal writes (see CodexConfigDesk.trust).
+            "setProjectTrust" -> {
+                val trusted = payload["trusted"]?.jsonPrimitive?.booleanOrNull ?: return
+                ApplicationManager.getApplication().executeOnPooledThread { hub.codexConfig.trust(trusted) }
+            }
+
             // The no-stress colour mode. Told to every hub rather than only to this panel: the setting
             // is the machine's, so a second window must not go on showing the ladder - and a project
             // reached from a phone has no tool window at all, which is exactly the screen somebody
@@ -325,6 +428,16 @@ internal class CodexPanel(
                 CodexPreferences.gaugeVivid =
                     payload["vivid"]?.jsonPrimitive?.intOrNull ?: CodexPreferences.GAUGE_VIVID_FULL
                 CodexSessionHub.everyHub { it.catalog.sendCalmColors() }
+            }
+
+            // Which indicators around the input field are switched off (see indicators.ts). Told to every
+            // hub, like the colours above: the setting is the machine's, and each hub keeps the last word
+            // for a window that joins later - a hub without a window today may be given one tomorrow.
+            "setHiddenIndicators" -> {
+                CodexPreferences.hiddenIndicators = (payload["hidden"] as? JsonArray).orEmpty()
+                    .mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+                    .toSet()
+                CodexSessionHub.everyHub { it.catalog.sendIndicators() }
             }
 
             /*
@@ -351,13 +464,13 @@ internal class CodexPanel(
                 val gone = dropped - CodexPreferences.customModels.toSet()
                 if (CodexPreferences.model in gone) CodexPreferences.model = ""
                 // And the pin behind "New chats", which is the STRONGEST of the three: it beats both the
-                // account's memory and the pick above (see CodexSessions.newSession). Left standing, it
+                // account's memory and the pick above (see StartingChoice). Left standing, it
                 // would go on launching every new tab on a name that is in no menu any more.
                 if (CodexPreferences.newTabModel in gone) CodexPreferences.newTabModel = ""
 
                 // And the same name wherever an account still holds it, because that record is the
                 // STRONGER of the two: a new tab launches on what the account was last left on and only
-                // then on the machine's default (see CodexSessions.newSession). Clearing one half left
+                // then on the machine's default (see StartingChoice). Clearing one half left
                 // the other standing, and nothing downstream catches it - the clamp knows a hand-added
                 // model by this very list, so a name just taken off it is in no catalogue at all and the
                 // check answers "unknown", which the launch reads as a yes.
@@ -365,7 +478,7 @@ internal class CodexPanel(
 
                 CodexSessionHub.everyHub {
                     it.catalog.sendCustomModels()
-                    it.catalog.sendNewTabDefaults()
+                    it.newTabDefaultsChanged()
                 }
             }
 
@@ -393,12 +506,48 @@ internal class CodexPanel(
                 CodexPanels.everyPanel { it.localeChanged() }
             }
 
+            // The theme and the text size: machine-wide, like the language above, and told to every
+            // window for the same reason - the one that made the change is not the only one on the screen.
+            "setTheme" -> {
+                CodexPreferences.theme = field("theme")
+                CodexPanels.everyPanel { it.appearanceChanged() }
+            }
+
+            "setTextSize" -> {
+                CodexPreferences.textSize = payload["size"]?.jsonPrimitive?.intOrNull ?: CodexPreferences.TEXT_SIZE_FOLLOW
+                CodexPanels.everyPanel { it.appearanceChanged() }
+            }
+
+            // What is being written in a tab's input field, and which tab is on screen - the two halves of
+            // the tabs coming back after a restart that only the panel knows (see TabMemory). At this door
+            // rather than among the conversation commands: a phone has a field and a screen of its own,
+            // and neither is the desk's.
+            "saveDraft" -> hub.saveDraft(field("sessionId"), payload["draft"] as? JsonObject)
+
+            "tabShown" -> hub.showTab(field("sessionId"))
+
+            // Whether a message carries what the editor shows (see EditorContext). Machine-wide, like the
+            // one below: every window's chip and screen follow it.
+            "setShareEditor" -> {
+                CodexPreferences.shareEditor = payload["on"]?.jsonPrimitive?.booleanOrNull != false
+                CodexPanels.everyPanel { it.shareEditorChanged() }
+            }
+
+            // Whether the tabs come back at all. Machine-wide: every project's memory is told, a switch
+            // off clears what each of them keeps on disk, and every window's screen shows the new answer.
+            "setRestoreTabs" -> {
+                CodexPreferences.restoreTabs = payload["on"]?.jsonPrimitive?.booleanOrNull != false
+                CodexSessionHub.everyHub { it.restoreTabsChanged() }
+                CodexPanels.everyPanel { it.restoreTabsChanged() }
+            }
+
             // The panel calls the person. It decides that itself (only there is it known what exactly
             // the turn is busy with), and the sound happens here - see AlertSounds.
             "sound" -> playAlert(
                 sound = field("sound"),
                 volume = payload["volume"]?.jsonPrimitive?.intOrNull ?: 100,
                 onlyIfAway = payload["onlyIfAway"]?.jsonPrimitive?.booleanOrNull == true,
+                sessionId = field("sessionId"),
             )
 
             "soundSettings" -> {
@@ -479,6 +628,30 @@ internal class CodexPanel(
             // Feedback. Handled here rather than by the conversation's commands on purpose: this is the
             // one place a remote client cannot reach (see FeedbackDesk), and these messages read files
             // off this machine and post them outwards.
+            /*
+             * The anonymous usage report: the answer to its question, and the report shown whole before it
+             * is allowed. Both belong to this window rather than to the conversations - a machine's answer
+             * is not a phone's to give, and neither message is in RemoteCommands' allowed list.
+             */
+            "setUsageStats" -> {
+                val granted = payload["granted"]?.jsonPrimitive?.booleanOrNull == true
+                // Off this thread: the answer is written to a file shared with the machine's other IDEs,
+                // under a lock one of them may be holding.
+                ApplicationManager.getApplication().executeOnPooledThread { UsageReporter.getInstance().setConsent(granted) }
+            }
+
+            "usageStatsPreview" -> ApplicationManager.getApplication().executeOnPooledThread {
+                val text = runCatching { UsageReporter.getInstance().preview() }
+                    .onFailure { thisLogger().warn("Could not build the usage report's preview", it) }
+                    .getOrDefault("")
+                webview?.send(
+                    buildJsonObject {
+                        put("type", "usageStatsReport")
+                        put("text", text)
+                    }.toString(),
+                )
+            }
+
             "feedbackOpen" -> feedback.opened()
 
             "feedbackReport" -> feedback.report(field("sessionId"))
@@ -596,6 +769,7 @@ internal class CodexPanel(
 
     /** A piece of a file from the editor: in the input field it becomes a reference, not text. */
     fun sendSelection(reference: SelectionReference) {
+        hub.stats.noteFeature("send_selection")
         webview?.send(
             buildJsonObject {
                 put("type", "selection")
@@ -740,8 +914,12 @@ internal class CodexPanel(
      *
      * We ask on the interface thread: the windows' state lives there, while the message arrives from the
      * embedded browser on its own.
+     *
+     * A sound that did play over the open tab is told back to the panel (`calledAway`): it means nobody was
+     * looking at that tab, which is the one case in which the tab on screen lights up in the strip as well -
+     * so that whoever comes back can see where the call came from.
      */
-    private fun playAlert(sound: String, volume: Int, onlyIfAway: Boolean) {
+    private fun playAlert(sound: String, volume: Int, onlyIfAway: Boolean, sessionId: String) {
         if (!onlyIfAway) {
             AlertSounds.play(sound, volume)
             return
@@ -757,6 +935,7 @@ internal class CodexPanel(
                 // and there is nobody left to call anyway.
                 if (!project.isDisposed && !alive.isDisposed && !isPanelWatched()) {
                     AlertSounds.play(sound, volume)
+                    if (sessionId.isNotEmpty()) calledAway(sound, sessionId)
                 }
             },
             ModalityState.any(),
@@ -774,6 +953,17 @@ internal class CodexPanel(
     private fun isPanelWatched(): Boolean = runCatching {
         toolWindow.isVisible && WindowManager.getInstance().getFrame(project)?.isActive == true
     }.getOrDefault(false)
+
+    /** Tell the panel the open tab called somebody who was away from it - see [playAlert]. */
+    private fun calledAway(sound: String, sessionId: String) {
+        webview?.send(
+            buildJsonObject {
+                put("type", "calledAway")
+                put("sessionId", sessionId)
+                put("sound", sound)
+            }.toString(),
+        )
+    }
 
     // --- The window's own state -------------------------------------------------------
 
@@ -811,15 +1001,22 @@ internal class CodexPanel(
     }
 
     /**
-     * The panel does not choose its fonts: the IDE sets them, and they change while it runs - a person
-     * edits the console font size or switches the theme and expects the panel to follow, like the
-     * terminal beside it. The colour scheme carries the console font, the look-and-feel change the
-     * interface one, so we listen to both events.
+     * The panel's fonts and theme follow the IDE, which changes them while it runs - a person edits the
+     * console font size or switches the theme and expects the panel to follow, like the terminal beside
+     * it. The colour scheme carries the console font, the look-and-feel change the interface one and the
+     * brightness, so we listen to both events. What the panel's own settings pin (a theme, a size) is
+     * applied on top of the IDE's answer each time, rather than instead of listening.
      */
     private fun watchTypography() {
         val connection = ApplicationManager.getApplication().messageBus.connect(parentDisposable)
         connection.subscribe(EditorColorsManager.TOPIC, EditorColorsListener { sendTypography() })
-        connection.subscribe(LafManagerListener.TOPIC, LafManagerListener { sendTypography() })
+        connection.subscribe(
+            LafManagerListener.TOPIC,
+            LafManagerListener {
+                sendTypography()
+                sendTheme()
+            },
+        )
     }
 
     /**
@@ -858,6 +1055,51 @@ internal class CodexPanel(
                 put("monoFamily", typography.monoFamily)
                 put("uiFamily", typography.uiFamily)
                 put("lineHeight", typography.lineHeight)
+                // The three sizes the settings screen speaks of: what the console has, what the panel
+                // was given (nought for "the console's"), and what it is drawn at as a result.
+                put("consoleSize", typography.consoleSize)
+                put("textSize", CodexPreferences.textSize)
+                put("size", typography.size)
+            }.toString(),
+        )
+    }
+
+    /**
+     * The drafts the IDE holds for this project's tabs, handed to a page that has just loaded - after a
+     * restart they come off disk, after a reload of the page alone they never left (see
+     * CodexSessionHub.saveDraft).
+     *
+     * Always sent, even empty: the page does not report its own drafts until it has heard this, so that a
+     * field it has not been given yet is never reported empty over a draft the IDE is still holding. Off
+     * the interface thread, because a pasted picture comes back with its bytes read off disk (see
+     * DraftImages).
+     */
+    private fun sendDrafts() {
+        val held = hub.heldDrafts()
+
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val message = buildJsonObject {
+                put("type", "drafts")
+                putJsonObject("drafts") {
+                    held.forEach { (sessionId, draft) -> put(sessionId, DraftImages.rehydrate(draft)) }
+                }
+            }.toString()
+
+            webview?.send(message)
+        }
+    }
+
+    /**
+     * The theme as the page needs it: the choice itself and the IDE's brightness, rather than the theme
+     * they amount to. The settings screen shows "as in the IDE" as a choice of its own, and the page
+     * resolves it (see theme.ts) - the same rule PanelTheme holds for the page's first frame.
+     */
+    private fun sendTheme() {
+        webview?.send(
+            buildJsonObject {
+                put("type", "theme")
+                put("theme", CodexPreferences.theme)
+                put("ideDark", PanelTheme.ideIsDark())
             }.toString(),
         )
     }

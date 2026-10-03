@@ -25,17 +25,22 @@ export const zh: Dict = {
       mcp: { title: 'MCP 服务器', hint: '状态 · 登录 · 重新连接' },
       plugins: { title: '插件', hint: '已安装 · 浏览 · 市场' },
       settings: { title: '设置', hint: '面板的行为和提示音' },
+      appearance: { title: '外观', hint: '主题和文字大小' },
       sounds: { title: '提示音', hint: '面板需要你的时候' },
       calmColors: { title: '柔和配色', hint: '仪表用什么颜色画' },
+      indicators: { title: '指示器', hint: '输入框周围保留什么' },
       remote: { title: '远程访问', hint: '状态 · 中继 · 已配对设备' },
       remoteAbout: { title: '哪些内容会离开本机', hint: '开启之前请先读一遍' },
       newChat: { title: '新对话', hint: '新标签页从什么开始' },
+      restoreTabs: { title: '启动时的标签页', hint: '重启后恢复什么' },
+      shareEditor: { title: '消息附带编辑器', hint: '随消息一起发出的内容' },
       newChatModel: { title: '默认模型', hint: '新标签页用哪个模型开始' },
       newChatEffort: { title: '默认思考强度', hint: '新标签页思考得多深' },
       newChatMode: { title: '默认模式', hint: '新标签页从哪种模式开始' },
       composerLayout: { title: '输入框布局', hint: '输入框放在哪里' },
       pasteCollapse: { title: '粘贴的文本', hint: '何时把粘贴折叠成小卡片' },
       sendKey: { title: '发送消息', hint: '用哪个键发送' },
+      codexConfig: { title: 'CODEX 设置', hint: '它的 config.toml - /config 修改的就是它' },
       improvePrompt: { title: '优化提示词', hint: '星标按钮按什么要求改写' },
       voice: { title: '语音输入', hint: '用说的，不用打字' },
       voiceLanguage: { title: '口述语言', hint: '听写要听哪种语言' },
@@ -45,6 +50,8 @@ export const zh: Dict = {
       accounts: { title: 'Codex 账号', hint: '这些工作由哪个订阅付费' },
       feedback: { title: '反馈', hint: '问题、想法，或者只是打个招呼' },
       feedbackLog: { title: '将要附带的内容', hint: '发送之前的完整报告' },
+      usageStats: { title: '使用统计', hint: '匿名计数，仅在你允许时' },
+      usageStatsReport: { title: '将要发送的内容', hint: '下一次发送的完整报告' },
     },
 
     rows: {
@@ -54,7 +61,7 @@ export const zh: Dict = {
       plugins: { label: '插件', sub: '已安装、浏览、市场' },
       remote: { label: '远程访问', sub: '状态、中继、已配对设备' },
       accounts: { label: 'Codex 账号', sub: '不用退出登录也能切换' },
-      settings: { label: '设置', sub: '提示音、新对话、布局、语言' },
+      settings: { label: '设置', sub: '主题、提示音、新对话、语言' },
       feedback: { label: '发送反馈', sub: '问题、想法，或者只是打个招呼' },
     },
 
@@ -69,16 +76,22 @@ export const zh: Dict = {
 
   settings: {
     rows: {
+      appearance: { label: '外观', sub: '主题和文字大小' },
       sounds: { label: '提示音', sub: '面板需要你的时候' },
       calmColors: { label: '柔和配色', sub: '仪表保留多少颜色' },
+      indicators: { label: '指示器', sub: '输入框旁保留哪些读数' },
       newChat: { label: '新对话', sub: '模型、思考强度和权限模式' },
+      restoreTabs: { label: '启动时的标签页', sub: '重新打开之前的标签页和草稿' },
+      shareEditor: { label: '打开的文件和选区', sub: '每条消息附带的内容' },
       composerLayout: { label: '输入框布局', sub: '输入框放在哪里' },
       pasteCollapse: { label: '粘贴的文本', sub: '何时把粘贴折叠成小卡片' },
       sendKey: { label: '发送消息', sub: '用哪个键发送' },
+      codexConfig: { label: 'Codex 设置', sub: '它自己的 config.toml，以及是否信任这个项目' },
       improvePrompt: { label: '优化提示词', sub: '星标按钮按什么要求改写' },
       voice: { label: '语音输入', sub: '用你自己的 Deepgram 密钥听写' },
       customModels: { label: '自定义模型', sub: 'Codex 没有列出的那些' },
       language: { label: '语言', sub: '面板使用的语言' },
+      usageStats: { label: '使用统计', sub: '帮助改进插件的匿名计数' },
     },
 
     improveSummary: { builtIn: '内置', custom: '自定义' },
@@ -128,6 +141,81 @@ export const zh: Dict = {
     volumeOf: (sound) => `${sound}音量`,
   },
 
+  appearance: {
+    size: '文字大小',
+    theme: '主题',
+    followConsole: '跟随控制台字体',
+    followConsoleSub: (size) => `跟随 IDE 的控制台字体 - 当前是 ${size}`,
+    own: '单独设置大小',
+    ownSub: '只影响面板 - 编辑器、终端和控制台保持不变',
+    smaller: '缩小',
+    larger: '放大',
+    followIde: '跟随 IDE',
+    followIdeSub: (theme) => `跟随 IDE - 当前是${theme}`,
+    dark: '深色',
+    darkSub: '始终深色，即使 IDE 是浅色',
+    light: '浅色',
+    lightSub: '始终浅色，即使 IDE 是深色',
+    darkWord: '深色',
+    lightWord: '浅色',
+    auto: '自动',
+  },
+
+  restoreTabs: {
+    label: '恢复标签页',
+    hint: '再次打开项目时，标签页、其中的对话和未写完的文字都会回来 - IDE 崩溃后也一样',
+    note: '不会重新启动任何东西：只有在打开标签页或在其中输入时，代理才会启动。草稿只保存在这台机器上 IDE 自己的文件夹里，别处没有。',
+    on: '开',
+    off: '关',
+  },
+
+  shareEditor: {
+    label: '随消息附带编辑器',
+    hint: '每条消息都会附上编辑器中打开的文件及其中选中的行，就像终端里 Codex 的 /ide 那样',
+    note: '仅限此面板：在手机上写的消息不会附带编辑器的任何内容。单条消息可以不附带 - 点一下输入框里的文件标签即可。',
+    on: '开',
+    off: '关',
+  },
+
+  usageStats: {
+    label: '发送匿名使用统计',
+    hint: '在你使用面板时，每天几次：哪些功能被使用、使用频率以及会话持续多久',
+    lastSent: (when: string) => `上次发送：${when}`,
+    notYet: '还没有发送任何内容 - 下次你发送消息时会发出第一份报告。',
+    sentTitle: '会发送的内容',
+    sent: [
+      '每天的计数：在面板中的分钟数、消息、回答、对话、编辑',
+      '每段工作持续了多久 - 从不包括何时开始',
+      '用了哪些功能，用了多少次',
+      '内置工具、Codex 自带的模型名称和内置命令的名称',
+      '插件、IDE 和 Codex 的版本、操作系统、面板语言以及各项设置的状态',
+      '在这台机器上生成的随机 ID - 只用来区分不同机器的日期',
+    ],
+    neverTitle: '永远不会发送',
+    never: [
+      '你的消息、回答、代码、文件名或路径',
+      '项目名称，以及你自己的命令、MCP 服务器和模型的名称',
+      '你的 Codex 或 ChatGPT 账号、邮箱或 API 密钥 - 也不会保存你的 IP 地址',
+      'token 数、费用以及你工作的时间段',
+    ],
+    offNote: '关闭后将停止发送报告，并请求服务删除以这台机器的 ID 已发送的所有内容。',
+    seeReport: '查看确切会发送什么',
+    privacy: '隐私政策',
+    reportNote: '下一次将要发送的完整报告。除此之外不会附带任何其他内容。',
+    building: '正在生成报告…',
+    on: '开',
+    off: '关',
+    unasked: '尚未询问',
+    card: {
+      label: '匿名',
+      title: '帮助改进插件？',
+      body: '发送关于面板使用方式的匿名计数：哪些功能、多频繁、多久。绝不发送你的代码、消息、文件名或任何能表明你身份的内容。随时可以在设置中关闭。',
+      allow: '允许',
+      decline: '不用了',
+      more: '会发送什么',
+    },
+  },
+
   calmColors: {
     sample: '每一级各一个仪表',
     label: '仪表的颜色',
@@ -135,6 +223,28 @@ export const zh: Dict = {
     keeps: '其他什么都不变：错误仍是红色，权限请求还是原样。那些是已经发生的事，不是情绪。',
     full: '完整颜色',
     none: '一种颜色',
+  },
+
+  indicators: {
+    contextBar: { label: '上下文条', hint: '输入框上方随对话增长而填满的横条' },
+    contextFigure: {
+      label: '上下文数值',
+      hint: '横条末端的“ctx 42%” - 仅在常规布局中；窄布局里数值在横条的提示中',
+    },
+    fiveHour: { label: '5 小时额度', hint: '套餐 5 小时窗口的圆环' },
+    week: { label: '每周额度', hint: '套餐每周窗口的圆环' },
+    modelWeek: {
+      label: '额外额度',
+      named: (limit) => `${limit} 额度`,
+      hint: 'Codex 在套餐的两个额度之外报告的额度 - 仅在套餐有此额度时显示',
+    },
+    spending: {
+      label: '消费上限',
+      hint: 'Business 席位每月消费上限的圆环 - 仅在席位设有上限时显示',
+    },
+    tokens: { label: '今日 token', hint: '今天消耗的，所有项目合计' },
+    feedback: { label: '反馈按钮', hint: '打开反馈表单的气泡 - 菜单里始终可以打开' },
+    thanks: { label: '爱心', hint: '一颗星、一条评价、向朋友推荐，或打赏一下' },
   },
 
   history: {
@@ -268,11 +378,6 @@ export const zh: Dict = {
       save: '设置时间',
       nothing: '这个项目里没有什么在等自己的时间。',
     },
-    duplicate: '复制',
-    delete: '删除',
-    deleteTitle: '删除这个场景？',
-    deleteRun: '删除这次运行',
-    deleteRunTitle: '删除这次运行？',
     queue: {
       add: '加入队列',
       oneAtATime: '按顺序逐个运行',
@@ -307,6 +412,12 @@ export const zh: Dict = {
       emptyNote: '把一轮工作放到这里，等前一项结束后它就会开始。',
       unread: '读不到队列 - 这台机器上的文件可能损坏了。什么都没丢：读不出来的列表永远不会被覆盖。',
     },
+    duplicate: '复制',
+    moveRow: '拖动以调整位置，或拖到另一个架子',
+    delete: '删除',
+    deleteTitle: '删除这个场景？',
+    deleteRun: '删除这次运行',
+    deleteRunTitle: '删除这次运行？',
     running: '正在运行',
     runningNote: '都在同一份工作副本上',
     runningHere: (n: number): string => `${n} 个在跑`,
@@ -333,6 +444,7 @@ export const zh: Dict = {
       state: '状态',
     },
     moreRuns: (count: number): string => `再显示 ${count} 条`,
+    fewerRuns: '收起',
     shelves: {
       project: '在这个仓库里',
       projectNote: '随仓库走 · 在这里干活的人都有',
@@ -375,6 +487,7 @@ export const zh: Dict = {
       retries: '重试次数用完了',
       stopped: '被你中断',
       undone: '没做完',
+      headGaveUp: '主线程也没能做完',
     },
     outcomes: {
       scenarioBroken: '这个场景照现在的样子无法运行 - 打开看看哪里不对。',
@@ -388,6 +501,9 @@ export const zh: Dict = {
       runGone: '这次运行已经不在了。',
       runNotResumable: '这次运行无法继续：它的主线程一直没有启动。',
       queueNotWritten: '队列无法写入磁盘。',
+      scenarioNotMoved: '无法把场景移到另一个架子。',
+      scenarioOnBothShelves: '另一个架子上已有相同标识的场景，所以这个场景留在了原处。',
+      orderNotWritten: '无法把架子的新顺序写入磁盘。',
       unknown: '出了点问题。',
     },
     run: {
@@ -423,6 +539,8 @@ export const zh: Dict = {
       passOfUpTo: (pass, passes) => `第 ${pass} 轮，最多 ${passes} 轮`,
       headSaid: '主线程',
       sentBack: (n) => `退回重做 ${n} 次`,
+      takenOver: (why) => `主线程接手了：${why}`,
+      takingOver: '主线程正在接手做完',
       allow: '允许',
       deny: '拒绝',
       send: '发送',
@@ -473,6 +591,9 @@ export const zh: Dict = {
       onQuestion: '遇到提问时',
       questionHead: '它自己回答',
       questionStop: '停下来等我',
+      onGiveUp: '卡片做不完时',
+      giveUpStop: '停止运行',
+      giveUpHead: '由它接手做完',
       retries: '退回重做',
       noRetries: '从不',
       retriesCount: (n: number): string => `${n} 次`,
@@ -604,12 +725,12 @@ export const zh: Dict = {
     clear: '清除',
     sideLeft: '左',
     sideRight: '右',
-    badButton: '只能用鼠标的侧键 —— 主要的三个键在 IDE 里到处都已有各自的含义。',
+    badButton: '只能用鼠标的侧键 - 主要的三个键在 IDE 里到处都已有各自的含义。',
 
     language: '口述语言',
     languageHint: '听写要听哪种语言',
     searchLanguages: '搜索语言…',
-    multiHint: '多语种模式能跟上一句话中途换语言。但和指定语言相比，两种情况下它都更差 —— 只有真的会在一句话里混两种语言时才选它。',
+    multiHint: '多语种模式能跟上一句话中途换语言。但和指定语言相比，两种情况下它都更差 - 只有真的会在一句话里混两种语言时才选它。',
 
     device: '麦克风',
     deviceHint: '用哪一个来听',
@@ -623,9 +744,9 @@ export const zh: Dict = {
       tagline: '适用于 Mac 和 Windows 的听写',
     },
 
-    errorNoKey: '请先填入 Deepgram 密钥 —— 设置，然后是语音输入。',
-    errorNoKeyRemote: '运行这个对话的那台机器上还没有 Deepgram 密钥 —— 请到那边的设置里，在语音输入中添加。',
-    errorOff: '运行这个对话的那台机器上，语音输入是关闭的 —— 请到那边的设置里打开。',
+    errorNoKey: '请先填入 Deepgram 密钥 - 设置，然后是语音输入。',
+    errorNoKeyRemote: '运行这个对话的那台机器上还没有 Deepgram 密钥 - 请到那边的设置里，在语音输入中添加。',
+    errorOff: '运行这个对话的那台机器上，语音输入是关闭的 - 请到那边的设置里打开。',
     errorMicrophone: '麦克风打不开，可能被别的应用占着。',
     errorKey: 'Deepgram 拒绝了这个密钥。请在语音输入界面里检查。',
     errorNetwork: '连不上 Deepgram。请检查网络后重试。',
@@ -706,11 +827,17 @@ export const zh: Dict = {
     send: '发送',
     run: '运行',
     runHint: '在你的 shell 里运行 - Codex 会随你的下一条消息看到输出',
+    askAside: '顺便问',
+    askAsideHint: 'Codex 根据对话回答，并继续工作',
     improveEmpty: 'Codex 什么也没返回，没有内容可以放进输入框。',
     improveChanged: '改写期间草稿变了，所以没有动它。',
     improveTerminal: '终端命令不会被改写',
     voice: '语音输入',
     voiceStop: '结束听写',
+    editor: {
+      on: (place) => `Codex 会随这条消息看到 ${place} · 点击不附带`,
+      off: (place) => `${place} 不会随这条消息发出 · 点击附带`,
+    },
   },
 
   header: {
@@ -726,8 +853,28 @@ export const zh: Dict = {
     closeRun: '关闭这次运行',
     conversations: '对话',
     newSession: '新建对话',
+    renameTab: '重命名对话',
     menu: '菜单',
     watchers: (n) => `另有 ${n} 个客户端正在看这个项目`,
+  },
+
+  side: {
+    title: '顺便一问',
+    unseen: '代理看不到这里',
+    thinking: '正在旁边思考',
+    retrying: (attempt: number, max: number, seconds: number): string =>
+      `API 出错，${seconds} 秒后第 ${attempt}/${max} 次重试`,
+    cancel: '取消',
+    cancelled: '已取消',
+    askAgain: '再问一次',
+    empty: '没有收到回答',
+    failed: { ended: '对话在回答前停止了', timeout: '十分钟内没有回答', refused: 'Codex 没能回答这个问题' },
+    copy: '复制回答',
+    close: '关闭 (Esc)',
+    notSaved: '不会保存到聊天里',
+    askInChat: '在聊天里问',
+    askInChatHint: '把问题作为普通消息放进输入框 - 在那里 Codex 可以修改文件、运行命令',
+    hint: '输入 /btw 或 /side 加上问题。Codex 会根据这段对话回答，不打断它的工作 - 它可以读文件，但不会修改任何东西 - 回答也不会进入聊天。',
   },
 
   thanks: {
@@ -740,6 +887,8 @@ export const zh: Dict = {
     share: '分享给朋友',
     shareSub: '复制一句介绍和链接',
     shareCopied: '已复制 - 想贴哪儿就贴哪儿',
+    tip: '打赏一下',
+    tipSub: '在 Ko-fi 上，一次或按月',
     shareText:
       '推荐一下 Amazing Codex GUI - 把 Codex 做成 JetBrains IDE 里像样的面板：https://github.com/crmapache/amazing-codex',
   },
@@ -748,7 +897,7 @@ export const zh: Dict = {
     checking: '正在查找 Codex…',
     notFound: '没有找到 Codex',
     notFoundText:
-      '面板是通过 claude 命令行工作的。如果已经装了，请指出它的位置 - IDE 看到的 PATH 不一定和你终端里的一样。',
+      '面板是通过 codex 命令行工作的。如果已经装了，请指出它的位置 - IDE 看到的 PATH 不一定和你终端里的一样。',
     useThis: '用这个',
     whereLooked: '面板找过哪些地方',
     checkAgain: '再检查一次',
@@ -758,6 +907,8 @@ export const zh: Dict = {
     signInAs: (account: string): string => `以 ${account} 登录`,
     signInText:
       '登录只做一次，在 IDE 的终端里：Codex 会打开浏览器并等你回来。面板会自己接上。',
+    heldBack: (names: string): string =>
+      `这个账号已登录，但这个项目的 Codex 设置（.codex/config.toml）要求另一种登录方式：${names}。重新登录也改变不了这一点 - 请选择其他账号，或修改项目的设置。`,
     logIn: '登录',
     openTerminalAgain: '重新打开终端',
     finishInTerminal: '在终端里完成登录 - 这个界面会自动关闭。',
@@ -796,6 +947,11 @@ export const zh: Dict = {
     copyReply: '复制整条回复',
     moreActions: '更多',
     copyMessage: '复制这条消息，附件以路径形式复制',
+    editor: {
+      selected: (n, name) => `${name} 中的 ${n} 行`,
+      opened: (name) => `在 ${name} 中`,
+      open: (place) => `${place} · 在编辑器中打开`,
+    },
     reuse: {
       label: '修改后重新发送',
       hint: '把这条消息放回输入框，修改后重新发送',
@@ -883,9 +1039,9 @@ export const zh: Dict = {
     checkpoint: {
       cleared: '对话已清空 - 这条线以上的内容都不再记得了',
       earlier: '更早的消息',
+      loadEarlier: '加载更早的消息',
       notKept: '更早的消息已经不再保留',
       notOnPhone: '更早的消息不会发到手机上',
-      loadEarlier: '加载更早的消息',
     },
 
     compact: {
@@ -933,6 +1089,22 @@ export const zh: Dict = {
       textWithCode: (code) => `Codex 意外退出了（退出码 ${code}）。`,
     },
 
+    outranked: {
+      account: {
+        label: '登录',
+        text: '这个项目的 Codex 设置要求使用另一个登录，而不是这里选择的账号：',
+      },
+      untrusted: {
+        label: '设置',
+        text: 'Codex 没有读取这个项目自己的设置 - 这个项目还未被信任：',
+      },
+      open: 'Codex 设置',
+    },
+
+    sampling: {
+      note: '最新的模型不再接受采样参数，而这次请求里带了一个。Codex 自己不会加，所以它来自请求经过的地方 - 通常是在 config.toml 里设为模型提供方的网关或代理。',
+    },
+
     limit: {
       label: '额度',
       extraLabel: '额外计费',
@@ -952,12 +1124,14 @@ export const zh: Dict = {
     ask: {
       label: 'CODEX 提问',
       blocks: (n) => `${n} 个问题 · 回合在等你`,
+      leftOver: (n) => `${n} 个问题 · 一直没人回答`,
       pickAny: '可多选',
       other: '其他',
       ownAnswer: '写下你自己的回答…',
       send: '发送答案',
       pickToContinue: '选一个继续',
       note: '回合会从提问的地方接着往下走',
+      leftOverNote: '那个回合早就结束了 - 你的回答会作为新消息发出去',
       expand: '展开问题',
       collapse: '收起问题',
       dismiss: '关闭问题',
@@ -986,6 +1160,8 @@ export const zh: Dict = {
     queue: {
       label: '排队中',
       hint: (n) => `${n} 条会在本轮结束后按顺序发出 · 拖动可调整顺序`,
+      edit: '在输入框中编辑',
+      editing: (key, button) => `正在输入框中编辑 · 按 ${key} 或点「${button}」放回这里`,
     },
     selection: { quote: '引用', fork: '从这里分叉' },
     streams: {
@@ -1046,6 +1222,7 @@ export const zh: Dict = {
       'no-executable': '在这台机器上没找到 Codex。',
       'no-store': '没能为新账号建好文件夹。',
       'not-supported': '此 Codex 无法区分两个登录，因此未添加任何账号。',
+      'already-here': '该账号已经在这里了：它就是 Codex 自己的登录（codex login），因此未添加任何账号。',
       'logout-failed': '退出失败。请在终端中尝试。',
       'already-running': '已经有一个登录在进行中了。',
       unknown: '这次没成功。',
@@ -1287,7 +1464,6 @@ export const zh: Dict = {
 
     scenarios: {
       running: '正在运行',
-      repository: '仓库',
       inRepository: (name: string): string => `在 ${name}`,
       opensProject: '当前未在 IDE 中打开 - 选中后会在那里打开',
       nothingRunning: '这个项目现在没有在跑的东西。',
@@ -1444,13 +1620,20 @@ export const zh: Dict = {
       projectFiles: '项目文件',
       ofTotal: (shown, total) => `${shown} / ${total}`,
       photosDropped: (n) => `还有 ${n} 张放不进同一条消息 - 先把这些发出去吧。`,
-      photoTooBig: '这放不进一条消息。试试一次发一张。',
+      photoTooBig: '这张照片即使缩小后也太大了。',
+      photoTooBigOldIde: '电脑上的插件只接受小照片。更新插件后才能发送这张。',
+      photoUnreadable: '这个文件无法作为图片打开。',
+      sending: '发送中…',
+      notDelivered: '未送达',
+      retry: '重试',
+      discardUnsent: '丢弃这条消息',
     },
 
     limits: {
       title: '额度与上下文',
       fiveHourWindow: '5 小时窗口',
       weeklyWindow: '每周窗口',
+      modelWindow: (model) => `${model} 每周窗口`,
       paceNote: (percent) =>
         `暗色弧线是匀速线：按这个速度，本周到今天该用掉 ${percent}%。只要亮色弧线比它短，这周就没有超前。`,
       context: '这次对话的上下文',
@@ -1476,6 +1659,7 @@ export const zh: Dict = {
     modeHint: (mode) => `权限模式：${mode}`,
     sessionLimit: '5 小时额度',
     weekLimit: '每周额度',
+    modelWeekLimit: (limit) => `${limit} 额度`,
     /** The ring of a Codex business seat's spending cap - see ExtraUsage.resets. */
     spendLimit: '消费上限',
     windowUsed: (title, percent) => `${title}：已用 ${percent}%`,
@@ -1493,7 +1677,7 @@ export const zh: Dict = {
     weeklyOpus: '每周 Opus',
     weeklySonnet: '每周 Sonnet',
     weeklyApps: '每周应用',
-    weeklyWithExtra: '每周（含额外计费）',
+    weeklyFable: '每周 Fable',
     extra: '额外计费',
   },
 
@@ -1510,11 +1694,61 @@ export const zh: Dict = {
     modeHint: 'shift+tab',
   },
 
+  codexConfig: {
+    intro: '这是 Codex 自己的设置，也就是它的 config.toml。终端读取的是同一个文件，所以在这里修改，在终端里同样生效。',
+    loading: '正在向 Codex 读取设置…',
+    noCli: '在这台机器上没有找到 Codex。',
+    unreadable: 'Codex 没有返回它的设置。请稍后再试。',
+    groups: { work: 'Codex 的工作方式', terminal: '终端和“默认”标签页', other: '实验性功能' },
+    on: '开',
+    off: '关',
+    saving: '正在保存…',
+    notSet: '未设置 - 由 Codex 决定',
+    lockedPolicy: '由组织策略决定 - 这里无法修改。',
+    lockedProject: '已在项目的 .codex/config.toml 中指定 - 这里的修改不会覆盖它。',
+    chips: '在面板里，这由每个标签页的模型、思考强度和模式标签分别决定。终端和保持“默认”的标签页则按这里的值来。',
+    failed: 'Codex 没有接受这次修改。',
+    overridden: '已保存，但项目设置或策略在更高一层指定了它，所以在这里不生效。',
+    save: '保存',
+    project: {
+      title: '这个项目',
+      none: '没有自己的 Codex 设置',
+      noneHint: '项目里的 .codex/config.toml、钩子或 exec 策略会显示在这里。',
+      trusted: '已信任 - Codex 会读取项目自己的设置',
+      untrusted: '未信任 - Codex 会忽略项目自己的设置',
+      sets: (names: string): string => `它设置了：${names}`,
+      trust: '信任这个项目',
+      untrust: '取消信任',
+    },
+    labels: {
+      model_reasoning_summary: '推理摘要',
+      model_verbosity: '回答长度',
+      personality: '个性',
+      web_search: '网页搜索',
+      'sandbox_workspace_write.network_access': '项目沙箱中的网络访问',
+      approvals_reviewer: '由谁审核批准请求',
+      service_tier: '服务层级',
+      model_auto_compact_token_limit: '自动压缩阈值（token）',
+      review_model: '/review 使用的模型',
+      model: '模型',
+      model_reasoning_effort: '思考强度',
+      approval_policy: '何时请求批准',
+      sandbox_mode: '沙箱',
+      'features.network_proxy': '网络代理',
+      'features.prevent_idle_sleep': '运行时阻止休眠',
+    },
+  },
+
   commands: {
     resume: '打开本项目过去的一次对话',
     fork: '在新标签页里继续这个对话',
     login: '在 IDE 终端里登录 Codex',
     logout: '退出登录 - 会打开 IDE 终端',
+    rename: '重命名此标签页；不带名称时在标签上打开输入框',
+    renameArgument: '[新名称]',
+    config: 'Codex 设置 - 在菜单中打开',
+    btw: '顺便问个问题 - 不打断当前工作',
+    btwArgument: '<问题>',
     model: '切换本次会话使用的模型',
     effort: '设置 Codex 动手前思考多久',
     codeReview: '用 Codex 自带的审查器审查更改',

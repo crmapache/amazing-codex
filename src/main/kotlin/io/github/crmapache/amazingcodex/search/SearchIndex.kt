@@ -2,6 +2,8 @@ package io.github.crmapache.amazingcodex.search
 
 import com.intellij.openapi.diagnostic.thisLogger
 import io.github.crmapache.amazingcodex.codex.CodexHistory
+import io.github.crmapache.amazingcodex.codex.SessionSnapshot
+import io.github.crmapache.amazingcodex.scenario.ScenarioConversations
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.charset.StandardCharsets
@@ -48,6 +50,11 @@ internal class SearchIndex(
      * WSL has its own, see CodexHome), afresh on every refresh: a thread is named after its first turn.
      */
     private val names: () -> Map<String, String> = { emptyMap() },
+    /**
+     * Which of those names the panel's model gave, by thread id (see codex/AutoTitles) - every other name
+     * in Codex's record is a person's, and stands above everything else.
+     */
+    private val givenByModel: () -> Map<String, String> = { emptyMap() },
 ) {
 
     /** What was known about a transcript file when its words were last taken. */
@@ -56,6 +63,8 @@ internal class SearchIndex(
     private class Conversation(val id: String) {
         val messages = ArrayList<IndexedMessage>()
         var aiTitle: String? = null
+        /** The name a person gave the conversation - see AgentStream.customTitle. It stands above the model's. */
+        var customTitle: String? = null
         var firstText: String = ""
         var fallbackCommand: String = ""
         var seen = Seen(0, 0, 0)
@@ -72,13 +81,33 @@ internal class SearchIndex(
         var corpusVersion = -1L
 
         val title: String
-            get() = aiTitle?.takeIf { it.isNotBlank() } ?: firstText.ifEmpty { fallbackCommand }.ifEmpty { "untitled" }
+            get() = customTitle
+                ?: aiTitle?.takeIf { it.isNotBlank() }
+                ?: firstText.ifEmpty { fallbackCommand }.ifEmpty { "untitled" }
 
-        val named: Boolean
-            get() = !aiTitle.isNullOrBlank()
+        /** By the history's own rule - see CodexHistory.Scan.titleSource. */
+        val titleSource: String
+            get() = when {
+                customTitle != null -> SessionSnapshot.TITLE_USER
+                !aiTitle.isNullOrBlank() -> SessionSnapshot.TITLE_LLM
+                else -> SessionSnapshot.TITLE_HEURISTIC
+            }
     }
 
     private val conversations = LinkedHashMap<String, Conversation>()
+
+    /**
+     * Codex's one name for a thread, filed as the model's or as a person's (see [givenByModel]). Returns
+     * whether anything changed.
+     */
+    private fun named(conversation: Conversation, name: String, byModel: Map<String, String>): Boolean {
+        val model = name.takeIf { byModel[conversation.id] == it }
+        val person = name.takeIf { model == null }
+        if (conversation.aiTitle == model && conversation.customTitle == person) return false
+        conversation.aiTitle = model
+        conversation.customTitle = person
+        return true
+    }
 
     /** Built when first asked for after a change, and dropped by the next change. */
     private var index: TextIndex? = null
@@ -113,11 +142,12 @@ internal class SearchIndex(
         val present = HashSet<String>()
 
         val names = names()
+        val byModel = givenByModel()
 
         for (file in transcripts()) {
             val id = CodexHistory.threadIdOf(file) ?: file.nameWithoutExtension
             present.add(id)
-            names[id]?.let { name -> conversations[id]?.let { if (it.aiTitle != name) { it.aiTitle = name; changed = true } } }
+            names[id]?.let { name -> conversations[id]?.let { if (named(it, name, byModel)) changed = true } }
 
             val size = file.length()
             val modified = file.lastModified()
@@ -134,12 +164,13 @@ internal class SearchIndex(
             if (!appended) {
                 target.messages.clear()
                 target.aiTitle = null
+                target.customTitle = null
                 target.firstText = ""
                 target.fallbackCommand = ""
             }
             // After the reset, not before it: set first, the name of a new or rewritten thread was wiped on
             // the spot, and the list showed its first words until the next refresh brought the name back.
-            names[id]?.let { target.aiTitle = it }
+            names[id]?.let { named(target, it, byModel) }
 
             val from = if (appended) target.seen.offset else 0L
             val consumed = runCatching { read(file, from, target) }
@@ -235,11 +266,14 @@ internal class SearchIndex(
         return conversations[conversation]?.messages?.size ?: 0
     }
 
-    /** Whether the title is the model's own rather than a guess - see CodexHistory.Entry.named. */
+    /**
+     * Where the title came from - the person, the model or a guess; see CodexHistory.Entry.titleSource.
+     * A conversation the index does not know is a guess, as its title is.
+     */
     @Synchronized
-    fun isNamed(conversation: String): Boolean {
+    fun titleSourceOf(conversation: String): String {
         if (!loaded) load()
-        return conversations[conversation]?.named ?: false
+        return conversations[conversation]?.titleSource ?: SessionSnapshot.TITLE_HEURISTIC
     }
 
     /**
@@ -377,6 +411,7 @@ internal class SearchIndex(
             conversation.seen = entry.seen
             conversation.kept = entry.seen
             conversation.aiTitle = entry.aiTitle
+            conversation.customTitle = entry.customTitle
             conversation.firstText = entry.firstText
             conversation.fallbackCommand = entry.fallbackCommand
 
@@ -397,7 +432,13 @@ internal class SearchIndex(
         }
     }
 
-    private class ManifestEntry(val seen: Seen, val aiTitle: String?, val firstText: String, val fallbackCommand: String)
+    private class ManifestEntry(
+        val seen: Seen,
+        val aiTitle: String?,
+        val customTitle: String?,
+        val firstText: String,
+        val fallbackCommand: String,
+    )
 
     private fun readManifest(): Map<String, ManifestEntry>? {
         val file = directory.resolve(MANIFEST_FILE)
@@ -416,6 +457,7 @@ internal class SearchIndex(
                     offset = entry["offset"]?.jsonPrimitive?.longOrNull ?: 0,
                 ),
                 aiTitle = entry["aiTitle"]?.jsonPrimitive?.contentOrNull,
+                customTitle = entry["customTitle"]?.jsonPrimitive?.contentOrNull,
                 firstText = entry["firstText"]?.jsonPrimitive?.contentOrNull.orEmpty(),
                 fallbackCommand = entry["fallbackCommand"]?.jsonPrimitive?.contentOrNull.orEmpty(),
             )
@@ -433,6 +475,7 @@ internal class SearchIndex(
                         put("modified", conversation.kept.modified)
                         put("offset", conversation.kept.offset)
                         conversation.aiTitle?.let { put("aiTitle", it) }
+                        conversation.customTitle?.let { put("customTitle", it) }
                         if (conversation.firstText.isNotEmpty()) put("firstText", conversation.firstText)
                         if (conversation.fallbackCommand.isNotEmpty()) put("fallbackCommand", conversation.fallbackCommand)
                     }
@@ -497,8 +540,14 @@ internal class SearchIndex(
     }
 
     companion object {
-        /** The shape of the copy on disk; a change here rebuilds every project's copy from the transcripts. */
-        const val FORMAT = 1L
+        /**
+         * The shape of the copy on disk; a change here rebuilds every project's copy from the transcripts.
+         *
+         * 2: the person's own names (`customTitle`). A copy made before them was read past the lines that
+         * carry them, and only a rebuild reads those again - a conversation renamed by `/rename` in a
+         * terminal would otherwise keep the model's name in the search for good.
+         */
+        const val FORMAT = 2L
 
         const val MANIFEST_FILE = "manifest.json"
         const val CORPUS_DIR = "corpus"
@@ -511,9 +560,31 @@ internal class SearchIndex(
 
         private const val NEWLINE = '\n'.code.toByte()
 
-        /** The transcripts of a project, as the history finds them: top-level files only, no subagents. */
-        fun transcriptsOf(workingDirectory: String?): List<File> =
-            CodexHistory.rolloutsOf(workingDirectory).distinctBy { CodexHistory.threadIdOf(it) ?: it.nameWithoutExtension }
+        /**
+         * The transcripts a search may reach, as the history finds them: top-level files only, no
+         * subagents, and none of the conversations the panel raised for a scenario run.
+         *
+         * Left out for the reason the history leaves them out (see ScenarioConversations): a night of
+         * runs is a dozen conversations nobody held, and on a project that is run nightly they are more
+         * than half of everything there is - so "all chats" answers mostly with the machine's own work,
+         * and the one door to what a run did is the run itself, where every card has its log.
+         *
+         * Left out HERE rather than when the answers are drawn, which is what makes both directions work
+         * by themselves: one that appears while the index is warm is missing from the next listing, so
+         * the refresh reads it as gone and drops it along with its copy on the disk, and one released
+         * back to the person (see CodexSessions.releasedRole) reads as a new file and is taken in whole.
+         * The model's corpus follows the same list, so it is swept with it (see [corpus]).
+         *
+         * A conversation is known by its thread's id, which a Codex rollout carries at the end of its
+         * name (rollout-<time>-<id>.jsonl) rather than as the whole of it - see CodexHistory.threadIdOf.
+         */
+        fun transcriptsOf(workingDirectory: String?): List<File> {
+            val hidden = ScenarioConversations(workingDirectory).all()
+
+            return CodexHistory.rolloutsOf(workingDirectory)
+                .filterNot { (CodexHistory.threadIdOf(it) ?: it.nameWithoutExtension) in hidden }
+                .distinctBy { CodexHistory.threadIdOf(it) ?: it.nameWithoutExtension }
+        }
 
         private const val TITLE_CHARS = 80
     }

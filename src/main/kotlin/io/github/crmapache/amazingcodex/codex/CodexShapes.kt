@@ -27,8 +27,17 @@ internal object CodexShapes {
      * Codex is launched with, the label, the description, and - new with Codex - which reasoning efforts
      * the model takes and which one it starts on.
      */
-    fun models(result: JsonElement?): JsonObject {
+    /**
+     * The model list for the menu. [configuredModel] and [configuredEffort] are what the person's own
+     * config.toml sets (`model`, `model_reasoning_effort`) for the directory the conversation runs in -
+     * what Codex runs on a tab left on "Default" and "auto". `model/list` marks its own default with
+     * `isDefault` and knows nothing of the config, so a menu labelled from it alone named one model over a
+     * tab that ran another; the config's model, when it is on the list, is the default here instead.
+     */
+    fun models(result: JsonElement?, configuredModel: String = "", configuredEffort: String = ""): JsonObject {
         val data = (result as? JsonObject)?.get("data") as? JsonArray ?: JsonArray(emptyList())
+        val ids = data.mapNotNull { (it as? JsonObject)?.let { model -> AppServer.text(model["model"]).ifEmpty { AppServer.text(model["id"]) } } }
+        val configured = configuredModel.takeIf { it.isNotEmpty() && it in ids }
 
         return buildJsonObject {
             putJsonArray("models") {
@@ -43,14 +52,13 @@ internal object CodexShapes {
                         put("displayName", AppServer.text(model["displayName"]).ifEmpty { id })
                         put("description", AppServer.text(model["description"]))
                         put("resolvedModel", id)
-                        put("isDefault", model["isDefault"] == JsonPrimitive(true))
-                        put("defaultEffort", AppServer.text(model["defaultReasoningEffort"]))
-                        putJsonArray("efforts") {
-                            (model["supportedReasoningEfforts"] as? JsonArray)?.forEach { option ->
-                                val effort = AppServer.text((option as? JsonObject)?.get("reasoningEffort"))
-                                if (effort.isNotEmpty()) add(JsonPrimitive(effort))
-                            }
-                        }
+                        put("isDefault", if (configured != null) id == configured else model["isDefault"] == JsonPrimitive(true))
+                        val efforts = (model["supportedReasoningEfforts"] as? JsonArray).orEmpty()
+                            .map { AppServer.text((it as? JsonObject)?.get("reasoningEffort")) }
+                            .filter { it.isNotEmpty() }
+                        // What "auto" comes to on this model: the config's effort when the model takes it.
+                        put("defaultEffort", configuredEffort.takeIf { it in efforts } ?: AppServer.text(model["defaultReasoningEffort"]))
+                        putJsonArray("efforts") { efforts.forEach { add(JsonPrimitive(it)) } }
                     }
                 }
             }
@@ -68,8 +76,26 @@ internal object CodexShapes {
      * is drawn on the third ring, the one for usage past the plan, because that is what it is: money,
      * counted against a cap somebody set.
      */
-    fun usage(snapshot: JsonObject?, contextWindow: Int? = null): JsonObject = buildJsonObject {
+    fun usage(snapshot: JsonObject?, contextWindow: Int? = null, buckets: JsonObject? = null): JsonObject = buildJsonObject {
         putJsonObject("rate_limits") {
+            // The limits Codex keeps beside the plan's own two - `rateLimitsByLimitId`, a bucket per metered
+            // limit, the plan's own being `codex`. Each one with a window of its own is a ring of its own,
+            // retold as the list a model's own week came in on the Claude side (`model_scoped`), which the
+            // rest of the plugin already reads and draws. Said only when the full answer was asked for:
+            // absent means "not said this time", while an empty list means "none" and takes a ring away.
+            if (buckets != null) {
+                putJsonArray("model_scoped") {
+                    for ((id, element) in buckets) {
+                        if (id == MAIN_BUCKET) continue
+                        val bucket = element as? JsonObject ?: continue
+                        val window = longestWindow(bucket) ?: continue
+                        addJsonObject {
+                            put("display_name", bucketLabel(id, AppServer.text(bucket["limitName"])))
+                            window(window)
+                        }
+                    }
+                }
+            }
             if (snapshot != null) {
                 val windows = listOfNotNull(
                     snapshot["primary"] as? JsonObject,
@@ -110,6 +136,31 @@ internal object CodexShapes {
             }
         }
     }
+
+    /** The whole answer to `account/rateLimits/read`: the plan's own bucket and the others beside it. */
+    fun usageAnswer(result: JsonObject?, contextWindow: Int? = null): JsonObject =
+        usage(result?.get("rateLimits") as? JsonObject, contextWindow, result?.get("rateLimitsByLimitId") as? JsonObject)
+
+    /**
+     * Whether a rolling limits update is about the plan's own bucket. One about another bucket carries
+     * THAT bucket's windows in the same fields, and read as the plan's it would draw them on the five-hour
+     * and weekly rings - and its "limit reached" as the plan's.
+     */
+    fun isMainBucket(snapshot: JsonObject?): Boolean =
+        AppServer.text(snapshot?.get("limitId")).let { it.isEmpty() || it == MAIN_BUCKET }
+
+    /** What a bucket is called on a ring: the server's own name, or its id said like a word ("Premium"). */
+    fun bucketLabel(id: String, name: String): String =
+        name.trim().ifEmpty { id.replace('_', ' ').replace('-', ' ').trim().replaceFirstChar { it.uppercase() } }.take(BUCKET_LABEL_LIMIT)
+
+    private fun longestWindow(bucket: JsonObject): JsonObject? =
+        listOfNotNull(bucket["primary"] as? JsonObject, bucket["secondary"] as? JsonObject)
+            .maxByOrNull { minutesOf(it) ?: 0 }
+
+    /** The plan's own limit among Codex's buckets. */
+    private const val MAIN_BUCKET = "codex"
+
+    private const val BUCKET_LABEL_LIMIT = 40
 
     /** Whether a limit is standing in the way right now - the reason Codex gives for refusing a turn. */
     fun reachedWindow(snapshot: JsonObject?): String? =

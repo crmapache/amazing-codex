@@ -57,6 +57,14 @@ internal class DayRecord {
     /** Messages that came from a paired phone rather than from the desk. */
     var phonePrompts = 0
 
+    /**
+     * Everything a person did from a paired phone: the messages above, and the answers, approvals, stops,
+     * new chats and scenario presses beside them. The messages alone missed the people who use the phone
+     * only to unblock the desk - allowing a command, approving a plan - and never type a word on it. What
+     * a phone sends by itself (catching up, refreshing a list) is not counted - see UsageFeatures.
+     */
+    var phoneActions = 0
+
     /** Messages sent before eight in the morning, and after midnight. */
     var earlyPrompts = 0
 
@@ -125,8 +133,8 @@ internal class DayRecord {
      * the line copied to pass on.
      *
      * A set rather than a count, because doing one of them twice is thanking once - and pressing "share"
-     * is a press, not a friend told (see Thanks.tsx for the three, and Achievements for the two lines they
-     * are measured against).
+     * is a press, not a friend told (see Thanks.tsx for the three - the tip in that menu is never sent
+     * here - and Achievements for the lines they are measured against).
      */
     val thanksWays = LinkedHashSet<String>()
 
@@ -152,6 +160,17 @@ internal class DayRecord {
 
     /** Turns by the model that answered them, by family: Sonnet, Opus and so on. */
     val models = LinkedHashMap<String, Int>()
+
+    /**
+     * The panel's own features used that day, by id, and how many times: the voice button, a fork, the
+     * history screen opened (see UsageFeatures for the ids and what counts as a use).
+     *
+     * Kept in the book beside the tools rather than in a file of its own, because it is the same kind of
+     * figure - a count by name that only ever grows - and the book already knows how to fold two IDEs'
+     * copies of a day and two projects' days of it. The statistics tab does not show it; the anonymous
+     * usage report sends it, when a person has allowed that (see UsageReport).
+     */
+    val features = LinkedHashMap<String, Int>()
 
     /** Times the five-hour window ran out that day - each window counted once, by its reset time. */
     var ranOutFiveHour = 0
@@ -222,6 +241,9 @@ internal class DayRecord {
         for (name in models.keys + other.models.keys) {
             merged.models[name] = maxOf(models[name] ?: 0, other.models[name] ?: 0)
         }
+        for (name in features.keys + other.features.keys) {
+            merged.features[name] = maxOf(features[name] ?: 0, other.features[name] ?: 0)
+        }
 
         merged.updatedAt = maxOf(updatedAt, other.updatedAt)
         return merged
@@ -270,6 +292,9 @@ internal class DayRecord {
         for (name in models.keys + other.models.keys) {
             folded.models[name] = (models[name] ?: 0) + (other.models[name] ?: 0)
         }
+        for (name in features.keys + other.features.keys) {
+            folded.features[name] = (features[name] ?: 0) + (other.features[name] ?: 0)
+        }
 
         folded.updatedAt = maxOf(updatedAt, other.updatedAt)
         return folded
@@ -292,6 +317,7 @@ internal class DayRecord {
             DayRecord::sessions,
             DayRecord::forks,
             DayRecord::phonePrompts,
+            DayRecord::phoneActions,
             DayRecord::earlyPrompts,
             DayRecord::latePrompts,
             DayRecord::quickTurns,
@@ -554,6 +580,7 @@ internal object StatsJson {
         if (record.cost != 0.0) put("cost", record.cost)
         if (record.tools.isNotEmpty()) put("tools", counts(record.tools))
         if (record.models.isNotEmpty()) put("models", counts(record.models))
+        if (record.features.isNotEmpty()) put("features", counts(record.features))
         if (record.files.isNotEmpty()) put("files", strings(record.files))
         if (record.slash.isNotEmpty()) put("slash", strings(record.slash))
         if (record.thanksWays.isNotEmpty()) put("thanksWays", strings(record.thanksWays))
@@ -606,6 +633,7 @@ internal object StatsJson {
         record.cost = day["cost"]?.jsonPrimitive?.doubleOrNull ?: 0.0
         readCounts(day["tools"], record.tools)
         readCounts(day["models"], record.models)
+        readCounts(day["features"], record.features)
         // A book written before the CLI's own marks were told apart from models holds rows like
         // "<synthetic>" (see StatsCollector.isRealModel). They are dropped as the file is read rather
         // than once at startup: this file is shared with the other JetBrains IDEs on the machine, and one

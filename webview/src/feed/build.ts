@@ -24,6 +24,7 @@ import {
   noteSubagent,
 } from './tasks'
 import { replayedMessage } from './replayed'
+import { editorOfBlocks } from './editorContext'
 import { readPlan, readQuestions, readTodos } from './toolInput'
 import { readReview } from './findings'
 import {
@@ -51,6 +52,7 @@ import type {
   TaskItem,
   ToolItem,
   UserItem,
+  UserToken,
 } from './types'
 
 /**
@@ -78,7 +80,7 @@ export { initialPanelState } from './panelState'
  * the person's last message: the same refusal an hour later is a fresh piece of trouble, and staying
  * silent about it would be worse than repeating oneself.
  */
-const addError = (state: PanelState, message: string, signIn = false): PanelState => {
+const addError = (state: PanelState, message: string, marks: ErrorMarks = {}): PanelState => {
   const turnStart = state.items.map((item) => item.kind).lastIndexOf('user') + 1
   const alreadyShown = state.items
     .slice(turnStart)
@@ -87,19 +89,20 @@ const addError = (state: PanelState, message: string, signIn = false): PanelStat
   if (alreadyShown) {
     /**
      * The row stands and the door does not. The same refusal arrives by two roads, and only one of them
-     * knows it is about the sign-in: come first through stderr or through a refused control request, the
-     * row is an ordinary red slab, and the mark carried by the second arrival used to be dropped with it.
-     * What is lost is the only way back there is - the login screen never comes up for this refusal (see
-     * ErrorItem.signIn) - so the mark goes onto the row already standing rather than onto a second one
+     * knows what it is about: come first through stderr or through a refused control request, the row is
+     * an ordinary red slab, and the mark carried by the second arrival used to be dropped with it. What
+     * is lost is the only way back there is - the login screen never comes up for a dead sign-in (see
+     * ErrorItem.signIn), and nothing else in the panel explains a request the server would not take (see
+     * ErrorItem.sampling) - so the mark goes onto the row already standing rather than onto a second one
      * saying the same thing.
      */
-    if (!signIn) return state
+    if (!marks.signIn && !marks.sampling) return state
 
     return {
       ...state,
       items: state.items.map((item, index) =>
-        index >= turnStart && item.kind === 'error' && item.message === message && !item.signIn
-          ? { ...item, signIn: true }
+        index >= turnStart && item.kind === 'error' && item.message === message
+          ? { ...item, ...(marks.signIn ? { signIn: true } : {}), ...(marks.sampling ? { sampling: true } : {}) }
           : item,
       ),
     }
@@ -120,7 +123,13 @@ const addError = (state: PanelState, message: string, signIn = false): PanelStat
     (item, index) => !(index >= turnStart && item.kind === 'text' && item.source.trim() === said),
   )
 
-  return push({ ...state, items: withoutEcho }, (id) => ({ id, kind: 'error', message, signIn }))
+  return push({ ...state, items: withoutEcho }, (id) => ({ id, kind: 'error', message, ...marks }))
+}
+
+/** What is known about a refusal beyond its text, and what the row offers because of it - see ErrorItem. */
+interface ErrorMarks {
+  signIn?: boolean
+  sampling?: boolean
 }
 
 /**
@@ -129,6 +138,33 @@ const addError = (state: PanelState, message: string, signIn = false): PanelStat
  * several, English, and change between CLI versions.
  */
 const AUTH_FAILED = 'authentication_failed'
+
+/**
+ * Whether this refusal is the request itself being rejected over a sampling parameter - see
+ * ErrorItem.sampling.
+ *
+ * Read by two things at once, because neither is enough alone. The response code is the machine part and
+ * it comes from the CLI's own field (AgentResultEvent.api_error_status): 400 is the server saying it
+ * would not take the request at all, as opposed to a limit, a dead sign-in or an outage. The names are
+ * the part that says WHICH request it was, and they are read out of the text because there is nowhere
+ * else - the word beside the answer says `unknown` for every 400 alike (measured against a refusing
+ * endpoint on 2.1.273).
+ *
+ * Reading a sentence is what this panel does not do, and the exception is made knowingly: what is looked
+ * for here is not a sentence but three field names of the API, the same ones in every wording and every
+ * language a gateway may answer in. The cost of being wrong either way is small - a missed refusal is the
+ * bare red row the panel showed before, and a false one is a sentence about a gateway under a refusal
+ * that mentions those fields for some other reason.
+ */
+const overSampling = (status: number | null | undefined, message: string): boolean => {
+  if (status !== 400) return false
+
+  const said = message.toLowerCase()
+  return SAMPLING_PARAMS.some((name) => said.includes(name))
+}
+
+/** The parameters the models from Opus 4.7 onwards refuse - named as the API names them. */
+const SAMPLING_PARAMS = ['temperature', 'top_p', 'top_k']
 
 /** What the CLI wrote under a failed request: its placeholder answer, as one piece of text. */
 const placeholderText = (blocks: ContentBlock[]): string =>
@@ -262,6 +298,24 @@ export const reducePanel = (state: PanelState, action: PanelAction, now = Date.n
     case 'error':
       return addError(state, action.message)
 
+    /**
+     * Once per conversation, not once per launch. The process comes up again after a crash, a resume, an
+     * MCP reconnect or an idle sleep, and every one of those would otherwise lay down the same warning
+     * again - a feed slowly filling with a row saying the same thing about the same settings file.
+     *
+     * Same names is the test rather than "any such row": a second variable added to the repository's
+     * settings since is news, and the row that is already there does not say it.
+     */
+    case 'outranked': {
+      const reason = action.reason ?? 'account'
+      const said = action.names.join(',')
+      const already = state.items.some(
+        (item) => item.kind === 'outranked' && item.reason === reason && item.names.join(',') === said,
+      )
+
+      return already ? state : push(state, (id) => ({ id, kind: 'outranked', names: action.names, reason }))
+    }
+
     case 'dismissError':
       return { ...state, items: state.items.filter((item) => item.id !== action.id) }
 
@@ -311,7 +365,7 @@ export const reducePanel = (state: PanelState, action: PanelAction, now = Date.n
     }
 
     case 'replayFinished':
-      return withEarlier(applyReplayFinished(finishCompacting(state), now), action.cursor)
+      return withEarlier(revivedAsk(applyReplayFinished(finishCompacting(state), now)), action.cursor)
 
     case 'prompt': {
       const message: UserItem = {
@@ -320,6 +374,7 @@ export const reducePanel = (state: PanelState, action: PanelAction, now = Date.n
         time: formatClock(now),
         tokens: action.tokens,
         quotes: action.quotes,
+        ...(action.editor ? { editor: action.editor } : {}),
       }
 
       // A message written into a running turn starts nothing afresh: the agent carries on with its own,
@@ -456,16 +511,30 @@ export const reducePanel = (state: PanelState, action: PanelAction, now = Date.n
         ...state,
         pendingModel: undefined,
         model: action.model,
+        // The tab's own model either way: an announcement exists precisely so that a tab nobody has
+        // touched is drawn by what it runs on rather than by the setting (see PanelState.ownModel).
         ownModel: action.model,
-        ownSwap: expectingOwnSwap(state, action.model, action.error),
-        // A pick is judged only once a request that could carry it has begun - see PanelState.ownSwapDue.
-        ownSwapDue: false,
-        // Whatever the last pick failed to do is answered by this one: the accent it left says "the model
-        // you chose is not the one working", and the person has just chosen again.
-        stuckPick: undefined,
-        // Whatever the agent had swapped before is answered by a choice of the person's own: the accent
-        // on the button says "you did not pick this", and now they have (see PanelState.switchedFrom).
-        switchedFrom: undefined,
+        // Only a choice is judged, and an announcement is not one (see the `born` half of the action).
+        // The shell names a tab's model at its birth, to every client that joins and after every reset,
+        // and it names the CHOICE it was launched on - "opus[1m]", never the signature the answers carry.
+        // Counted as a pick, that pair was two different models to the comparison below, so a re-attach
+        // to a conversation running happily on the very same model raised a swap nobody had asked for -
+        // and the next signature, being the same model again, was read as the pick never arriving.
+        ...(action.born
+          ? {}
+          : {
+              ownSwap: expectingOwnSwap(state, action.model, action.error),
+              // A pick is judged only once a request that could carry it has begun - see
+              // PanelState.ownSwapDue.
+              ownSwapDue: false,
+              // Whatever the last pick failed to do is answered by this one: the accent it left says "the
+              // model you chose is not the one working", and the person has just chosen again.
+              stuckPick: undefined,
+              // Whatever the agent had swapped before is answered by a choice of the person's own: the
+              // accent on the button says "you did not pick this", and now they have (see
+              // PanelState.switchedFrom).
+              switchedFrom: undefined,
+            }),
       }
       return action.error ? addError(applied, action.error) : applied
     }
@@ -505,6 +574,12 @@ export const reducePanel = (state: PanelState, action: PanelAction, now = Date.n
       // is worth applying: when a frame goes missing and the person asks again, both answers can arrive,
       // and the second would put the same messages in a second time.
       if (action.before !== undefined && action.before !== state.oldestEventUuid) return answered
+
+      // A page asked for with no boundary is the newest page on disk - the right answer only while nothing
+      // on screen can be named (see beginsMidway). Something that can be named arrived while it travelled,
+      // and the newest page on disk now holds that very message: applied, it would stand twice. Counted
+      // as answered, the screen asks again from the name it now has.
+      if (action.before === undefined && state.oldestEventUuid !== undefined) return answered
 
       // The beginning has already been reached, so this is a second copy of the page that reached it: the
       // boundary above stopped moving there and cannot tell the two apart (see reachedStart).
@@ -553,8 +628,12 @@ export const drawnInFeed = (item: FeedItem): item is FeedRowItem =>
  * file". The IDE answers that with the file's own last page, which is what the screen already had: the
  * request to load more brought back the same messages a second time.
  */
-const keptOnDisk = (event: { type?: string; subtype?: string }): boolean =>
-  event.type === 'user' || event.type === 'assistant' || event.subtype === 'local_command'
+const keptOnDisk = (event: { type?: string; subtype?: string; parent_tool_use_id?: string | null }): boolean =>
+  // A subagent's own events are kept in a file of their own, beside the conversation's (see
+  // ClaudeHistory.page): anchored on one, the request named a line the conversation's file does not hold,
+  // and the answer was the file's newest page - the messages already on screen, a second time.
+  !event.parent_tool_use_id &&
+  (event.type === 'user' || event.type === 'assistant' || event.subtype === 'local_command')
 
 /**
  * The first event a feed ever sees is, at that moment, the oldest one it has - remembered once and left
@@ -599,6 +678,17 @@ const withEarlier = (state: PanelState, cursor: string | null | undefined): Pane
 
 /** The mark over a feed that begins mid-conversation - a button wherever there is something to fetch. */
 const EARLIER_CHIP = 'EARLIER'
+
+/**
+ * Whether this feed begins partway through its conversation - the mark above it says so.
+ *
+ * Asked where there is nothing on screen to name in a request for what came before it: a phone opening a
+ * tab whose recent traffic is all a subagent's or a fleet's has no message of the conversation in hand,
+ * and the mark over it used to be a caption with no way past it - "earlier messages are not shown" over
+ * an empty feed. Such a feed asks for the newest page on disk instead (see historyPage above).
+ */
+export const beginsMidway = (items: FeedItem[]): boolean =>
+  items.some((item) => item.kind === 'checkpoint' && item.chip === EARLIER_CHIP)
 
 
 
@@ -792,6 +882,51 @@ const applyReplayFinished = (state: PanelState, now: number): PanelState => {
   )
 
   return { ...state, items, startedAt }
+}
+
+/**
+ * A question the conversation was abandoned on comes back as a live card.
+ *
+ * Every other question out of a replay is a record and nothing more (see AskItem.historic): it was
+ * answered, and the answer stands in the feed right under it. This one was not. The options hung over
+ * the input field, the IDE was closed on them, and the process that asked died with it - so on disk the
+ * call is left with no result at all, and there is nothing after it.
+ *
+ * Left historic, it was the one thing a reopened conversation lost outright. A question is not a row of
+ * its own (see drawnInFeed), so the feed simply ended on whatever the agent had said before asking, and
+ * what it had actually asked - the question, the options, their explanations - was nowhere on screen.
+ * The only way on was to guess at it.
+ *
+ * There is nobody left to answer through the call itself, and the card does not pretend otherwise: the
+ * answer travels as the next message instead, by the road that was already there for exactly this (see
+ * askAnswer in protocol.ts and answerAsk in SessionPermissions). The CLI takes such a resumed
+ * conversation without complaint - a dangling call is dropped as it rebuilds the talk, checked on
+ * 2.1.278 by resuming a transcript that ends on one.
+ *
+ * Three conditions, and each of them is a way the question could be stale instead:
+ *
+ * - **It has to be the last thing in the feed.** Anything below it means the talk moved on without an
+ *   answer - the person's own next message in a conversation that was resumed once already, or the
+ *   "[Request interrupted]" the CLI writes over a turn somebody stopped.
+ * - **Its call must never have come back** (see AskItem.answered). A question closed with the cross
+ *   leaves a refusal rather than answers, so it draws no line under itself - without this it would look
+ *   exactly like an abandoned one.
+ * - **It has to belong to the main stream.** A subagent's question is unanswerable by anybody: the
+ *   agent that asked it ended together with the turn.
+ *
+ * And it lives here rather than in [applyReplayFinished], which a page of older messages goes through
+ * too (see 'historyPage'): there the last item is merely where the page happened to be cut, and the
+ * answer to it is already on screen below.
+ */
+const revivedAsk = (state: PanelState): PanelState => {
+  // The person got ahead of the replay and is already writing in this tab - the same case, and for the
+  // same reason, as the one applyReplayFinished steps aside for.
+  if (state.turnStartedAt !== undefined) return state
+
+  const last = state.items[state.items.length - 1]
+  if (last?.kind !== 'ask' || !last.historic || last.answered || last.taskId !== undefined) return state
+
+  return { ...state, items: [...state.items.slice(0, -1), { ...last, historic: false, reopened: true }] }
 }
 
 /**
@@ -1030,8 +1165,28 @@ const realModel = (model: string | undefined): string | undefined =>
 const expectingOwnSwap = (state: PanelState, model: string, error?: string): boolean | undefined => {
   if (error) return state.ownSwap
   if (!state.streamModel || sameModel(state.streamModel, model)) return state.ownSwap
+  if (!picksAnother(model, state.streamModel)) return state.ownSwap
 
   return true
+}
+
+/**
+ * Does the pick name a model other than the one the answers are already coming on?
+ *
+ * By family, and this is the same yardstick arrivedAsPicked measures the answer by - deliberately so.
+ * The check above it is by sameModel, which compares generations: a pick carries none ("opus[1m]"), a
+ * signature always does ("claude-opus-5[1m]"), so on that pair sameModel says "different models" about
+ * one and the same model, and the guard right above never fired for a pick of a whole family. Picking
+ * the model already at work then raised a wait that nothing could ever answer: the signature that came
+ * next was that same model, and the only reading left for it was "the pick did not take".
+ *
+ * A family the panel does not know ("default", a model of somebody else's provider) settles nothing, and
+ * then something may well be coming: the wait is raised, because it is also what keeps a swap the person
+ * asked for from being announced as the agent's doing.
+ */
+const picksAnother = (pick: string, running: string): boolean => {
+  const family = modelFamily(pick)
+  return family ? family !== modelFamily(running) : true
 }
 
 /**
@@ -1058,7 +1213,17 @@ const noteStreamModel = (state: PanelState, named: string, reason = '', replay =
     // The model being left, signed again while a pick of the person's own is waiting. Two different
     // things look exactly like this, and which one it is depends on whether a request that could carry
     // the pick has begun yet (see PanelState.ownSwapDue).
-    if (!replay && state.ownSwap) return state.ownSwapDue ? pickStuck(state, named) : { ...state, streamModel: named }
+    if (!replay && state.ownSwap) {
+      if (!state.ownSwapDue) return { ...state, streamModel: named }
+
+      // Unless this signature is what was asked for all along: a pick the panel cannot recognise
+      // ("default", a model of somebody else's provider) may be exactly the model already answering, and
+      // accusing it of not arriving is the one thing worse than saying nothing. The same question as on
+      // the arm below, asked here too so that a pick is judged by one yardstick and not by two.
+      if (!arrivedAsPicked(state, named)) return pickStuck(state, named)
+
+      return { ...moved, ownSwap: false, ownSwapDue: false, stuckPick: undefined }
+    }
 
     return moved
   }
@@ -1274,7 +1439,8 @@ const applyAgentEvent = (
        * The text is laid down as the error, and the placeholder that follows is dropped as an echo of it
        * (see alreadyShownAsError): one piece of trouble, one row.
        */
-      const base = event.error === AUTH_FAILED ? addError(answered, placeholderText(blocks), !replay) : answered
+      const base =
+        event.error === AUTH_FAILED ? addError(answered, placeholderText(blocks), { signIn: !replay }) : answered
 
       return applyAssistant(base, blocks, now, replay, event.uuid)
     }
@@ -1289,7 +1455,11 @@ const applyAgentEvent = (
       // put it there: that record is the only trace that the person said anything at all, and without it
       // a past conversation's feed consisted of answers alone.
       const withPrompt = replay ? addReplayedPrompt(noted, event, now) : noted
-      return applyToolResults(withPrompt, blocks, now, replay)
+      // And the same for an answer given to a question with options: the panel wrote that line itself
+      // when the button was pressed, and the transcript kept only the tool's result (see
+      // addReplayedAnswers).
+      const withAnswers = replay ? addReplayedAnswers(withPrompt, event, now) : withPrompt
+      return applyToolResults(withAnswers, blocks, now, replay)
     }
 
     case 'result': {
@@ -1344,8 +1514,19 @@ const applyAgentEvent = (
 
       // The refusal goes into the feed BEFORE the turn's result: it happened earlier, and "Worked 3s"
       // under it reads as the end of this very turn rather than of the next one.
+      //
+      // This is also where a refused REQUEST is told apart from every other ending: the response code
+      // arrives here and nowhere else (see overSampling and AgentResultEvent.api_error_status).
+      //
+      // Never from a replay, for the reason the sign-in's door is never offered there: what the row adds
+      // is an explanation of a route that is being used right now, and a conversation opened from the
+      // history is a record of one that was.
       const withError = finishCompacting(
-        event.is_error && event.result ? addError(state, event.result) : state,
+        event.is_error && event.result
+          ? addError(state, event.result, {
+              sampling: !replay && overSampling(event.api_error_status, event.result),
+            })
+          : state,
       )
 
       /**
@@ -2009,8 +2190,15 @@ const SERVICE_TAGS = [
  *
  * The notification is not merely dropped: before this it goes into the card of the task it speaks about
  * (see applyReplayedTaskNotification).
+ *
+ * The end of such a block is optional, and that is the whole of this line's history. A message over eight
+ * kilobytes is cut down before it is handed to a past conversation (see JournalTrim and HISTORY_STRING_CHARS),
+ * and the cut takes the closing tag with it - so a pair-matching expression found no block at all and the
+ * longest notifications, the ones carrying a whole agent's report, were the ones that landed in the feed
+ * signed with the person's name. A block that is not closed runs to the end of the text: nothing written
+ * by a person follows an opening tag of the CLI's.
  */
-const SERVICE_BLOCK = new RegExp(`<(${SERVICE_TAGS.join('|')})>[\\s\\S]*?</\\1>`, 'g')
+const SERVICE_BLOCK = new RegExp(`<(${SERVICE_TAGS.join('|')})>[\\s\\S]*?(?:</\\1>|$)`, 'g')
 
 /**
  * The wrapper of closing tags a model invents around such a block: it prints the block as though it were
@@ -2115,10 +2303,21 @@ const addReplayedPrompt = (
   // A record written by the CLI rather than the person, and a message of a nested stream: a subagent is
   // written to by the turn rather than by the person, and its correspondence has nothing to do with this
   // feed.
-  if (event.isMeta || event.parent_tool_use_id) return state
+  //
+  // `origin` is asked as well as `isMeta`, because the record that made this necessary carries the second
+  // and not the first: a background agent's report is filed under the person's name, unmarked as internal
+  // (see AgentUserEvent.origin). The text below says the same thing, and is the only word about it in
+  // transcripts written before the field existed - but a long enough report reaches here with its end cut
+  // off, and the field is what holds then.
+  if (event.isMeta || event.parent_tool_use_id || event.origin?.kind) return state
 
-  const text = replayedPromptText(blocksOf(event.message.content))
+  const blocks = blocksOf(event.message.content)
+  const text = replayedPromptText(blocks)
   if (!text) return state
+
+  // The note of what the editor showed is a block of its own and is stripped out of the text above with the
+  // rest of the service blocks - read back here, it is the line under the message again (see editorContext.ts).
+  const editor = editorOfBlocks(blocks)
 
   // The time is taken from when it was said: in a replay "now" is the moment the tab was opened, and the
   // whole past conversation would look like today's.
@@ -2135,6 +2334,62 @@ const addReplayedPrompt = (
     time: formatClock(Number.isNaN(said) ? now : said),
     tokens: tokens.length > 0 ? tokens : [{ kind: 'text', value: text }],
     quotes,
+    // The transcript's name for the line, so a search hit on it can be found in the feed (see rowOf).
+    ...(event.uuid ? { uuid: event.uuid } : {}),
+    ...(editor ? { editor } : {}),
+  }))
+}
+
+/**
+ * The options a question with options was closed with, out of a past conversation's replay.
+ *
+ * A live conversation puts this line into the feed itself, at the press of the card's button (see
+ * sendAnswers in App.tsx) - the transcript keeps no message of the kind, only the tool's own result.
+ * Without it a conversation opened from the history had a hole exactly where a decision had been taken:
+ * the question itself is not a row (see drawnInFeed), the answer was nowhere at all, and the agent
+ * below simply carried on knowing something nobody on screen had told it.
+ *
+ * Shaped exactly as the live one: the question as a token of its own, so it is dimmed as the echo it is,
+ * and the answer beside it as the person's own words (see UserToken.echo). A reopened conversation ought
+ * to read the way it read at the desk.
+ */
+const addReplayedAnswers = (
+  state: PanelState,
+  event: Extract<AgentEvent, { type: 'user' }>,
+  now: number,
+): PanelState => {
+  const answers = event.toolUseResult?.answers
+  if (!answers || typeof answers !== 'object') return state
+
+  // The result of a question rather than of any other tool: `toolUseResult` stands beside every result
+  // there is, and `answers` is only this tool's word - but the card's identifier is what makes it
+  // certain, and it costs a look at the feed.
+  const closes = blocksOf(event.message.content).some(
+    (block) =>
+      block.type === 'tool_result' &&
+      state.items.some((item) => item.kind === 'ask' && item.id === block.tool_use_id),
+  )
+  if (!closes) return state
+
+  const pairs = Object.entries(answers).filter(
+    (pair): pair is [string, string] =>
+      pair[0].trim().length > 0 && typeof pair[1] === 'string' && pair[1].trim().length > 0,
+  )
+  if (pairs.length === 0) return state
+
+  // The moment it was answered rather than the moment the tab was opened - as with every other replayed
+  // line (see addReplayedPrompt).
+  const said = Date.parse(event.timestamp ?? '')
+
+  return push(state, (id) => ({
+    id,
+    kind: 'user',
+    time: formatClock(Number.isNaN(said) ? now : said),
+    tokens: pairs.flatMap<UserToken>(([question, answer], index) => [
+      { kind: 'text', value: index === 0 ? question : `\n\n${question}`, echo: true },
+      { kind: 'text', value: `\n${answer}` },
+    ]),
+    quotes: [],
     // The transcript's name for the line, so a search hit on it can be found in the feed (see rowOf).
     ...(event.uuid ? { uuid: event.uuid } : {}),
   }))
@@ -2211,6 +2466,14 @@ const applyToolResults = (
         outcome: isError ? ('failed' as const) : ('ok' as const),
         log: appendAgentLog(item.log, detailFor(text).map((line): DetailLine => ({ ...line, tone }))),
       }
+    }
+
+    // A question draws no card out of a replay and needs none of the above - but it does need to know
+    // that its call came back at all: that is the whole difference between a question that was dealt
+    // with and one the conversation was simply abandoned on (see revivedAsk).
+    if (item.kind === 'ask') {
+      if (item.answered || !results.some((candidate) => candidate.tool_use_id === item.id)) return item
+      return { ...item, answered: true }
     }
 
     if (item.kind !== 'toolGroup') return item

@@ -1,10 +1,14 @@
-# Amazing Claude Code GUI - relay
+# Amazing Codex GUI - relay
 
 A tiny server that introduces an IDE to a phone and passes sealed envelopes between them.
 
 It exists because a plugin cannot reach into your home network from the outside. The IDE dials out to
 this server and holds the connection open; your phone dials out to the same server; frames go one way
 and the other. That is the whole job.
+
+It came over with the rest of the code from Amazing Claude Code GUI (at its 0.12.13) and is run
+separately from that project's relay: the relay also serves the phone its client, so the host a phone
+was paired through decides which client it runs, and only this fork's relay serves this fork's.
 
 > **Licensed Apache-2.0**, separately from the plugin around it, which is source-available under the
 > Elastic License 2.0. The plugin's licence forbids offering the software to third parties as a hosted
@@ -25,7 +29,7 @@ it is, that is a move rather than an untangling - history and all:
 ```
 # From the root of the plugin's repository.
 git subtree split --prefix=relay -b relay-only
-git push git@github.com:<owner>/acc-relay.git relay-only:main
+git push git@github.com:<owner>/acx-relay.git relay-only:main
 ```
 
 Two things to do on the other side afterwards: drop `relay` from `pnpm-workspace.yaml` here, and
@@ -43,7 +47,7 @@ which permission you granted, or which agent belongs to which person.
 
 That is a property of the code rather than a promise: there is no branch here that parses a body, and
 no dependency that could. Routing reads two fixed offsets in a 42-byte header. From phase 3 of the
-plugin's plan onwards the body is also encrypted end to end, and this server does not change for it —
+plugin's plan onwards the body is also encrypted end to end, and this server does not change for it:
 it never knew the difference.
 
 **It keeps nothing on disk.** No database, no volume, no `DATABASE_URL`. The whole state is a map of
@@ -52,15 +56,15 @@ restart empties both; the two ends reconnect and catch up from the journal the I
 this server's disk can leak, because nothing is there.
 
 **What honestly does leak:** the timings. Whoever runs the relay can see when an IDE was connected and
-how much traffic went by — that is, roughly, your working hours and how busy they were. Addresses are
+how much traffic went by, which is, roughly, your working hours and how busy they were. Addresses are
 stable, so sessions can be linked over time. Running your own copy turns that list into "logs on your
 own server", which is why the next section exists.
 
 ## Run your own
 
 ```
-docker build -t acc-relay .
-docker run -p 4450:4450 acc-relay
+docker build -t acx-relay .
+docker run -p 4450:4450 acx-relay
 ```
 
 Or without Docker, with Node 22 or newer:
@@ -75,76 +79,108 @@ Then point the plugin at it: **Remote access → relay address** in the panel's 
 
 The address must be `wss://` in real use. `ws://` is accepted only for `localhost`, and not out of
 strictness: browsers give a page `crypto.subtle` only in a secure context, so a relay served over
-plain HTTP does not weaken the encryption — it removes it.
+plain HTTP does not weaken the encryption - it removes it.
 
-### How the public one is deployed
+A copy built this way serves no phone client: `public/` is empty in git, and the client is built from
+the plugin's repository and dropped in before the image is made (see below). Either do the same, or
+host the client elsewhere and list its origin in `RELAY_ALLOWED_ORIGINS`.
 
-The relay that the plugin points at by default (`wss://relay.mzpizote.com`) runs on an ordinary
-server under Coolify. Until this directory becomes a repository of its own (see "Where this lives")
-there is no build from git to hook up: the sources are copied to the server, the image is built
-there, and Coolify pulls it from a registry running on the same machine.
+### How this fork's relay is deployed
+
+The relay the plugin points at by default, `wss://relay-codex.mzpizote.com`, is the Coolify application
+`acx-relay` on the same server as the Claude project's `acc-relay` (`relay.mzpizote.com`) and
+`acc-relay-dev` (`relay-dev.mzpizote.com`). Until this directory becomes a repository of its own (see
+"Where this lives") there is no build from git to hook up: the sources are copied to the server, the
+image is built there, and Coolify pulls it from the registry running on that machine. It is one
+command:
 
 ```
-# 1. The phone's own files. They are built from the plugin's repository, not from this one, and this
-#    server has nothing to serve without them.
-cd ../webview && pnpm build:mobile
-rm -rf ../relay/public && mkdir -p ../relay/public
-cp -R dist-mobile/. ../relay/public/
-
-# 2. The sources, as they are. COPYFILE_DISABLE keeps macOS from packing its own metadata beside
-#    every file - those turn into "._name" files inside the image and are served as if they were the
-#    client's.
-cd ../relay
-COPYFILE_DISABLE=1 tar czf /tmp/relay.tgz --exclude=node_modules --exclude=dist .
-scp /tmp/relay.tgz root@<server>:/root/apps/
-
-# 3. The image, built on the server and pushed to the registry running there.
-ssh root@<server> 'cd /root/apps/acc-relay && rm -rf public dist && tar xzf ../relay.tgz && \
-  docker build -t 127.0.0.1:5000/acc-relay:local . && docker push 127.0.0.1:5000/acc-relay:local'
-
-# 4. The deploy itself, through Coolify's API.
-python3 cool.py POST '/deploy?uuid=<uuid of acc-relay>&force=true'
+./scripts/relay-deploy.sh            # the phone's client is rebuilt, then the server
+./scripts/relay-deploy.sh --no-web   # server only, when only relay/src has moved
 ```
 
-`rm -rf public dist` before unpacking is not tidiness: the archive is unpacked over what is already
-there, so a file that has left the build would otherwise stay in the image for good.
+What it does, in order:
+
+1. Checks that the Coolify application it is about to redeploy (`APP_UUID` at the top of the script)
+   answers on `https://relay-codex.mzpizote.com` and pulls `127.0.0.1:5000/acx-relay`. A uuid of one
+   of the Claude relays fails this and nothing happens.
+2. Asks before going on (`--yes` skips the question), because phones are paired with this relay.
+3. Builds the phone's client from `webview/` (`pnpm build:mobile`), stages it in `relay/public/`, and
+   checks that what is staged is this fork's client: the shell titled Amazing Codex GUI, a manifest
+   named Amazing Codex, no Amazing Claude Code anywhere in the shell, the manifest or the service
+   worker, and a privacy page built from this repository's `PRIVACY.md`. That step is
+   `scripts/relay-client.sh` on its own.
+4. Copies the sources to `/root/apps/acx-relay` on the server (emptied first, so a file that has left
+   the build does not stay in the image), builds `127.0.0.1:5000/acx-relay:local` there and pushes it.
+5. Deploys through Coolify's API and waits for the deployment to finish.
+6. Waits until `/healthz` says `ok`, the served manifest is this fork's, and the bundle the page names
+   is the one just built.
 
 **The one thing that will catch you out:** `public/` is a build artefact, so it is ignored by git -
 and an upload that honours ignore files at and below the directory it uploads would drop it. That is
 why the rule lives in the repository's root `.gitignore` rather than in `relay/.gitignore`. Keep it
 that way, or the phone will be served nothing and the fault will look like the plugin's.
 
-Two things are worth checking after a deploy:
+Two things are worth knowing after a deploy:
 
 - the service must not sleep - it holds long-lived sockets, so anything that scales it to zero will
   break reconnection in a way that looks like a bug in the plugin;
-- the client it serves is the one that was just built: `curl https://<relay>/ | grep assets/` names
-  the bundle, and a phone with the app installed may need a reload before its service worker lets go
-  of the previous one.
+- a phone with the app installed may need a reload before its service worker lets go of the previous
+  client.
 
 A phone dials whichever host served it the client rather than the address written down when it was
-paired (see relayAddress in the mobile client), so moving the relay to another home does not ask
-everybody to pair again - it asks them to reload.
+paired (see relayAddress in the mobile client), so moving the relay to another server behind the same
+address asks everybody to reload, not to pair again. A new address is a different matter: the phone's
+keys live in the storage of the origin that served it, so phones paired through the Claude project's
+relay before this fork had its own pair again here, with a fresh QR code.
 
 Horizontal scaling is out of scope. Two replicas would need a shared bus between them, and this
 server's whole value is that it is small enough to read in one sitting.
 
-### The one for development
+### First deploy
 
-A second copy of all of the above runs beside it as `acc-relay-dev`, at `wss://relay-dev.mzpizote.com`:
-same image, same sources, its own VAPID pair, its own sources directory on the server
-(`/root/apps/acc-relay-dev`) and its own tag in the registry (`acc-relay-dev:local`). It exists because
-the public one has other people's phones paired with it, and a deploy there is not something to do ten
-times while trying a change out.
+Done once, by hand, before `scripts/relay-deploy.sh` has anywhere to deploy to. Everything mirrors
+`acc-relay`, with these differences: the container listens on **4450** (the Claude project's image
+defaults to 8080); the image is `acx-relay`, not `acc-relay`; the VAPID pair is new; and the domain
+is `relay-codex.mzpizote.com`.
+
+1. **DNS.** An `A` record `relay-codex.mzpizote.com` → `40.160.85.25` in Cloudflare, **not proxied**
+   (grey cloud): Let's Encrypt cannot issue the certificate through the proxy.
+2. **VAPID pair.** `pnpm --filter amazing-codex-relay build && node relay/dist/keys.js`. A new pair,
+   not a copy of `acc-relay`'s: the pair is what push services know this relay by. Keep a copy in
+   `secrets/relay-vapid.env` (ignored by git).
+3. **Coolify application.** A project `acx-relay`, and in it an application of type **Docker Image**:
+   image `127.0.0.1:5000/acx-relay`, tag `local`, ports exposes `4450`, domain
+   `https://relay-codex.mzpizote.com` (bare, no `www`), health check path `/healthz`. Do not deploy it
+   yet - the image does not exist until step 5.
+4. **Environment.** `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` (a `mailto:` of whoever
+   runs it). Nothing else is needed: the defaults in the table below are the ones the relay runs on,
+   and `PORT` defaults to 4450, the port exposed above. No volume, no database.
+5. **The uuid** of the new application goes into `APP_UUID` at the top of `scripts/relay-deploy.sh`,
+   and then `./scripts/relay-deploy.sh` builds the image, pushes it and makes the first deploy.
+6. **Check:** `curl https://relay-codex.mzpizote.com/healthz` says `ok`;
+   `curl https://relay-codex.mzpizote.com/v1/push/key` says `"enabled":true`;
+   `https://relay-codex.mzpizote.com/manifest.webmanifest` is named Amazing Codex;
+   `https://relay-codex.mzpizote.com/privacy` is this repository's `PRIVACY.md`.
+
+### On this machine
+
+There is no development relay on the server for this fork. A change to the relay or to the phone's
+client is tried on this machine first:
 
 ```
-./scripts/relay-dev.sh            # the phone's client is rebuilt, then the server
-./scripts/relay-dev.sh --no-web   # server only, when only relay/src has moved
+./scripts/relay-dev.sh            # the phone's client is rebuilt, then the relay, then it runs
+./scripts/relay-dev.sh --no-web   # relay only, when only relay/src has moved
 ```
 
-Point a plugin at it the same way as at any other relay - **Remote access → relay address** in the
-panel's menu. The phone needs pairing separately: it dials whichever host served it the client, and
-that host is a different origin, so the keys of the public pairing are not there and are not touched.
+That serves the same two things the image carries at `http://localhost:4450` (the project's port in
+the machine's port registry) and stays in the foreground until Ctrl-C. Point a sandbox at it with
+`./gradlew runIde -PopenProject=sandbox-project -PremoteRelay=ws://localhost:4450`, and open
+`http://localhost:4450` in a browser on the same machine for the phone's side. A browser counts
+localhost as secure, so pairing and the encryption work there exactly as on a phone. Notifications are
+off: there is no VAPID pair in that environment.
+
+## Configuration
 
 | Variable | Default | What it is |
 |---|---|---|
@@ -156,14 +192,14 @@ that host is a different origin, so the keys of the public pairing are not there
 | `RELAY_RATE_FRAMES_PER_MINUTE` | `6000` | A ceiling against a stuck loop, not a quota |
 | `RELAY_MAX_CONNECTIONS_PER_IP` | `32` | Sockets from one caller. Counted only when this server can see who called - behind a proxy that does not say, every caller looks like the proxy |
 | `RELAY_MAX_CONNECTIONS` | `2000` | Sockets in total. The ceiling that holds whoever is in front of this server |
-| `RELAY_ALLOWED_ORIGINS` | — | Browser origins that may open a socket, comma separated. Empty means "the one this server serves the client from"; the plugin sends no origin and is never turned away |
+| `RELAY_ALLOWED_ORIGINS` | - | Browser origins that may open a socket, comma separated. Empty means "the one this server serves the client from"; the plugin sends no origin and is never turned away |
 | `RELAY_SUBSCRIBE_MAX_BYTES` | `8192` | The biggest a push subscription may be |
 | `RELAY_MAX_SUBSCRIPTIONS` | `10000` | How many are held at once |
-| `RELAY_PUSH_HOSTS` | — | Extra push service hosts, comma separated. The known browsers' are built in |
+| `RELAY_PUSH_HOSTS` | - | Extra push service hosts, comma separated. The known browsers' are built in |
 | `RELAY_STATIC_DIR` | `./public` | Where the phone's own files are. Empty turns serving them off |
 | `RELAY_LOG_LEVEL` | `info` | `silent` says nothing at all |
-| `VAPID_PUBLIC_KEY` | — | Push notifications. Absent means the relay works but cannot ring anybody |
-| `VAPID_PRIVATE_KEY` | — | Keep private: with it somebody can send notifications that look like yours |
+| `VAPID_PUBLIC_KEY` | - | Push notifications. Absent means the relay works but cannot ring anybody |
+| `VAPID_PRIVATE_KEY` | - | Keep private: with it somebody can send notifications that look like yours |
 | `VAPID_SUBJECT` | `mailto:relay@example.com` | How a push service can reach whoever runs this |
 
 ### Notifications
@@ -177,7 +213,7 @@ blob none of the three can read.
 ## Logging
 
 One rule, and it is not negotiable: **the body of a frame is never logged.** Not on an error path
-either — that is exactly where "attach the bytes so we can see what broke" gets written. What a log
+either, which is exactly where "attach the bytes so we can see what broke" gets written. What a log
 line may contain is what happened, the first four bytes of an address, a size and a time.
 
 IP addresses are used for the per-IP connection limit and are held in memory for that alone - never
@@ -188,13 +224,14 @@ written to a log line, including the one that refuses a caller for being over it
 | | | |
 |---|---|---|
 | `GET` | `/healthz` | liveness |
-| `GET` | `/v1/info` | version, wire range, limits — read by the plugin before it connects |
+| `GET` | `/v1/info` | version, wire range, limits - read by the plugin before it connects |
 | `WS` | `/v1/agent?id=…` | the IDE. One live connection per address; a new one displaces the old with code 4009 |
 | `WS` | `/v1/device?id=…` | a phone. Several are allowed |
 | `GET` | `/v1/push/key` | the public half of the VAPID pair, so a client can subscribe |
 | `POST` | `/v1/push/subscribe` | a device says where its notifications should be sent |
+| `GET` | `/privacy` | the privacy policy, built from the repository's `PRIVACY.md` with the client |
 | `GET` | `/*` | the phone's own files, falling back to the shell |
 
 There is deliberately **no endpoint for pairing**. Pairing is just traffic: the phone learns an
 address from the QR code and sends a frame to it, and this server routes it like any other. So there
-is no code here about pairing at all — and nothing about it to get wrong or to leak.
+is no code here about pairing at all, and nothing about it to get wrong or to leak.

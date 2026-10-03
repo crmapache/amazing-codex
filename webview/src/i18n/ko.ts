@@ -25,17 +25,22 @@ export const ko: Dict = {
       mcp: { title: 'MCP 서버', hint: '상태 · 로그인 · 다시 연결' },
       plugins: { title: '플러그인', hint: '설치됨 · 둘러보기 · 마켓플레이스' },
       settings: { title: '설정', hint: '패널의 동작과 소리' },
+      appearance: { title: '모양', hint: '테마와 글자 크기' },
       sounds: { title: '알림음', hint: '패널이 부를 때' },
       calmColors: { title: '편안한 색', hint: '계기를 어떤 색으로 그릴지' },
+      indicators: { title: '표시기', hint: '입력창 주변에 남길 것' },
       remote: { title: '원격 접속', hint: '상태 · 릴레이 · 연결된 기기' },
       remoteAbout: { title: '밖으로 나가는 것', hint: '켜기 전에 읽어 주세요' },
       newChat: { title: '새 대화', hint: '새 탭이 무엇으로 시작하는지' },
+      restoreTabs: { title: '시작 시 탭', hint: '재시작 후 돌아오는 것' },
+      shareEditor: { title: '메시지에 편집기 포함', hint: '메시지와 함께 가는 것' },
       newChatModel: { title: '기본 모델', hint: '새 탭이 시작하는 모델' },
       newChatEffort: { title: '기본 사고량', hint: '새 탭이 얼마나 깊이 생각하는지' },
       newChatMode: { title: '기본 모드', hint: '새 탭이 시작하는 모드' },
       composerLayout: { title: '입력창 배치', hint: '입력창을 두는 자리' },
       pasteCollapse: { title: '붙여넣은 텍스트', hint: '붙여넣기를 칩으로 접는 기준' },
       sendKey: { title: '메시지 보내기', hint: '어떤 키로 보낼지' },
+      codexConfig: { title: 'CODEX 설정', hint: '자체 config.toml - /config로 바뀌는 것' },
       improvePrompt: { title: '프롬프트 다듬기', hint: '별 버튼이 요청하는 내용' },
       voice: { title: '음성 입력', hint: '타이핑 대신 말하기' },
       voiceLanguage: { title: '말하는 언어', hint: '받아쓰기가 알아들을 언어' },
@@ -45,6 +50,8 @@ export const ko: Dict = {
       accounts: { title: 'Codex 계정', hint: '어느 구독으로 일하는지' },
       feedback: { title: '피드백', hint: '버그, 아이디어, 그냥 인사도 좋아요' },
       feedbackLog: { title: '함께 보내는 내용', hint: '보내기 전 전체 보고서' },
+      usageStats: { title: '사용 통계', hint: '익명 집계, 허용할 때만' },
+      usageStatsReport: { title: '보내는 내용', hint: '다음에 보낼 보고서 전체' },
     },
 
     rows: {
@@ -54,7 +61,7 @@ export const ko: Dict = {
       plugins: { label: '플러그인', sub: '설치됨, 둘러보기, 마켓플레이스' },
       remote: { label: '원격 접속', sub: '상태, 릴레이, 연결된 기기' },
       accounts: { label: 'Codex 계정', sub: '로그아웃 없이 전환하기' },
-      settings: { label: '설정', sub: '알림음, 새 대화, 배치, 언어' },
+      settings: { label: '설정', sub: '테마, 알림음, 새 대화, 언어' },
       feedback: { label: '피드백 보내기', sub: '버그, 아이디어, 그냥 인사도 좋아요' },
     },
 
@@ -69,16 +76,22 @@ export const ko: Dict = {
 
   settings: {
     rows: {
+      appearance: { label: '모양', sub: '테마와 글자 크기' },
       sounds: { label: '알림음', sub: '패널이 부를 때' },
       calmColors: { label: '편안한 색', sub: '계기에 색을 얼마나 남길지' },
+      indicators: { label: '표시기', sub: '입력창 곁에 남길 수치' },
       newChat: { label: '새 대화', sub: '모델, 사고량, 권한 모드' },
+      restoreTabs: { label: '시작 시 탭', sub: '열려 있던 탭을 초안과 함께 다시 열기' },
+      shareEditor: { label: '열린 파일과 선택 영역', sub: '메시지마다 함께 가는 것' },
       composerLayout: { label: '입력창 배치', sub: '입력창을 두는 자리' },
       pasteCollapse: { label: '붙여넣은 텍스트', sub: '붙여넣기를 칩으로 접는 기준' },
       sendKey: { label: '메시지 보내기', sub: '어떤 키로 보낼지' },
+      codexConfig: { label: 'Codex 설정', sub: '자체 config.toml과 이 프로젝트의 신뢰' },
       improvePrompt: { label: '프롬프트 다듬기', sub: '별 버튼이 요청하는 내용' },
       voice: { label: '음성 입력', sub: '내 Deepgram 키로 받아쓰기' },
       customModels: { label: '커스텀 모델', sub: 'Codex에 없는 모델' },
       language: { label: '언어', sub: '패널이 쓰는 언어' },
+      usageStats: { label: '사용 통계', sub: '플러그인 개선을 돕는 익명 집계' },
     },
 
     improveSummary: { builtIn: '기본', custom: '직접 작성' },
@@ -128,6 +141,81 @@ export const ko: Dict = {
     volumeOf: (sound) => `볼륨: ${sound}`,
   },
 
+  appearance: {
+    size: '글자 크기',
+    theme: '테마',
+    followConsole: '콘솔 글꼴과 같게',
+    followConsoleSub: (size) => `IDE의 콘솔 글꼴을 따라감 - 지금은 ${size}`,
+    own: '별도 크기',
+    ownSub: '패널만 - 편집기, 터미널, 콘솔은 그대로',
+    smaller: '작게',
+    larger: '크게',
+    followIde: 'IDE와 같게',
+    followIdeSub: (theme) => `IDE를 따라감 - 지금은 ${theme}`,
+    dark: '어두운 테마',
+    darkSub: 'IDE가 밝아도 항상 어둡게',
+    light: '밝은 테마',
+    lightSub: 'IDE가 어두워도 항상 밝게',
+    darkWord: '어두운 테마',
+    lightWord: '밝은 테마',
+    auto: '자동',
+  },
+
+  restoreTabs: {
+    label: '탭 복원',
+    hint: '프로젝트를 다시 열면 탭과 그 대화, 쓰다 만 글이 돌아옵니다 - IDE가 비정상 종료된 뒤에도',
+    note: '아무것도 다시 실행하지 않습니다. 에이전트는 탭을 열거나 거기에 입력할 때만 시작됩니다. 초안은 이 컴퓨터의 IDE 자체 폴더에만 저장됩니다.',
+    on: '켜짐',
+    off: '꺼짐',
+  },
+
+  shareEditor: {
+    label: '편집기 내용을 함께 보내기',
+    hint: '메시지마다 편집기에 열린 파일과 그 안에서 선택한 줄을 함께 보내요. 터미널에서 Codex의 /ide가 하는 방식과 같아요',
+    note: '이 패널에서만 적용돼요: 휴대폰에서 쓴 메시지에는 편집기 내용이 붙지 않아요. 메시지 하나만 빼고 보낼 수도 있어요 - 입력창의 파일 칩을 누르세요.',
+    on: '켜짐',
+    off: '꺼짐',
+  },
+
+  usageStats: {
+    label: '익명 사용 통계 보내기',
+    hint: '패널을 쓰는 동안 하루에 몇 번: 어떤 기능을 얼마나 자주 쓰는지, 세션이 얼마나 이어지는지',
+    lastSent: (when: string) => `마지막 전송: ${when}`,
+    notYet: '아직 보낸 것이 없어요 - 다음에 메시지를 보낼 때 첫 보고서가 나가요.',
+    sentTitle: '보내는 것',
+    sent: [
+      '하루 단위 집계: 패널에서 보낸 시간(분), 메시지, 답변, 대화, 편집',
+      '작업 한 번이 얼마나 이어졌는지 - 언제 시작했는지는 보내지 않아요',
+      '어떤 기능을 얼마나 자주 썼는지',
+      '기본 도구, Codex 자체 모델 이름, 기본 명령의 이름',
+      '플러그인·IDE·Codex 버전, 운영체제, 패널 언어, 설정 상태',
+      '이 컴퓨터에서 만든 무작위 ID - 컴퓨터마다 날짜를 구분하는 데만 써요',
+    ],
+    neverTitle: '절대 보내지 않는 것',
+    never: [
+      '메시지, 답변, 코드, 파일 이름이나 경로',
+      '프로젝트 이름, 직접 만든 명령·MCP 서버·모델의 이름',
+      'Codex나 ChatGPT 계정, 이메일, API 키 - IP 주소도 저장하지 않아요',
+      '토큰 수, 비용, 일하는 시간대',
+    ],
+    offNote: '끄면 보고서 전송이 멈추고, 이 컴퓨터의 ID로 이미 보낸 모든 것을 지우도록 서비스에 요청해요.',
+    seeReport: '보내는 내용 정확히 보기',
+    privacy: '개인정보 처리방침',
+    reportNote: '다음에 보낼 보고서 전체예요. 이것 말고는 아무것도 함께 가지 않아요.',
+    building: '보고서를 만드는 중…',
+    on: '켜짐',
+    off: '꺼짐',
+    unasked: '아직 묻지 않음',
+    card: {
+      label: '익명',
+      title: '플러그인 개선을 도와주시겠어요?',
+      body: '패널을 어떻게 쓰는지 익명 집계로 보내요: 어떤 기능을, 얼마나 자주, 얼마나 오래. 코드, 메시지, 파일 이름, 누구인지 알 수 있는 것은 절대 보내지 않아요. 설정에서 언제든 끌 수 있어요.',
+      allow: '허용',
+      decline: '괜찮아요',
+      more: '보내는 내용',
+    },
+  },
+
   calmColors: {
     sample: '단계마다 하나씩',
     label: '계기의 색',
@@ -135,6 +223,28 @@ export const ko: Dict = {
     keeps: '다른 건 그대로입니다. 오류는 빨간색으로 남고, 권한 요청도 그대로예요. 그건 실제로 일어난 일이지 기분이 아니니까요.',
     full: '전체 색',
     none: '한 가지 색',
+  },
+
+  indicators: {
+    contextBar: { label: '컨텍스트 막대', hint: '대화가 길어질수록 채워지는 입력창 위의 띠' },
+    contextFigure: {
+      label: '컨텍스트 수치',
+      hint: '막대 끝의 “ctx 42%” - 기본 배치에서만; 좁은 배치에서는 막대의 툴팁에 있어요',
+    },
+    fiveHour: { label: '5시간 한도', hint: '요금제 5시간 창의 링' },
+    week: { label: '주간 한도', hint: '요금제 주간 창의 링' },
+    modelWeek: {
+      label: '추가 한도',
+      named: (limit) => `${limit} 한도`,
+      hint: '요금제의 두 한도 외에 Codex가 알려 주는 한도 - 요금제에 있을 때만 보여요',
+    },
+    spending: {
+      label: '지출 한도',
+      hint: 'Business 시트의 월 지출 한도 링 - 한도가 있는 시트에서만 보여요',
+    },
+    tokens: { label: '오늘의 토큰', hint: '오늘 쓴 토큰 (모든 프로젝트 합계)' },
+    feedback: { label: '피드백 버튼', hint: '양식을 여는 말풍선 - 메뉴에서는 언제든 열 수 있어요' },
+    thanks: { label: '하트', hint: '별, 리뷰, 친구에게 한마디, 또는 후원' },
   },
 
   history: {
@@ -268,11 +378,6 @@ export const ko: Dict = {
       save: '시간 설정',
       nothing: '이 프로젝트에서 시각을 기다리는 것은 없습니다.',
     },
-    duplicate: '복제',
-    delete: '삭제',
-    deleteTitle: '이 시나리오를 삭제할까요?',
-    deleteRun: '이 실행 삭제',
-    deleteRunTitle: '이 실행을 삭제할까요?',
     queue: {
       add: '대기열에 추가',
       oneAtATime: '순서대로 하나씩',
@@ -307,6 +412,12 @@ export const ko: Dict = {
       emptyNote: '여기에 작업 묶음을 넣어 두면 앞의 작업이 끝나는 대로 시작합니다.',
       unread: '대기열을 읽지 못했습니다. 이 컴퓨터의 파일이 손상되었을 수 있습니다. 잃은 것은 없습니다 - 읽지 못한 목록은 절대 덮어쓰지 않습니다.',
     },
+    duplicate: '복제',
+    moveRow: '끌어서 다른 위치나 다른 선반으로 옮기기',
+    delete: '삭제',
+    deleteTitle: '이 시나리오를 삭제할까요?',
+    deleteRun: '이 실행 삭제',
+    deleteRunTitle: '이 실행을 삭제할까요?',
     running: '실행 중',
     runningNote: '모두 같은 작업 복사본 위에서',
     runningHere: (n: number): string => `${n}개 실행 중`,
@@ -333,6 +444,7 @@ export const ko: Dict = {
       state: '상태',
     },
     moreRuns: (count: number): string => `${count}개 더 보기`,
+    fewerRuns: '접기',
     shelves: {
       project: '이 저장소 안에',
       projectNote: '저장소와 함께 이동 · 여기서 일하는 모두가 가짐',
@@ -375,6 +487,7 @@ export const ko: Dict = {
       retries: '다시 시킬 횟수를 다 썼습니다',
       stopped: '직접 중단함',
       undone: '끝내지 못함',
+      headGaveUp: '메인 스레드도 끝내지 못함',
     },
     outcomes: {
       scenarioBroken: '이 시나리오는 지금 상태로는 실행할 수 없습니다. 열어서 무엇이 잘못됐는지 보세요.',
@@ -388,6 +501,9 @@ export const ko: Dict = {
       runGone: '그 실행은 더 이상 없습니다.',
       runNotResumable: '이 실행은 이어갈 수 없습니다. 메인 스레드가 한 번도 뜨지 않았습니다.',
       queueNotWritten: '대기열을 디스크에 기록하지 못했습니다.',
+      scenarioNotMoved: '시나리오를 다른 선반으로 옮기지 못했습니다.',
+      scenarioOnBothShelves: '다른 선반에 같은 식별자의 시나리오가 이미 있어서 이 시나리오는 제자리에 두었습니다.',
+      orderNotWritten: '선반의 새 순서를 디스크에 기록하지 못했습니다.',
       unknown: '무언가 잘못됐습니다.',
     },
     run: {
@@ -423,6 +539,8 @@ export const ko: Dict = {
       passOfUpTo: (pass, passes) => `최대 ${passes}회 중 ${pass}회차`,
       headSaid: '메인 스레드',
       sentBack: (n) => `${n}번 다시 시켰습니다`,
+      takenOver: (why) => `메인 스레드가 넘겨받음: ${why}`,
+      takingOver: '메인 스레드가 마무리하는 중',
       allow: '허용',
       deny: '거절',
       send: '보내기',
@@ -473,6 +591,9 @@ export const ko: Dict = {
       onQuestion: '질문이 오면',
       questionHead: '스스로 답함',
       questionStop: '멈춰서 기다림',
+      onGiveUp: '카드가 끝내지 못하면',
+      giveUpStop: '실행 중지',
+      giveUpHead: '직접 마무리함',
       retries: '다시 시키기',
       noRetries: '하지 않음',
       retriesCount: (n: number): string => `최대 ${n}번`,
@@ -706,11 +827,17 @@ export const ko: Dict = {
     send: '보내기',
     run: '실행',
     runHint: '당신의 셸에서 실행돼요 - Codex는 다음 메시지에서 출력을 봅니다',
+    askAside: '옆에서 묻기',
+    askAsideHint: 'Codex가 대화 내용으로 답하고 작업을 계속해요',
     improveEmpty: 'Codex가 아무것도 돌려주지 않아서 입력창에 넣을 게 없어요.',
     improveChanged: '다시 쓰는 동안 초안이 바뀌어서 그대로 뒀어요.',
     improveTerminal: '터미널 명령은 다시 쓰지 않아요',
     voice: '음성 입력',
     voiceStop: '받아쓰기 끝내기',
+    editor: {
+      on: (place) => `Codex가 이 메시지와 함께 ${place}을(를) 봐요 · 클릭하면 빼요`,
+      off: (place) => `${place}은(는) 이 메시지에서 빠져요 · 클릭하면 함께 보내요`,
+    },
   },
 
   header: {
@@ -726,8 +853,28 @@ export const ko: Dict = {
     closeRun: '이 실행 닫기',
     conversations: '대화',
     newSession: '새 대화',
+    renameTab: '대화 이름 바꾸기',
     menu: '메뉴',
     watchers: (n) => `다른 ${n}곳에서 이 프로젝트를 보고 있어요`,
+  },
+
+  side: {
+    title: '잠깐 질문',
+    unseen: '에이전트는 이걸 보지 못해요',
+    thinking: '옆에서 생각 중',
+    retrying: (attempt: number, max: number, seconds: number): string =>
+      `API 오류, ${seconds}초 후 다시 시도 (${attempt}/${max})`,
+    cancel: '취소',
+    cancelled: '취소했어요',
+    askAgain: '다시 묻기',
+    empty: '답이 오지 않았어요',
+    failed: { ended: '답하기 전에 대화가 멈췄어요', timeout: '10분 동안 답이 없어요', refused: 'Codex가 답하지 못했어요' },
+    copy: '답 복사',
+    close: '닫기 (Esc)',
+    notSaved: '채팅에 저장되지 않아요',
+    askInChat: '채팅에서 묻기',
+    askInChatHint: '질문을 일반 메시지로 입력란에 옮겨요 - 거기서는 Codex가 파일을 바꾸고 명령을 실행할 수 있어요',
+    hint: '/btw 또는 /side 다음에 질문을 입력하세요. Codex는 작업을 멈추지 않고 이 대화 내용으로 답해요 - 파일을 읽을 수는 있지만 아무것도 바꾸지 않아요 - 답은 채팅에 남지 않아요.',
   },
 
   thanks: {
@@ -740,6 +887,8 @@ export const ko: Dict = {
     share: '친구에게 알리기',
     shareSub: '소개 한 줄과 링크를 복사해요',
     shareCopied: '복사했어요 - 원하는 곳에 붙여 넣으세요',
+    tip: '후원하기',
+    tipSub: 'Ko-fi에서 한 번 또는 매달',
     shareText:
       'Amazing Codex GUI 한번 봐 - JetBrains IDE 안에 Codex를 제대로 된 패널로 넣어줘: https://github.com/crmapache/amazing-codex',
   },
@@ -758,6 +907,8 @@ export const ko: Dict = {
     signInAs: (account: string): string => `${account}(으)로 로그인`,
     signInText:
       '로그인은 IDE 터미널에서 한 번만 하면 돼요. Codex가 브라우저를 열고 당신이 돌아오길 기다립니다. 패널은 알아서 이어받아요.',
+    heldBack: (names: string): string =>
+      `이 계정은 로그인되어 있지만, 이 프로젝트의 Codex 설정(.codex/config.toml)이 다른 방식의 로그인을 요구해요: ${names}. 다시 로그인해도 바뀌지 않아요 - 다른 계정을 고르거나 프로젝트 설정을 바꾸세요.`,
     logIn: '로그인',
     openTerminalAgain: '터미널 다시 열기',
     finishInTerminal: '터미널에서 로그인을 마쳐 주세요 - 이 화면은 알아서 닫혀요.',
@@ -796,6 +947,11 @@ export const ko: Dict = {
     copyReply: '답변 전체 복사',
     moreActions: '더 보기',
     copyMessage: '이 메시지 복사 - 첨부는 경로로',
+    editor: {
+      selected: (n, name) => `${name}의 ${n}줄`,
+      opened: (name) => `${name}에서`,
+      open: (place) => `${place} · 편집기에서 열기`,
+    },
     reuse: {
       label: '고쳐서 다시 보내기',
       hint: '이 메시지를 입력창으로 되돌려 고쳐서 다시 보냅니다',
@@ -883,9 +1039,9 @@ export const ko: Dict = {
     checkpoint: {
       cleared: '대화를 비웠어요 - 이 위로는 아무것도 기억하지 않아요',
       earlier: '이전 메시지',
+      loadEarlier: '이전 메시지 불러오기',
       notKept: '이전 메시지는 더 이상 보관하지 않아요',
       notOnPhone: '이전 메시지는 휴대폰으로 보내지 않아요',
-      loadEarlier: '이전 메시지 불러오기',
     },
 
     compact: {
@@ -933,6 +1089,22 @@ export const ko: Dict = {
       textWithCode: (code) => `Codex가 예기치 않게 종료됐어요 (종료 코드 ${code}).`,
     },
 
+    outranked: {
+      account: {
+        label: '로그인',
+        text: '이 프로젝트의 Codex 설정이 여기서 고른 계정과 다른 로그인을 요구합니다:',
+      },
+      untrusted: {
+        label: '설정',
+        text: 'Codex가 이 프로젝트 자체 설정을 읽지 않습니다 - 아직 신뢰하지 않은 프로젝트입니다:',
+      },
+      open: 'Codex 설정',
+    },
+
+    sampling: {
+      note: '최신 모델은 샘플링 파라미터를 더 이상 받지 않는데, 이번 요청에는 들어 있었습니다. Codex가 직접 붙이지는 않으므로, 요청이 지나가는 곳에서 붙인 것입니다 - 보통 config.toml에 모델 제공자로 지정한 게이트웨이나 프록시입니다.',
+    },
+
     limit: {
       label: '한도',
       extraLabel: '추가 사용',
@@ -952,12 +1124,14 @@ export const ko: Dict = {
     ask: {
       label: 'CODEX의 질문',
       blocks: (n) => `질문 ${n}개 · 여기서 멈춰 있어요`,
+      leftOver: (n) => `질문 ${n}개 · 답하지 않은 채로 남았어요`,
       pickAny: '여러 개 선택 가능',
       other: '기타',
       ownAnswer: '직접 답을 적어요…',
       send: '답변 보내기',
       pickToContinue: '고르면 계속돼요',
       note: '물어본 자리에서 그대로 이어져요',
+      leftOverNote: '그 턴은 이미 끝났어요 - 답변은 새 메시지로 보내져요',
       expand: '질문 펼치기',
       collapse: '질문 접기',
       dismiss: '질문 닫기',
@@ -986,6 +1160,8 @@ export const ko: Dict = {
     queue: {
       label: '대기 중',
       hint: (n) => `${n}개가 이번 실행이 끝나면 차례로 나가요 · 끌어서 순서 변경`,
+      edit: '입력창에서 편집',
+      editing: (key, button) => `입력창에서 편집 중 · ${key} 또는 '${button}'을 누르면 이 자리로 돌아와요`,
     },
     selection: { quote: '인용', fork: '여기서 분기' },
     streams: {
@@ -1046,6 +1222,7 @@ export const ko: Dict = {
       'no-executable': '이 컴퓨터에서 Codex를 찾지 못했어요.',
       'no-store': '새 계정을 담을 폴더를 만들지 못했어요.',
       'not-supported': '이 Codex는 두 로그인을 구분하지 못해 아무것도 추가되지 않았습니다.',
+      'already-here': '그 계정은 이미 있습니다. Codex 자체의 로그인(codex login)이라 아무것도 추가되지 않았습니다.',
       'logout-failed': '로그아웃하지 못했습니다. 터미널에서 시도해 보세요.',
       'already-running': '이미 로그인이 진행 중이에요.',
       unknown: '잘 되지 않았어요.',
@@ -1282,7 +1459,6 @@ export const ko: Dict = {
 
     scenarios: {
       running: '지금 실행 중',
-      repository: '저장소',
       inRepository: (name: string): string => `${name} 안`,
       opensProject: 'IDE에서 열려 있지 않음 - 선택하면 거기서 열립니다',
       nothingRunning: '지금 이 프로젝트에서 돌고 있는 것은 없습니다.',
@@ -1439,13 +1615,20 @@ export const ko: Dict = {
       projectFiles: '프로젝트 파일',
       ofTotal: (shown, total) => `${shown}/${total}`,
       photosDropped: (n) => `${n}장은 한 메시지에 들어가지 않아요 - 이것부터 보내세요.`,
-      photoTooBig: '한 메시지에 들어가지 않아요. 사진을 한 장씩 보내 보세요.',
+      photoTooBig: '이 사진은 줄여도 너무 커요.',
+      photoTooBigOldIde: '컴퓨터의 플러그인은 작은 사진만 받아요. 이 사진을 보내려면 플러그인을 업데이트하세요.',
+      photoUnreadable: '이 파일은 이미지로 열 수 없어요.',
+      sending: '보내는 중…',
+      notDelivered: '전달되지 않음',
+      retry: '다시 보내기',
+      discardUnsent: '이 메시지 버리기',
     },
 
     limits: {
       title: '한도와 컨텍스트',
       fiveHourWindow: '5시간 창',
       weeklyWindow: '주간 창',
+      modelWindow: (model) => `${model} 주간 창`,
       paceNote: (percent) =>
         `흐린 호가 일정한 속도예요. 오늘까지라면 주간의 ${percent}%까지가 「예정」. 밝은 호가 그보다 짧으면 계획대로예요.`,
       context: '이 대화의 컨텍스트',
@@ -1471,6 +1654,7 @@ export const ko: Dict = {
     modeHint: (mode) => `권한 모드: ${mode}`,
     sessionLimit: '5시간 한도',
     weekLimit: '주간 한도',
+    modelWeekLimit: (limit) => `${limit} 한도`,
     /** The ring of a Codex business seat's spending cap - see ExtraUsage.resets. */
     spendLimit: '지출 한도',
     windowUsed: (title, percent) => `${title}: ${percent}% 사용`,
@@ -1488,7 +1672,7 @@ export const ko: Dict = {
     weeklyOpus: '주간 Opus',
     weeklySonnet: '주간 Sonnet',
     weeklyApps: '주간 앱',
-    weeklyWithExtra: '주간 (추가 사용 포함)',
+    weeklyFable: '주간 Fable',
     extra: '추가 사용',
   },
 
@@ -1505,11 +1689,61 @@ export const ko: Dict = {
     modeHint: 'shift+tab',
   },
 
+  codexConfig: {
+    intro: 'Codex 자체 설정입니다. 터미널이 읽는 것과 같은 config.toml이라, 여기서 바꾸면 터미널에도 적용됩니다.',
+    loading: 'Codex에 설정을 묻는 중…',
+    noCli: '이 컴퓨터에서 Codex를 찾지 못했습니다.',
+    unreadable: 'Codex가 설정을 알려 주지 않았습니다. 잠시 후 다시 시도해 주세요.',
+    groups: { work: 'Codex의 작업 방식', terminal: '터미널과 기본 탭', other: '실험 기능' },
+    on: '켬',
+    off: '끔',
+    saving: '저장하는 중…',
+    notSet: '설정 안 됨 - Codex가 정함',
+    lockedPolicy: '조직 정책으로 정해져 있어 여기서 바꿀 수 없습니다.',
+    lockedProject: '프로젝트의 .codex/config.toml에 정해져 있어 여기서 바꿔도 적용되지 않습니다.',
+    chips: '패널에서는 탭마다 모델, 사고 강도, 모드 칩이 이것을 정합니다. 이 값을 따르는 것은 터미널과 기본으로 둔 탭입니다.',
+    failed: 'Codex가 이 변경을 받아들이지 않았습니다.',
+    overridden: '저장했지만 프로젝트 설정이나 정책이 더 우선하는 값을 정하고 있어 여기서는 적용되지 않습니다.',
+    save: '저장',
+    project: {
+      title: '이 프로젝트',
+      none: '자체 Codex 설정 없음',
+      noneHint: '프로젝트에 .codex/config.toml, 훅, exec 정책이 있으면 여기에 표시됩니다.',
+      trusted: '신뢰함 - Codex가 프로젝트 자체 설정을 읽습니다',
+      untrusted: '신뢰하지 않음 - Codex가 프로젝트 자체 설정을 무시합니다',
+      sets: (names: string): string => `정하는 항목: ${names}`,
+      trust: '이 프로젝트 신뢰하기',
+      untrust: '신뢰 해제',
+    },
+    labels: {
+      model_reasoning_summary: '추론 요약',
+      model_verbosity: '답변 길이',
+      personality: '성격',
+      web_search: '웹 검색',
+      'sandbox_workspace_write.network_access': '프로젝트 샌드박스의 네트워크 접근',
+      approvals_reviewer: '승인 요청 검토자',
+      service_tier: '서비스 등급',
+      model_auto_compact_token_limit: '자동 압축 기준 (토큰)',
+      review_model: '/review 모델',
+      model: '모델',
+      model_reasoning_effort: '사고 강도',
+      approval_policy: '승인 요청 시점',
+      sandbox_mode: '샌드박스',
+      'features.network_proxy': '네트워크 프록시',
+      'features.prevent_idle_sleep': '실행 중 절전 방지',
+    },
+  },
+
   commands: {
     resume: '이 프로젝트의 지난 대화 열기',
     fork: '이 대화를 새 탭에서 이어가기',
     login: 'IDE 터미널에서 Codex에 로그인',
     logout: '로그아웃 - IDE 터미널이 열려요',
+    rename: '이 탭 이름 바꾸기. 이름 없이 쓰면 탭에서 입력란이 열림',
+    renameArgument: '[새 이름]',
+    config: 'Codex 설정 - 메뉴에서 열기',
+    btw: '작업을 멈추지 않고 잠깐 묻기',
+    btwArgument: '<질문>',
     model: '이 세션의 모델 바꾸기',
     effort: 'Codex가 움직이기 전에 얼마나 생각할지 정하기',
     codeReview: 'Codex 자체 리뷰어로 변경 사항 검토',

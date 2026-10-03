@@ -13,10 +13,14 @@ import { countSessionImages } from '../../feed/tokens'
 import { openedAgentOf } from '../../feed/workflow'
 import type { FeedItem, TaskItem, TodoItem } from '../../feed/types'
 import type { ProjectFacts } from '../facts'
+import type { PhotoRoad } from '../images'
+import type { Unconfirmed, UnconfirmedState } from '../outbox'
 import type { SessionEntry } from '../projects'
 import { Back } from './Back'
 import { Magnifier, SearchCapsule } from '../../components/SearchCapsule'
 import { Composer, type OutgoingPrompt } from './Composer'
+import { SideQuestionCard } from '../../components/SideQuestion'
+import type { SideExchange, SideThread } from '../../feed/side'
 import { dotClass, groupColor } from './TabsSheet'
 import type { PhoneDictation } from '../useDictation'
 import m from '../mobile.module.css'
@@ -60,6 +64,8 @@ interface ThreadProps {
   sessionId: string
   /** What this phone knows about the project the conversation is in - see mobile/facts. */
   facts: ProjectFacts
+  /** How big this machine lets a photo be - see PhotoRoad. */
+  photos: PhotoRoad
   connected: boolean
   /** Nothing about this conversation has arrived yet - see MobileFeed.loaded. */
   loading: boolean
@@ -68,6 +74,17 @@ interface ThreadProps {
   onSend: (prompt: OutgoingPrompt) => void
   /** Said when the agent comes free. It waits in the IDE, not here - see SessionQueue.kt. */
   onQueue: (prompt: OutgoingPrompt) => void
+  /** This conversation's side questions - `/btw`, kept by this phone (see feed/side). */
+  side: SideThread
+  onAsideCancel: (id: string) => void
+  onAsideAgain: (exchange: SideExchange) => void
+  onAsideClose: () => void
+  /** What this phone sent here that the IDE has not confirmed yet, past the quiet moment - see mobile/outbox.ts. */
+  unsent: { item: Unconfirmed; state: Exclude<UnconfirmedState, 'quiet'> }[]
+  /** The same message again, on a row that was not delivered. */
+  onRetry: (id: string) => void
+  /** Given up on - the cross on that row. */
+  onDiscard: (id: string) => void
   /** The cross on a queued message. */
   onUnqueue: (id: string) => void
   /** Quoted out of the feed and waiting above the field - see the message sheet. */
@@ -140,6 +157,7 @@ export const Thread = ({
   siblings,
   sessionId,
   facts,
+  photos,
   connected,
   loading,
   voice,
@@ -147,6 +165,13 @@ export const Thread = ({
   onDropQuote,
   onSend,
   onQueue,
+  side,
+  onAsideCancel,
+  onAsideAgain,
+  onAsideClose,
+  unsent,
+  onRetry,
+  onDiscard,
   onUnqueue,
   onStop,
   onStopTask,
@@ -179,6 +204,9 @@ export const Thread = ({
 
   /** Whether the list of what is waiting to be said is unfolded - the row above the field says how many. */
   const [queueOpen, setQueueOpen] = useState(false)
+
+  /** A side question taken into the chat: put into the field, where the agent has its tools (see Composer.fill). */
+  const [fill, setFill] = useState<{ text: string; nonce: number } | undefined>(undefined)
 
   /**
    * What this conversation is waiting to say, held by the IDE and fired by it when the turn ends.
@@ -367,6 +395,16 @@ export const Thread = ({
       </div>
 
       <footer className={m.composer}>
+        {/* The desk's card, as it is there: over the field, out of the feed (see SideQuestionCard). */}
+        <SideQuestionCard
+          thread={side}
+          onCancel={onAsideCancel}
+          onAskAgain={onAsideAgain}
+          onAskInChat={(question) => setFill((current) => ({ text: question, nonce: (current?.nonce ?? 0) + 1 }))}
+          onClose={onAsideClose}
+          onOpenLink={(url) => window.open(url, '_blank', 'noopener,noreferrer')}
+        />
+
         {/*
           What the agent said it would do, in one line, opening the screen that holds the rest.
 
@@ -387,6 +425,7 @@ export const Thread = ({
 
         <Composer
           facts={facts}
+          photos={photos}
           context={context}
           run={{
             model: feed.model ?? '',
@@ -405,6 +444,10 @@ export const Thread = ({
           onDropQuote={onDropQuote}
           onSend={onSend}
           onQueue={onQueue}
+          fill={fill}
+          unsent={unsent}
+          onRetry={onRetry}
+          onDiscard={onDiscard}
           onStop={onStop}
           onRun={onRun}
           voice={voice}

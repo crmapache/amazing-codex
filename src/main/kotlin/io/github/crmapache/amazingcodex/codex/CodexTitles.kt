@@ -23,7 +23,7 @@ import kotlinx.serialization.json.putJsonObject
  */
 internal object CodexTitles {
 
-    private class Asked(val onTitle: (String) -> Unit, var text: String = "")
+    private class Asked(val server: AppServer, val onTitle: (String) -> Unit, var text: String = "")
 
     private val asked = ConcurrentHashMap<String, Asked>()
 
@@ -42,7 +42,7 @@ internal object CodexTitles {
             onResult = { result ->
                 val thread = ((result as? JsonObject)?.get("thread") as? JsonObject)?.let { AppServer.text(it["id"]) }.orEmpty()
                 if (thread.isEmpty()) return@request
-                asked[thread] = Asked(onTitle)
+                asked[thread] = Asked(server, onTitle)
 
                 server.request(
                     "turn/start",
@@ -58,11 +58,11 @@ internal object CodexTitles {
                         put("effort", "low")
                         put("summary", "none")
                     },
-                    onError = { asked.remove(thread) },
+                    onError = { done(thread) },
                 )
 
                 AppExecutorUtil.getAppScheduledExecutorService().schedule(
-                    { asked.remove(thread) },
+                    { done(thread) },
                     GIVE_UP_SECONDS,
                     TimeUnit.SECONDS,
                 )
@@ -82,10 +82,19 @@ internal object CodexTitles {
             }
 
             "turn/completed" -> {
-                asked.remove(thread)
+                done(thread)
                 clean(waiting.text)?.let(waiting.onTitle)
             }
         }
+    }
+
+    /**
+     * Stop waiting on a title thread, and let the process go of it: an ephemeral thread stays loaded until
+     * it is unsubscribed from, and a conversation names itself once per tab over a long day.
+     */
+    private fun done(thread: String) {
+        val waiting = asked.remove(thread) ?: return
+        waiting.server.request("thread/unsubscribe", buildJsonObject { put("threadId", thread) })
     }
 
     /** One line, no quotes, no trailing full stop, and not a paragraph pretending to be a title. */

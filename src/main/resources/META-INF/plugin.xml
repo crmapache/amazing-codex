@@ -22,7 +22,7 @@
          Whether the browser actually came up is still asked separately (see WebviewHost.isSupported) -
          a dependency that resolved is not a browser that started. -->
     <depends>com.intellij.modules.jcef</depends>
-    <!-- Signing in to Claude Code opens a browser and waits for a code to come back, that is, it is a
+    <!-- Signing in to Codex opens a browser and waits for a code to come back, that is, it is a
          dialogue with a process. We hold it in the built-in terminal rather than invent a sign-in
          screen of our own. -->
     <depends>org.jetbrains.plugins.terminal</depends>
@@ -65,13 +65,13 @@
         <action id="AmazingCodex.SendSelection"
                 class="io.github.crmapache.amazingcodex.editor.SendSelectionAction"
                 text="Send to Amazing Codex GUI"
-                description="Put a reference to the selected lines into the Claude panel input">
+                description="Put a reference to the selected lines into the Codex panel input">
             <add-to-group group-id="EditorPopupMenu" anchor="first"/>
         </action>
         <action id="AmazingCodex.SendSelectionAbsolute"
                 class="io.github.crmapache.amazingcodex.editor.SendSelectionAbsoluteAction"
                 text="Send Absolute Path to Amazing Codex GUI"
-                description="Put the file's full path into the Claude panel input, for a conversation started outside this project">
+                description="Put the file's full path into the Codex panel input, for a conversation started outside this project">
             <add-to-group group-id="EditorPopupMenu" anchor="after" relative-to-action="AmazingCodex.SendSelection"/>
         </action>
     </actions>

@@ -11,6 +11,7 @@ import {
 } from 'react'
 import { createPortal } from 'react-dom'
 import { isBashDraft } from '../feed/bash'
+import { isAsideDraft } from '../feed/side'
 import { isLetterKey } from '../feed/fieldEdits'
 import { useT } from '../i18n'
 import { Microphone } from './Microphone'
@@ -39,8 +40,12 @@ import {
 import { clipboardHtml, clipboardTextOf, clipboardTokens, tokensText } from '../feed/tokens'
 import type { Chip, DraftEdit, UserToken } from '../feed/types'
 import { isSideComposerLayout, type ComposerLayout } from '../composerLayout'
+import { droppableTools, firstLetter, type FitStep, type WritingTool } from '../composerFit'
+import { fitMark, useToolsFit } from '../hooks/useToolsFit'
 import { enterAction, sendKeyCap, type SendKey } from '../sendKey'
-import type { ModelInfo } from '../protocol'
+import type { EditorRef, ModelInfo } from '../protocol'
+import { EditorChip } from './EditorChip'
+import { editorLabel } from '../feed/editorContext'
 import { SlashSuggest } from './SlashSuggest'
 import { collapsesPaste } from '../feed/reference'
 import { contextColor } from '../feed/usage'
@@ -71,6 +76,7 @@ import {
   wrappedLineCount,
 } from './composerDom'
 import { savePastedFile, savePastedFiles } from '../pasted'
+import type { ShownIndicators } from '../indicators'
 import { FeedbackButton } from './Feedback'
 import { Selectors, type Anchor, type SelectorKind } from './StatusBar'
 import { ThanksButton } from './Thanks'
@@ -94,7 +100,7 @@ const CONTEXT_METER_TICKS = [20, 40, 60, 80]
 /**
  * What the gauge is measuring, in the shape a status line writes it in. Deliberately not translated: it
  * is a reading off an instrument, like the effort values and the "38h 10m" of the usage rings - see the
- * note about what stays English in the i18n section of CLAUDE.md.
+ * note about what stays English in .claude/rules/i18n.md.
  */
 export const contextCaption = (percent: number): string => `ctx ${Math.round(percent)}%`
 
@@ -106,8 +112,25 @@ export const contextCaption = (percent: number): string => `ctx ${Math.round(per
  * indicator the panel had had all along. It is coloured by the same thresholds as the fill, so the pair
  * still reads at a glance and the number is there for the moment one wants it ("is it time to compact").
  */
-export const ContextMeter = ({ percent, className = '' }: { percent: number; className?: string }) => {
+export const ContextMeter = ({
+  percent,
+  className = '',
+  bar = true,
+  figure = true,
+}: {
+  percent: number
+  className?: string
+  /**
+   * The bar and the figure are switched off one by one (see indicators.ts). Without the figure the bar
+   * takes the whole row by itself - it is the flexible one of the two - and without the bar the figure
+   * keeps the far end it always stood at, rather than jumping to where the bar used to begin.
+   */
+  bar?: boolean
+  figure?: boolean
+}) => {
   const color = contextColor(percent)
+
+  if (!bar && !figure) return null
 
   return (
     // A row of its own above the field rather than a layer over its top padding: the padding scrolls
@@ -119,19 +142,25 @@ export const ContextMeter = ({ percent, className = '' }: { percent: number; cla
     // no-stress colours screen (see CalmColors), which has to cancel the padding this row wears for the
     // field's sake. Exported for the same reason the ring is: a sample drawn by hand is the one thing on
     // that screen able to lie about what the switch does.
-    <div className={className ? `${s.contextMeterRow} ${className}` : s.contextMeterRow}>
-      <div className={s.contextMeter} aria-hidden="true">
-        {/* A flat fill, no halo: the glow it used to carry made the lit part read as a thicker bar than
-            the track it lies on, and a meter whose two halves look like two different lines does not read
-            as a share of one whole. */}
-        <div className={s.contextMeterFill} style={{ width: `${percent}%`, background: color }} />
-        {CONTEXT_METER_TICKS.map((tick) => (
-          <span key={tick} className={s.contextMeterTick} style={{ left: `${tick}%` }} />
-        ))}
-      </div>
-      <span className={s.contextMeterValue} style={{ color }}>
-        {contextCaption(percent)}
-      </span>
+    <div
+      className={[s.contextMeterRow, bar ? '' : s.contextMeterRowFigure, className].filter(Boolean).join(' ')}
+    >
+      {bar ? (
+        <div className={s.contextMeter} aria-hidden="true">
+          {/* A flat fill, no halo: the glow it used to carry made the lit part read as a thicker bar than
+              the track it lies on, and a meter whose two halves look like two different lines does not
+              read as a share of one whole. */}
+          <div className={s.contextMeterFill} style={{ width: `${percent}%`, background: color }} />
+          {CONTEXT_METER_TICKS.map((tick) => (
+            <span key={tick} className={s.contextMeterTick} style={{ left: `${tick}%` }} />
+          ))}
+        </div>
+      ) : null}
+      {figure ? (
+        <span className={s.contextMeterValue} style={{ color }}>
+          {contextCaption(percent)}
+        </span>
+      ) : null}
     </div>
   )
 }
@@ -215,6 +244,28 @@ const Sparkle = () => (
   </svg>
 )
 
+/**
+ * The caption of Queue and Send, built so the button can narrow down to its first letter and no further
+ * (see .send in the styles): the letter is a box of its own that never gives way, the rest is a box that
+ * gives way to nothing at all. The rest is simply cut off rather than ended with an ellipsis - on a
+ * button this narrow the three dots would take the room of the letters they stand for.
+ *
+ * The button's name for a screen reader is given on the button itself: the two boxes are two separate
+ * items of a grid, and read out of them it could come apart into a letter and a word.
+ */
+const SendCaption = ({ text }: { text: string }) => {
+  const [head, rest] = firstLetter(text)
+
+  return (
+    <>
+      <span>{head}</span>
+      <span className={s.sendRest} {...fitMark('clip')}>
+        {rest}
+      </span>
+    </>
+  )
+}
+
 /** The highlight of a chip the arrow has reached (see .tokenSelected in the styles). */
 const SELECTED_CHIP_CLASS = s.tokenSelected ?? ''
 
@@ -284,6 +335,12 @@ interface ComposerProps {
    * does not use this at all.
    */
   meters: ReactNode
+  /**
+   * Which of the indicators the composer draws a person keeps on the screen: the context bar and its
+   * figure, the bubble and the heart (see indicators.ts). The figure exists only in the ordinary layout -
+   * in the narrow ones it is the vertical scale's hover hint, and goes with the scale.
+   */
+  indicators: Pick<ShownIndicators, 'contextBar' | 'contextFigure' | 'feedback' | 'thanks'>
   /** The project's files for the "@" hint - relative to the working directory's root. */
   files: string[]
   /** How many images have already gone out in this session - the new ones are numbered on from here. */
@@ -376,6 +433,21 @@ interface ComposerProps {
   onSubmit: () => void
   /** Defer: the agent takes this next, once it has finished what it started. */
   onQueue: () => void
+  /**
+   * The send key puts the message into the queue rather than into the turn: what stands in the field is a
+   * queued message taken out to be edited (see App.queueEdits), and correcting a message does not change
+   * when it was meant to be said. Sent into the work by habit, the fixed message would go out ahead of
+   * everything it was queued behind - the one thing its author did not ask for. Send, pressed with the
+   * mouse, still means "now": that is a decision rather than a habit.
+   */
+  keyQueues?: boolean
+  /**
+   * What the editor beside the panel shows, and whether it goes with this message (see EditorChip). Null
+   * with nothing to show, or with the setting off - then there is no chip at all.
+   */
+  editor?: { ref: EditorRef; on: boolean } | null
+  /** The chip pressed: this message goes without it, or with it again. */
+  onToggleEditor?: () => void
   /** Whether there is anything to send - text, an attachment or a quote. */
   canSubmit: boolean
   onStop: () => void
@@ -441,6 +513,7 @@ export const Composer = ({
   models,
   customModels,
   meters,
+  indicators,
   files,
   imageBaseCount,
   focusToken,
@@ -463,6 +536,9 @@ export const Composer = ({
   registerApply,
   onSubmit,
   onQueue,
+  keyQueues = false,
+  editor = null,
+  onToggleEditor,
   canSubmit,
   onStop,
   stopStalled,
@@ -670,6 +746,13 @@ export const Composer = ({
    * before the press rather than from a card appearing in the feed.
    */
   const bash = isBashDraft(tokens)
+
+  /**
+   * A side question has been typed - `/btw` (see feed/side). The field says so the way it says it for a
+   * shell command: the question goes beside the work rather than into it, and has no queue to wait in -
+   * which is the whole reason to ask one.
+   */
+  const aside = !bash && isAsideDraft(tokens)
 
   const commandMatches = useMemo(
     () => (query === null || dismissed ? [] : matchCommands(commands, query)),
@@ -1652,7 +1735,7 @@ export const Composer = ({
       // Which of the two this press is - the rule is in sendKey.ts rather than here: it breaks silently,
       // and either half of it broken means a field that sends half a sentence or one that cannot send.
       if (enterAction(sendKey, event) === 'send') {
-        letGo(onSubmit)
+        letGo(keyQueues && streaming ? onQueue : onSubmit)
         return
       }
       // A line break is insertLineBreak, the browser's own command for exactly this. The neighbouring
@@ -1683,6 +1766,7 @@ export const Composer = ({
       data-tooltip-at="top"
       aria-label={t.composer.attach}
       onClick={onAttach}
+      {...fitMark('square')}
     >
       <Paperclip />
     </button>
@@ -1789,12 +1873,13 @@ export const Composer = ({
    * ordinary layout (see StatusBar), in the usage's own row in the side rail, in the selectors' row in
    * compact. Only the rail's borderless variant is built here; the other two rows draw their own.
    */
-  const railEndPair = (
+  const endPairShown = indicators.feedback || indicators.thanks
+  const railEndPair = endPairShown ? (
     <div className={shell.endPair}>
-      <FeedbackButton rail onOpen={() => onOpenFeedback?.()} />
-      <ThanksButton rail onOpen={(anchor) => onOpenThanks?.(anchor)} />
+      {indicators.feedback ? <FeedbackButton rail onOpen={() => onOpenFeedback?.()} /> : null}
+      {indicators.thanks ? <ThanksButton rail onOpen={(anchor) => onOpenThanks?.(anchor)} /> : null}
     </div>
-  )
+  ) : null
 
   const stopButton = streaming ? (
     <button type="button" className={s.stop} onClick={onStop}>
@@ -1822,32 +1907,44 @@ export const Composer = ({
 
      A terminal command has no queue at all: the panel runs it itself and has no reason to wait for the
      agent to come free. */
-  const queueButton = bash ? null : (
+  const queueButton = bash || aside ? null : (
     <button
       type="button"
       className={`${s.send} ${s.sendQueued}`}
       onClick={() => letGo(onQueue)}
       disabled={!canSubmit || !streaming}
-      data-tooltip={t.composer.queueHint}
+      /* The key follows the button it presses: while a queued message is being edited that is this one. */
+      data-tooltip={keyQueues ? sendKeyCap(sendKey) : t.composer.queueHint}
       data-tooltip-at="top"
+      aria-label={t.composer.queue}
     >
-      {t.composer.queue}
+      <SendCaption text={t.composer.queue} />
     </button>
   )
 
+  const sendCaption = bash ? t.composer.run : aside ? t.composer.askAside : t.composer.send
   const sendButton = (
     <button
       type="button"
-      className={`${s.send} ${bash ? s.sendRun : ''}`}
+      className={`${s.send} ${bash ? s.sendRun : ''} ${aside ? s.sendAside : ''}`}
       onClick={() => letGo(onSubmit)}
       disabled={!canSubmit}
       /* The key and nothing else: the button already says "Send", and a hover that repeats what it is
          hovering over is a wasted hover (the rule the file's chips follow too). What it does add is the
          one thing not on the screen anywhere - which key the setting settled on. */
-      data-tooltip={bash ? t.composer.runHint : sendKeyCap(sendKey)}
+      data-tooltip={
+        bash
+          ? t.composer.runHint
+          : aside
+            ? t.composer.askAsideHint
+            : keyQueues && streaming
+              ? undefined
+              : sendKeyCap(sendKey)
+      }
       data-tooltip-at="top"
+      aria-label={sendCaption}
     >
-      {bash ? t.composer.run : t.composer.send}
+      <SendCaption text={sendCaption} />
     </button>
   )
 
@@ -1905,22 +2002,66 @@ export const Composer = ({
     </button>
   ) : null
 
+  /*
+   * A narrow panel runs out of room in this row before anywhere else, and then the squares leave one by
+   * one, the least needed first (see DROP_ORDER and droppableTools in composerFit.ts). Only the ordinary
+   * layout ever runs short: compact and the side rails stand the row in a column sized by its contents.
+   *
+   * Left out means not drawn rather than drawn and hidden: a hidden square would still take a tab stop
+   * and a place in the group's gaps. A group left with nothing in it goes too, gap and all.
+   */
+  const hasVoice = Boolean(voice?.enabled)
+  const hasSearch = Boolean(onOpenSearch)
+  const hasScenarios = Boolean(onOpenScenarios)
+  const presentTools = useMemo(() => {
+    const present = new Set<WritingTool>(['improve', 'attach', 'slash'])
+    if (hasVoice) present.add('voice')
+    if (hasSearch) present.add('search')
+    if (hasScenarios) present.add('scenarios')
+    return present
+  }, [hasVoice, hasSearch, hasScenarios])
+
+  const dictating = listening || finishing
+  // The editor's chip has a name to give up only in the ordinary layout - beside a narrow field it is drawn
+  // without one from the start (see EditorChip's `bare`).
+  const named = editor !== null && !compact && !rail
+  const droppable = useMemo(() => droppableTools(presentTools, dictating, named), [presentTools, dictating, named])
+
+  const tools = useRef<HTMLDivElement>(null)
+  // Everything else that changes what the row holds: Stop for the length of a turn, Force stop, Queue
+  // leaving and Send turning into Run for a shell command, and the words on all of them.
+  const rowContent = [
+    streaming,
+    stopStalled,
+    bash,
+    aside,
+    t.composer.send,
+    t.composer.queue,
+    t.composer.run,
+    t.composer.askAside,
+    t.composer.stop,
+    t.composer.forceStop,
+    [...presentTools].join(),
+    droppable.join(),
+    editor ? `${editorLabel(editor.ref)}:${editor.on}` : '',
+  ].join('|')
+  const droppedCount = useToolsFit(tools, presentTools, droppable, !compact && !rail, rowContent)
+  const droppedTools = new Set<FitStep>(droppable.slice(0, droppedCount))
+  const keep = (tool: WritingTool, button: ReactNode) => (droppedTools.has(tool) ? null : button)
+
+  const toolGroup = (first: ReactNode, second: ReactNode) =>
+    first || second ? (
+      <div className={s.toolGroup} {...fitMark('group')}>
+        {first}
+        {second}
+      </div>
+    ) : null
+
   const writingTools = (
-    <div className={s.toolGroups}>
-      <div className={s.toolGroup}>
-        {voiceButton}
-        {improveButton}
-      </div>
-      <div className={s.toolGroup}>
-        {attachButton}
-        {slashButton}
-      </div>
-      {searchButton || scenariosButton ? (
-        <div className={s.toolGroup}>
-          {searchButton}
-          {scenariosButton}
-        </div>
-      ) : null}
+    <div className={s.toolGroups} {...fitMark('groups')}>
+      {toolGroup(keep('voice', voiceButton), keep('improve', improveButton))}
+      {toolGroup(attachButton, keep('slash', slashButton))}
+      {toolGroup(keep('search', searchButton), scenariosButton)}
     </div>
   )
 
@@ -1945,9 +2086,20 @@ export const Composer = ({
    * and Send keeps the edge it stands on. In the other layouts the usage stands beside the heart - under
    * the field in the ordinary layout (see StatusBar), in a row of its own in the side rail.
    */
+  const editorChip = editor ? (
+    <EditorChip
+      editor={editor.ref}
+      on={editor.on}
+      bare={compact || rail}
+      nameGone={droppedTools.has('editorName')}
+      onToggle={() => onToggleEditor?.()}
+    />
+  ) : null
+
   const toolsRow = compact ? (
     <>
       {writingTools}
+      {editorChip}
       <div className={s.spacer} />
       {meters}
       {sendingButtons}
@@ -1955,7 +2107,8 @@ export const Composer = ({
   ) : (
     <>
       {writingTools}
-      <div className={s.spacer} />
+      {editorChip}
+      <div className={s.spacer} {...fitMark('spacer')} />
       {sendingButtons}
     </>
   )
@@ -2076,7 +2229,7 @@ export const Composer = ({
 
         <div className={s.compactRow}>
           <div
-            className={boxClassName(s.boxCompact)}
+            className={boxClassName(indicators.contextBar ? s.boxCompact : `${s.boxCompact} ${s.boxNoGauge}`)}
             ref={box}
             onDragOver={(event) => {
               if (!hasFiles(event.dataTransfer)) return
@@ -2090,7 +2243,7 @@ export const Composer = ({
             }}
             onDrop={handleDrop}
           >
-            <ContextMeterVertical percent={contextPercent} />
+            {indicators.contextBar ? <ContextMeterVertical percent={contextPercent} /> : null}
             {ghostHintNode}
             {fieldNode}
           </div>
@@ -2119,11 +2272,19 @@ export const Composer = ({
                   The selectors keep their own width here rather than sharing the row evenly, for the same
                   reason as in the status line: the far end belongs to the pair, and what is left over is
                   the gap between them. */}
-              <div className={s.spacer} />
-              <div className={shell.endPair}>
-                <FeedbackButton withSelectors onOpen={() => onOpenFeedback?.()} />
-                <ThanksButton withSelectors onOpen={(anchor) => onOpenThanks?.(anchor)} />
-              </div>
+              {endPairShown ? (
+                <>
+                  <div className={s.spacer} />
+                  <div className={shell.endPair}>
+                    {indicators.feedback ? (
+                      <FeedbackButton withSelectors onOpen={() => onOpenFeedback?.()} />
+                    ) : null}
+                    {indicators.thanks ? (
+                      <ThanksButton withSelectors onOpen={(anchor) => onOpenThanks?.(anchor)} />
+                    ) : null}
+                  </div>
+                </>
+              ) : null}
             </div>
 
             <div className={s.compactToolsRow}>{toolsRow}</div>
@@ -2141,7 +2302,7 @@ export const Composer = ({
 
         <div className={s.railRow}>
           <div
-            className={boxClassName(s.boxRail)}
+            className={boxClassName(indicators.contextBar ? s.boxRail : `${s.boxRail} ${s.boxNoGauge}`)}
             ref={box}
             onDragOver={(event) => {
               if (!hasFiles(event.dataTransfer)) return
@@ -2155,7 +2316,7 @@ export const Composer = ({
             }}
             onDrop={handleDrop}
           >
-            <ContextMeterVertical percent={contextPercent} />
+            {indicators.contextBar ? <ContextMeterVertical percent={contextPercent} /> : null}
             {ghostHintNode}
             {fieldNode}
           </div>
@@ -2190,11 +2351,15 @@ export const Composer = ({
                     the status line makes of them under the field in the ordinary layout, and for the same
                     reason: neither of them is about the message being written. That end is the side the
                     field is on, the same side Send stands on in the row below (see .railMirrored). */}
-                <div className={mirroredRail ? `${s.railMeters} ${s.railMirrored}` : s.railMeters}>
-                  {meters}
-                  <div className={s.spacer} />
-                  {railEndPair}
-                </div>
+                {/* Not drawn at all once everything in it is switched off: the rail spaces its rows
+                    with a gap of its own, and an empty row would still take one. */}
+                {meters || railEndPair ? (
+                  <div className={mirroredRail ? `${s.railMeters} ${s.railMirrored}` : s.railMeters}>
+                    {meters}
+                    <div className={s.spacer} />
+                    {railEndPair}
+                  </div>
+                ) : null}
 
                 <div
                   className={
@@ -2219,7 +2384,7 @@ export const Composer = ({
       {improveNoteNode}
 
       <div
-        className={boxClassName('')}
+        className={boxClassName(indicators.contextBar || indicators.contextFigure ? '' : s.boxBare)}
         ref={box}
         onDragOver={(event) => {
           if (!hasFiles(event.dataTransfer)) return
@@ -2237,11 +2402,13 @@ export const Composer = ({
         }}
         onDrop={handleDrop}
       >
-        <ContextMeter percent={contextPercent} />
+        <ContextMeter percent={contextPercent} bar={indicators.contextBar} figure={indicators.contextFigure} />
         {ghostHintNode}
         {fieldNode}
 
-        <div className={s.tools}>{toolsRow}</div>
+        <div className={s.tools} ref={tools}>
+          {toolsRow}
+        </div>
       </div>
     </div>
   )

@@ -64,6 +64,69 @@
   }
 }
 
+/* A tab that called - see TabGlow in Header.tsx. */
+
+/* The aura's breath: slow, and never down to nothing - between breaths the colour still says which tab it
+   was, the breathing only draws the eye to it. */
+@keyframes acc-call-breathe {
+  0%,
+  100% {
+    opacity: 0.62;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+/* The sheen passes over in the first part of the period and the rest is a pause: a band running on without
+   a break reads as a loading bar rather than as light catching the tab. */
+@keyframes acc-call-sheen {
+  0% {
+    transform: translateX(-110%) skewX(-16deg);
+  }
+
+  36%,
+  100% {
+    transform: translateX(230%) skewX(-16deg);
+  }
+}
+
+/* A spark is out for a third of its period: it blooms, turning, and closes up again. */
+@keyframes acc-call-twinkle {
+  0%,
+  56%,
+  100% {
+    opacity: 0;
+    transform: scale(0.2) rotate(-40deg);
+  }
+
+  72% {
+    opacity: 1;
+    transform: scale(1) rotate(0deg);
+  }
+
+  86% {
+    opacity: 0.35;
+    transform: scale(0.55) rotate(28deg);
+  }
+}
+
+/* The call's colour, registered: a tab that called about one thing and then about another changes its
+   light smoothly instead of switching it, which an unregistered custom property cannot do - it has no type
+   to be interpolated as. */
+@property --acc-call {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: transparent;
+}
+
+@property --acc-call-light {
+  syntax: '<color>';
+  inherits: true;
+  initial-value: transparent;
+}
+
 .panel {
   display: flex;
   flex-direction: column;
@@ -340,6 +403,10 @@
     background-color 0.16s ease,
     box-shadow 0.16s ease,
     opacity 0.16s ease;
+  /* A layer of its own, so that the light of a calling tab (see .tabGlow) can lie between the tab's
+     background and its name: over the background, or the hover and the active tab would cover it; under
+     the name, or the name would be tinted with it. */
+  isolation: isolate;
 }
 
 /* The stripe on top is the group's colour: a conversation and all its forks share one, so the belonging is
@@ -448,11 +515,156 @@
   box-shadow: 0 0 0 3px var(--acc-bad-16);
 }
 
+/* --- A tab that called ---------------------------------------------------------
+   A sound called the person, and this is the tab it came from (see TabGlow in Header.tsx): an aura rising
+   off the bottom edge, a sheen passing over now and then, a few sparks - in the colour of what it called
+   about. It stays until the tab is opened.
+
+   The dot beside the name says what the tab is doing; this says that it called. The dot is small and
+   static on purpose (see .dotRunning), so the call gets a louder mark of its own - and the louder one is
+   the one that goes away once it has been answered.
+
+   Only opacity and transforms move, both on the compositor. The colour moves too, but only when a tab
+   calls about something else - see @property --acc-call above. */
+.tabGlow {
+  position: absolute;
+  /* Down over the tab's bottom border as well: the light's edge is the tab's edge, not two pixels above it. */
+  inset: 0 0 -2px;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0;
+  transition:
+    opacity 0.7s ease,
+    --acc-call 0.6s ease,
+    --acc-call-light 0.6s ease;
+}
+
+/* It comes on slower than it goes: it gathers rather than switches on, and once the tab is opened the call
+   is answered and has no business lingering. */
+.tabGlow[data-lit] {
+  opacity: 1;
+  transition-duration: 1.1s, 0.6s, 0.6s;
+}
+
+.tabGlow[data-call='success'] {
+  --acc-call: var(--acc-ok);
+  --acc-call-light: var(--acc-ok-light);
+}
+
+.tabGlow[data-call='attention'] {
+  --acc-call: var(--acc-warn);
+  --acc-call-light: var(--acc-warn-light);
+}
+
+.tabGlow[data-call='error'] {
+  --acc-call: var(--acc-bad);
+  --acc-call-light: var(--acc-bad-light);
+}
+
+/* The aura: a line of light along the bottom, brightest in the middle, the glow it throws up into the tab,
+   and a faint wash over the whole of it so the colour reads even at the corners. The line stays: tried
+   without it, the aura alone read as a tinted tab rather than as a lit one. */
+.tabGlow::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(
+        90deg,
+        transparent 4%,
+        var(--acc-call) 28%,
+        var(--acc-call-light) 50%,
+        var(--acc-call) 72%,
+        transparent 96%
+      )
+      bottom / 100% 2px no-repeat,
+    radial-gradient(80% 125% at 50% 100%, color-mix(in srgb, var(--acc-call) 30%, transparent), transparent 76%),
+    linear-gradient(to top, color-mix(in srgb, var(--acc-call) 12%, transparent), transparent 85%);
+}
+
+/* The sheen: a soft band of the lighter paint passing over at a slant - the pass of light over the empty
+   screen's button (see .start::after in welcome.module.css), in the call's colour and again and again. */
+.tabGlow::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 45%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--acc-call-light) 24%, transparent) 50%,
+    transparent
+  );
+  transform: translateX(-110%) skewX(-16deg);
+}
+
+/* Each started at its own tab's phase - see CALL_PHASE_SPAN_MS in Header.tsx. */
+.tabGlow[data-call]::before {
+  animation: acc-call-breathe 2.8s ease-in-out var(--acc-call-phase, 0s) infinite;
+}
+
+.tabGlow[data-call]::after {
+  animation: acc-call-sheen 4.4s ease-in-out var(--acc-call-phase, 0s) infinite;
+}
+
+.tabSpark {
+  position: absolute;
+  fill: var(--acc-call-light);
+  /* At five pixels a star with no light around it reads as a speck of dust - the ring's sparks carry a
+     halo for the same reason (see .flameSparkGlow). */
+  filter: drop-shadow(0 0 2px var(--acc-call));
+  opacity: 0;
+  animation-name: acc-call-twinkle;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+}
+
+/* Nobody has been around for a while (see useResting in Header): the aura holds still where it is, and the
+   sheen and the sparks go - both frozen mid-flight read as a smear on the tab rather than as light. The
+   first movement of the mouse or a fresh call sets them going again. */
+.tabs[data-resting] .tabGlow::before {
+  animation-play-state: paused;
+}
+
+.tabs[data-resting] .tabGlow::after,
+.tabs[data-resting] .tabSpark {
+  animation: none;
+}
+
 .tabTitle {
   font: 12px/15px var(--acc-font);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* A tab's name being typed (see TabNameField in Header.tsx). It stands where the name stood, in the same
+   type, and takes as much room as the words in it - the tab does not jump to its full width the moment the
+   field opens, and the neighbours stay where the eye left them. */
+.tabNameField {
+  flex: 0 1 auto;
+  min-width: 48px;
+  max-width: 100%;
+  field-sizing: content;
+  height: 20px;
+  margin: 0 -4px;
+  padding: 0 4px;
+  border: 1px solid var(--acc-accent-40);
+  border-radius: var(--acc-r-xs);
+  background: var(--acc-bg-raised);
+  color: var(--acc-fg);
+  font: 12px/15px var(--acc-font);
+  /* The tab refuses selection so that a drag does not paint its caption (see .tab); a field has to take it
+     back, or the name opened whole-selected would show nothing selected at all. */
+  user-select: text;
+  cursor: text;
+}
+
+.tabNameField:focus-visible {
+  outline: none;
 }
 
 .tabClose {
@@ -491,10 +703,11 @@
   align-items: center;
   gap: 8px;
   padding-right: 6px;
-  /* Without it the row's shrinking would run into the children's combined "natural" width (a flex item's
-     min-width is auto by default) - the branch chip inside could shrink itself as far as one likes (see
-     .statusItem), but the whole row outwards could not, and no shrinking would genuinely happen. */
-  min-width: 0;
+  /* No min-width: 0 here, and that is the point: the row may shrink only as far as its pieces can -
+     the branch down to its first few letters, the PR mark and the burger not at all (see .statusItem).
+     With min-width: 0 it went further, since flex shrinking is shared out by width wanted and a strip of
+     tabs wants many times more than "main no PR": with nine tabs this row got fifteen pixels, the branch
+     vanished and "no PR" spilled over the burger. Now it keeps what it needs, and the tabs wrap instead. */
 }
 
 /* Someone else is watching this project - a browser page beside the IDE, later a phone.
@@ -798,14 +1011,22 @@
 
 /* The far end of the status row as one block: the usage, then the bubble and the heart. Together, because
    they step onto the second line together - the usage parted from the pair reads as a third thing in a row
-   that has only two. margin-left holds them at the far edge on either line, which a spacer between the two
-   blocks could not do: on a wrapped line the spacer stays behind on the first one. */
+   that has only two.
+
+   It takes every free pixel of whatever line it stands on, and packs its contents against the far edge -
+   which holds them there on either line, as a spacer between the two blocks could not (on a wrapped line
+   the spacer stays behind on the first one). The grow is a million rather than one on purpose: the
+   selectors grow too (see .selectors), and on a shared line free space is split by these two numbers, so
+   the selectors' share of it is a millionth - nothing. Alone on a line, each of them takes all of it. That
+   is the whole trick of "the selectors fill the line only once the usage has stepped down under them",
+   and it costs no measuring: which line a block goes to is decided by its natural width, never by how much
+   it would grow. */
 .statusEnd {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 10px;
-  flex: none;
-  margin-left: auto;
+  flex: 1000000 0 auto;
 }
 
 /* Every meter is one whole piece: the key and the value must not drift apart. A size of its own rather than
@@ -813,28 +1034,36 @@
    stands in the header (see Header.tsx), in the interface font and smaller, and without a font of its own
    here it would read in that one. */
 .statusItem {
-  display: inline-flex;
+  display: inline-grid;
+  /* A grid rather than a flex row, for the sake of its smallest width. The branch's column may shrink to
+     four characters and no further, the PR mark's not at all, so the smallest this chip can be is those
+     two - and that is what the header's row counts on (see .headerTools). A flex row had no such floor to
+     give: its smallest width was either the whole branch name, or nothing at all, and nothing at all left
+     the PR mark standing outside the chip, over the burger.
+
+     Four characters rather than zero, because a PR mark with no branch before it says whose PR it is to
+     nobody; and four rather than three, because the ellipsis takes one of them. Four is "main" whole - the
+     name most repositories sit on most of the time - and of a longer name three letters and the ellipsis,
+     still enough to tell feature/ from fix/. The font is monospaced, so ch is one character exactly. */
+  grid-template-columns: minmax(4ch, auto) auto;
   align-items: baseline;
-  gap: 4px;
+  column-gap: 4px;
   white-space: nowrap;
   font: 12.5px/1.4 var(--acc-mono);
   /* The width is counted from the room the branch name genuinely needs rather than fixed - it is given the
-     room the tabs leave free (see .headerTools below), and conversely it gives way to them itself, clipped
-     with an ellipsis (see .statusBranch), when there is not enough room for everyone. max-width is only a
-     ceiling: even with a completely empty header one branch must not take more than a third of a typical
-     panel's width. */
+     room the tabs leave free, and conversely it gives way to them itself, clipped with an ellipsis (see
+     .statusBranch), when there is not enough room for everyone. max-width is only a ceiling: even with a
+     completely empty header one branch must not take more than a third of a typical panel's width. */
   flex: 0 1 auto;
-  min-width: 0;
   max-width: 350px;
 }
 
-/* The branch is clipped to exactly the room genuinely available (min-width: 0 + flex: 1 1 auto) rather than
-   to some arbitrary constant in pixels - short branches are shown whole, long ones squeeze only when there
-   genuinely is no room. */
+/* The branch is clipped to exactly the room its column is given rather than to some arbitrary constant in
+   pixels - short branches are shown whole, long ones squeeze only when there genuinely is no room. The
+   full name is then a hover away (see BranchChip). */
 .statusBranch {
   color: var(--acc-ok-light);
   min-width: 0;
-  flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -866,8 +1095,8 @@
    One line and no shrinking: this block now stands at the far end of the status row, between the spacer and
    the bubble with the heart (see .status and StatusBar.tsx), and there a wrap costs the whole row a second
    line - for the sake of moving the day's tokens under the rings. What gives way when the panel is dragged
-   narrow is the selectors opposite: they wrap by themselves, and each of them is one button rather than a
-   line of figures. */
+   narrow is the row around it: the whole far end steps down under the selectors (see .status and
+   .statusEnd), and the selectors are the ones that go on to lose their captions. */
 .meters {
   display: flex;
   align-items: center;
@@ -977,6 +1206,14 @@
     animation: none;
   }
 
+  /* A calling tab keeps its light and loses its motion: the aura stands at full, the sheen and the sparks
+     are gone. The fade in and out stays - it is a change of light, not a movement. */
+  .tabGlow[data-call]::before,
+  .tabGlow[data-call]::after,
+  .tabSpark {
+    animation: none;
+  }
+
   .flameHeat {
     opacity: 0.3;
   }
@@ -1012,17 +1249,46 @@
      itself and decide itself (see App.openSelector), as the header's buttons already do (see .history and
      its neighbours, the same trick). */
   z-index: 41;
-  /* Not flex: none - the usage and the pair stand in the same row now (see .statusEnd and StatusBar.tsx),
-     and a block that cannot shrink would push them out past the panel's right edge on a narrow panel. It
-     does not grow either: the row's free width belongs to the gap before the far end rather than to the
-     selectors. What shrinks inside is the selectors themselves - each of them ends its value with an
-     ellipsis (see .selectorText) rather than being cut off by the panel's edge.
+  /* Not flex: none - a block that cannot shrink would push past the panel's right edge on a narrow panel.
+     It grows, but beside the usage it gets next to nothing of the free width (see .statusEnd); on a line of
+     its own it gets the whole line, and the three share it evenly (see .selectorAuto and StatusBar.tsx).
 
      They do not wrap among themselves: the row above wraps instead (see .status), and this block staying
      one line deep is exactly what that buys. */
-  flex: 0 1 auto;
+  flex: 1 1 auto;
   min-width: 0;
   max-width: 100%;
+}
+
+/* Too narrow for the captions (see useSelectorsFit): the selectors keep a line of their own even where the
+   shorter row would fit beside the usage again. The order in which the row gives way is the usage first and
+   the captions second, and a row that took the usage back up for dropping them would hand them back one
+   step early - wide enough to hold them again only on the line it had just left. */
+.status[data-selectors='terse'] .selectors,
+.status[data-selectors='squeezed'] .selectors {
+  flex-basis: 100%;
+}
+
+/* The ruler the row is measured against (see StatusBar and useSelectorsFit): a box of nothing that clips
+   whatever is in it, so it neither takes room nor stretches the panel's scroll, while the rows inside keep
+   their natural width. The gap is the selectors' own, inherited twice rather than written down a second
+   time. */
+.selectorsRuler {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+  pointer-events: none;
+  gap: inherit;
+}
+
+.selectorsRulerRow {
+  display: flex;
+  width: max-content;
+  gap: inherit;
 }
 
 /* The width is counted by the longest of the values rather than by the chosen one (see .selectorSample) -
@@ -1133,6 +1399,17 @@
   color: var(--acc-fg-fainter);
 }
 
+/* The caption put away on a row too narrow for it (see Selector.terse): out of the flow and out of sight,
+   but not out of the button - a screen reader still reads MODEL before the value. */
+.selectorTerse .selectorLabel {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .selectorValue {
   position: relative;
   flex: 1;
@@ -1162,12 +1439,11 @@
 }
 
 /*
- * Compact keeps these same buttons in the input field itself, while left/right keeps them in the side rail
- * spanning the panel's full height (see .railColumn below and Composer.tsx) rather than in the status row -
- * there they have no reason to divide a fixed 120px three ways: there are only three neighbours, and they
- * divide the row's whole width evenly among themselves rather than crowding into the right edge with
- * emptiness on the left. It comes later than .selector in the file - and therefore wins over its
- * flex: 0 0 120px at equal specificity.
+ * The three dividing their row's whole width evenly among themselves rather than crowding into one edge with
+ * emptiness at the other. Worn in the side rail (see .railColumn below and Composer.tsx), where the three
+ * are the row's only neighbours, and in the status row under the field, where the row hands them free width
+ * only once the usage has stepped down onto a line of its own (see .statusEnd). It comes later than
+ * .selector in the file - and therefore wins over its flex at equal specificity.
  *
  * min-width: min-content rather than 0 - otherwise flex-basis: 0 stops taking the contents' own width into
  * account when counting the row's width, and the value would be clipped with an ellipsis though there is
@@ -1285,6 +1561,12 @@
   align-items: center;
   flex: none;
   gap: 4px;
+}
+
+/* The pair inside its ruler (see StatusBar): the ruler is a box of no width, and a flex block in it would be
+   that wide too - the buttons would spill out and the pair would measure as nothing. */
+.endPairRuler {
+  width: max-content;
 }
 
 /*
@@ -1577,7 +1859,8 @@
 
 /* A paragraph carries the browser's own margin, and this screen is laid out on the gap above: with both
    in force every line stood a line and a half from the next, and a screen of five short lines read as
-   five unrelated ones. Zeroed the same way .emptyState below zeroes them, and for the same reason. */
+   five unrelated ones. Zeroed the same way .welcome zeroes them (welcome.module.css), and for the same
+   reason. */
 .gate p {
   margin: 0;
 }
@@ -1739,27 +2022,6 @@
   font: 10.5px/1.7 var(--acc-mono);
   color: var(--acc-fg-fainter);
   word-break: break-all;
-}
-
-/* The last tab was closed - the title and the button go at the panel's centre, as on the login screen. */
-.emptyState {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  background: var(--acc-bg);
-  text-align: center;
-}
-
-/* The gap alone was not the gap: a paragraph carries the browser's own margin, and the button a top
-   margin meant for the login screen, so the greeting and the button it belongs to stood a line and a half
-   apart. Zeroed here rather than on the shared classes - the login screen is laid out around them. */
-.emptyState > p,
-.emptyState > .gateButton {
-  margin: 0;
 }
 
 /* --- The fallback view without an embedded browser -------------------------- */

@@ -1,6 +1,7 @@
 import type { MenuOption } from './components/Menu'
 import type { Dict } from './i18n/en'
 import type { ModelInfo } from './protocol'
+import { ASIDE_COMMAND } from './feed/side'
 
 /**
  * The panel's own knowledge of Codex's models, efforts, modes and commands. What exists is Codex's to
@@ -374,6 +375,26 @@ export const panelCommands = (t: Dict): CommandOption[] => [
   { id: 'fork', hint: t.commands.fork, local: true },
   { id: 'login', hint: t.commands.login, local: true },
   { id: 'logout', hint: t.commands.logout, local: true },
+  /*
+   * The panel's, because app-server knows no slash commands at all. A name renames the tab the way a
+   * double click does - and Codex's own record of the thread with it (thread/name/set), so the history
+   * and `codex resume` in a terminal show it too - and no name opens the field on the tab (see
+   * TabNameField), which is what a bare rename is asking for.
+   */
+  { id: 'rename', hint: t.commands.rename, local: true, argumentHint: t.commands.renameArgument },
+  /*
+   * The panel's only when nothing follows it: alone, it opens the panel's own screen of Codex's settings
+   * (see CodexConfig.tsx). With `key=value` after it the IDE writes that one setting into Codex's config
+   * as typed (see localCommand and CodexCommands).
+   */
+  { id: 'config', hint: t.commands.config, local: true },
+  /*
+   * A question beside the work - Codex's own `/side` in a terminal, which also answers to `/btw`. The IDE
+   * asks it in an ephemeral fork of the conversation, the way Codex's terminal does (see SideQuestion.kt),
+   * and the answer goes into a card over the field rather than into the conversation (see feed/side). It
+   * is the one panel command the phone keeps (see phoneCommands).
+   */
+  { id: ASIDE_COMMAND, hint: t.commands.btw, local: true, argumentHint: t.commands.btwArgument },
 ]
 
 /**

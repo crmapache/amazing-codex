@@ -27,17 +27,22 @@ export const ja: Dict = {
       mcp: { title: 'MCP サーバー', hint: '状態 · サインイン · 再接続' },
       plugins: { title: 'プラグイン', hint: 'インストール済み · 一覧 · マーケットプレイス' },
       settings: { title: '設定', hint: 'パネルの動きと音' },
+      appearance: { title: '外観', hint: 'テーマと文字サイズ' },
       sounds: { title: '通知音', hint: 'パネルがあなたを呼ぶとき' },
       calmColors: { title: '穏やかな色', hint: 'メーターの色の付け方' },
+      indicators: { title: 'インジケーター', hint: '入力欄のまわりに残すもの' },
       remote: { title: 'リモートアクセス', hint: '状態 · リレー · ペアリング済みの端末' },
       remoteAbout: { title: '外に出る情報', hint: 'オンにする前にお読みください' },
       newChat: { title: '新しいチャット', hint: '新しいタブが何で始まるか' },
+      restoreTabs: { title: '起動時のタブ', hint: '再起動後に戻るもの' },
+      shareEditor: { title: 'メッセージとエディター', hint: 'メッセージと一緒に送るもの' },
       newChatModel: { title: 'デフォルトのモデル', hint: '新しいタブが始まるモデル' },
       newChatEffort: { title: 'デフォルトの思考量', hint: '新しいタブがどれだけ考えるか' },
       newChatMode: { title: 'デフォルトのモード', hint: '新しいタブが始まるモード' },
       composerLayout: { title: '入力欄のレイアウト', hint: '入力欄を置く場所' },
       pasteCollapse: { title: '貼り付けたテキスト', hint: '貼り付けをチップにまとめる条件' },
       sendKey: { title: 'メッセージの送信', hint: 'どのキーで送るか' },
+      codexConfig: { title: 'CODEX の設定', hint: '本体の config.toml - /config で変わるもの' },
       improvePrompt: { title: 'プロンプトの改善', hint: '星ボタンが出す指示' },
       voice: { title: '音声入力', hint: '打つかわりに話す' },
       voiceLanguage: { title: '話す言語', hint: '音声入力が聞き取る言語' },
@@ -47,6 +52,8 @@ export const ja: Dict = {
       accounts: { title: 'Codex アカウント', hint: 'どのサブスクリプションで支払うか' },
       feedback: { title: 'フィードバック', hint: '不具合、アイデア、ひとことでも' },
       feedbackLog: { title: '添付される内容', hint: '送る前のレポート全文' },
+      usageStats: { title: '利用状況の統計', hint: '匿名のカウント、許可した場合のみ' },
+      usageStatsReport: { title: '送信される内容', hint: '次に送られるレポートの全文' },
     },
 
     rows: {
@@ -56,7 +63,7 @@ export const ja: Dict = {
       plugins: { label: 'プラグイン', sub: 'インストール済み、一覧、マーケットプレイス' },
       remote: { label: 'リモートアクセス', sub: '状態、リレー、ペアリング済みの端末' },
       accounts: { label: 'Codex アカウント', sub: 'サインアウトせずに切り替え' },
-      settings: { label: '設定', sub: '通知音、新しいチャット、レイアウト、言語' },
+      settings: { label: '設定', sub: 'テーマ、通知音、新しいチャット、言語' },
       feedback: { label: 'フィードバックを送る', sub: '不具合、アイデア、ひとことでも' },
     },
 
@@ -71,16 +78,22 @@ export const ja: Dict = {
 
   settings: {
     rows: {
+      appearance: { label: '外観', sub: 'テーマと文字サイズ' },
       sounds: { label: '通知音', sub: 'パネルがあなたを呼ぶとき' },
       calmColors: { label: '穏やかな色', sub: 'メーターにどれだけ色を残すか' },
+      indicators: { label: 'インジケーター', sub: '入力欄のそばに残す表示' },
       newChat: { label: '新しいチャット', sub: 'モデル・思考量・権限モード' },
+      restoreTabs: { label: '起動時のタブ', sub: '開いていたタブを下書きごと開き直す' },
+      shareEditor: { label: '開いているファイルと選択範囲', sub: 'メッセージごとに一緒に送るもの' },
       composerLayout: { label: '入力欄のレイアウト', sub: '入力欄を置く場所' },
       pasteCollapse: { label: '貼り付けたテキスト', sub: '貼り付けをチップにまとめる条件' },
       sendKey: { label: 'メッセージの送信', sub: 'どのキーで送るか' },
+      codexConfig: { label: 'Codex の設定', sub: '本体の config.toml と、このプロジェクトの信頼' },
       improvePrompt: { label: 'プロンプトの改善', sub: '星ボタンが出す指示' },
       voice: { label: '音声入力', sub: '自分の Deepgram キーで口述する' },
       customModels: { label: 'カスタムモデル', sub: 'Codex が挙げないもの' },
       language: { label: '言語', sub: 'パネルが話す言語' },
+      usageStats: { label: '利用状況の統計', sub: 'プラグイン改善のための匿名カウント' },
     },
 
     improveSummary: { builtIn: '標準', custom: 'カスタム' },
@@ -130,6 +143,81 @@ export const ja: Dict = {
     volumeOf: (sound) => `音量：${sound}`,
   },
 
+  appearance: {
+    size: '文字サイズ',
+    theme: 'テーマ',
+    followConsole: 'コンソールのフォントに合わせる',
+    followConsoleSub: (size) => `IDE のコンソールフォントに合わせる - 現在は ${size}`,
+    own: '独自のサイズ',
+    ownSub: 'パネルだけ - エディター、ターミナル、コンソールはそのまま',
+    smaller: '小さく',
+    larger: '大きく',
+    followIde: 'IDE に合わせる',
+    followIdeSub: (theme) => `IDE に合わせる - 現在は${theme}`,
+    dark: 'ダーク',
+    darkSub: 'IDE がライトでも常にダーク',
+    light: 'ライト',
+    lightSub: 'IDE がダークでも常にライト',
+    darkWord: 'ダーク',
+    lightWord: 'ライト',
+    auto: '自動',
+  },
+
+  restoreTabs: {
+    label: 'タブを復元する',
+    hint: 'プロジェクトを開き直すと、タブとその会話、書きかけの文章が戻ります - IDE がクラッシュした後も',
+    note: '何も起動し直しません。エージェントはタブを開くか書き込んだときにだけ立ち上がります。下書きはこのマシンの IDE 自身のフォルダーにだけ保存されます。',
+    on: 'オン',
+    off: 'オフ',
+  },
+
+  shareEditor: {
+    label: 'エディターの内容を一緒に送る',
+    hint: '各メッセージに、エディターで開いているファイルとその中で選択した行を添えます。ターミナルで Codex の /ide がするのと同じです',
+    note: 'このパネルからのみ：スマホで書いたメッセージにはエディターの内容は付きません。1 通だけ外すこともできます - 入力欄のファイルのチップを押してください。',
+    on: 'オン',
+    off: 'オフ',
+  },
+
+  usageStats: {
+    label: '匿名の利用状況の統計を送信する',
+    hint: 'パネルを使っている間に 1 日数回：どの機能がどれくらい使われ、セッションがどれくらい続いたか',
+    lastSent: (when: string) => `最終送信：${when}`,
+    notYet: 'まだ何も送信していません - 次にメッセージを送ったときに最初のレポートが送られます。',
+    sentTitle: '送信されるもの',
+    sent: [
+      '1 日ごとのカウント：パネルでの分数、メッセージ、回答、会話、編集',
+      '作業のまとまりがそれぞれどれくらい続いたか - いつ始まったかは送りません',
+      'どの機能がどれくらいの頻度で使われたか',
+      '組み込みツール、Codex 自身のモデル名、組み込みコマンドの名前',
+      'プラグイン・IDE・Codex のバージョン、OS、パネルの言語、設定の状態',
+      'このマシンで作られたランダムな ID - マシンごとの日を区別するためだけに使います',
+    ],
+    neverTitle: '決して送信されないもの',
+    never: [
+      'あなたのメッセージ、回答、コード、ファイル名やパス',
+      'プロジェクト名、独自のコマンド・MCP サーバー・モデルの名前',
+      'Codex や ChatGPT のアカウント、メールアドレス、API キー - IP アドレスも保存されません',
+      'トークン数、費用、作業している時間帯',
+    ],
+    offNote: 'オフにするとレポートの送信が止まり、このマシンの ID で送信済みのデータをすべて削除するようサービスに依頼します。',
+    seeReport: '送信される内容を正確に見る',
+    privacy: 'プライバシーポリシー',
+    reportNote: '次に送られるレポートの全文です。これ以外は何も一緒に送られません。',
+    building: 'レポートを作成しています…',
+    on: 'オン',
+    off: 'オフ',
+    unasked: '未回答',
+    card: {
+      label: '匿名',
+      title: 'プラグインの改善に協力しますか？',
+      body: 'パネルの使われ方を匿名のカウントで送ります：どの機能を、どれくらいの頻度で、どれくらいの時間。コード、メッセージ、ファイル名、あなたが誰かを示すものは決して送りません。設定からいつでもオフにできます。',
+      allow: '許可する',
+      decline: 'しない',
+      more: '送信される内容',
+    },
+  },
+
   calmColors: {
     sample: '各段階のメーター',
     label: 'メーターの色',
@@ -137,6 +225,28 @@ export const ja: Dict = {
     keeps: 'ほかは変わりません。エラーは赤のまま、許可の確認もそのままです。それらは起きた出来事であって、気分ではありません。',
     full: 'フルカラー',
     none: '一つの色',
+  },
+
+  indicators: {
+    contextBar: { label: 'コンテキストバー', hint: '会話が進むにつれて埋まっていく、入力欄の上の帯' },
+    contextFigure: {
+      label: 'コンテキストの数値',
+      hint: 'バーの端の「ctx 42%」- 通常のレイアウトのみ。狭いレイアウトではバーのヒントに出ます',
+    },
+    fiveHour: { label: '5時間の上限', hint: 'プランの5時間ウィンドウのリング' },
+    week: { label: '週の上限', hint: 'プランの週ウィンドウのリング' },
+    modelWeek: {
+      label: '追加の上限',
+      named: (limit) => `${limit} の上限`,
+      hint: 'プランの 2 つの上限とは別に Codex が知らせる上限 - プランにある間だけ表示されます',
+    },
+    spending: {
+      label: '利用額の上限',
+      hint: 'Business シートの月ごとの利用額上限のリング - 上限があるシートでだけ表示されます',
+    },
+    tokens: { label: '今日のトークン', hint: '今日使った分（全プロジェクト合計）' },
+    feedback: { label: 'フィードバックボタン', hint: 'フォームを開く吹き出し - メニューからはいつでも開けます' },
+    thanks: { label: 'ハート', hint: 'スター、レビュー、友人へのひとこと、またはチップ' },
   },
 
   history: {
@@ -270,11 +380,6 @@ export const ja: Dict = {
       save: '時刻を設定',
       nothing: 'このプロジェクトで時刻を待っているものはありません。',
     },
-    duplicate: '複製',
-    delete: '削除',
-    deleteTitle: 'このシナリオを削除しますか？',
-    deleteRun: 'この実行を削除',
-    deleteRunTitle: 'この実行を削除しますか？',
     queue: {
       add: 'キューに追加',
       oneAtATime: '順番に 1 つずつ',
@@ -309,6 +414,12 @@ export const ja: Dict = {
       emptyNote: 'ここに一連の作業を入れておくと、前の作業が終わり次第そのまま始まります。',
       unread: 'キューを読み取れませんでした。このマシン上のファイルが壊れている可能性があります。失われたものはありません - 読み取れなかったリストが上書きされることはありません。',
     },
+    duplicate: '複製',
+    moveRow: 'ドラッグして並べ替えるか、もう一方の棚へ移動',
+    delete: '削除',
+    deleteTitle: 'このシナリオを削除しますか？',
+    deleteRun: 'この実行を削除',
+    deleteRunTitle: 'この実行を削除しますか？',
     running: '実行中',
     runningNote: 'どれも同じ作業コピー上',
     runningHere: (n: number): string => `${n} 件が実行中`,
@@ -335,6 +446,7 @@ export const ja: Dict = {
       state: '状態',
     },
     moreRuns: (count: number): string => `さらに ${count} 件を表示`,
+    fewerRuns: '折りたたむ',
     shelves: {
       project: 'このリポジトリの中',
       projectNote: 'リポジトリと一緒に移動 · ここで働く全員が持つ',
@@ -377,6 +489,7 @@ export const ja: Dict = {
       retries: 'やり直しの回数切れ',
       stopped: 'あなたが中断',
       undone: '未完了',
+      headGaveUp: 'メインスレッドも終えられませんでした',
     },
     outcomes: {
       scenarioBroken: 'このシナリオはこのままでは実行できません。開いて何が足りないか確認してください。',
@@ -390,6 +503,9 @@ export const ja: Dict = {
       runGone: 'その実行はもうありません。',
       runNotResumable: 'この実行は再開できません。メインスレッドが一度も立ち上がらなかったためです。',
       queueNotWritten: 'キューをディスクに書き込めませんでした。',
+      scenarioNotMoved: 'シナリオをもう一方の棚へ移動できませんでした。',
+      scenarioOnBothShelves: 'もう一方の棚に同じ識別子のシナリオがすでにあるため、このシナリオは元の場所に残しました。',
+      orderNotWritten: '棚の新しい並び順をディスクに書き込めませんでした。',
       unknown: '何かがうまくいきませんでした。',
     },
     run: {
@@ -425,6 +541,8 @@ export const ja: Dict = {
       passOfUpTo: (pass, passes) => `最大 ${passes} 周のうち ${pass} 周目`,
       headSaid: 'メインスレッド',
       sentBack: (n) => `${n} 回やり直させました`,
+      takenOver: (why) => `メインスレッドが引き継ぎました: ${why}`,
+      takingOver: 'メインスレッドが仕上げています',
       allow: '許可',
       deny: '拒否',
       send: '送信',
@@ -475,6 +593,9 @@ export const ja: Dict = {
       onQuestion: '質問されたら',
       questionHead: '自分で答える',
       questionStop: '止まって待つ',
+      onGiveUp: 'カードが終えられないとき',
+      giveUpStop: '実行を止める',
+      giveUpHead: '自分で仕上げる',
       retries: 'やり直させる',
       noRetries: 'しない',
       retriesCount: (n: number): string => `${n} 回まで`,
@@ -708,11 +829,17 @@ export const ja: Dict = {
     send: '送信',
     run: '実行',
     runHint: 'あなたのシェルで実行します - Codex は次のメッセージで出力を見ます',
+    askAside: '横で質問',
+    askAsideHint: 'Codex は会話の内容から答え、作業を続けます',
     improveEmpty: 'Codex から何も返ってこなかったので、入力欄に入れるものがありません。',
     improveChanged: '書き直しの間に下書きが変わったので、そのままにしました。',
     improveTerminal: 'ターミナルのコマンドは書き直しません',
     voice: '音声入力',
     voiceStop: '音声入力を終える',
+    editor: {
+      on: (place) => `このメッセージで Codex に ${place} を見せます · クリックで外す`,
+      off: (place) => `${place} はこのメッセージに付きません · クリックで付ける`,
+    },
   },
 
   header: {
@@ -728,8 +855,28 @@ export const ja: Dict = {
     closeRun: 'この実行を閉じる',
     conversations: '会話',
     newSession: '新しい会話',
+    renameTab: '会話の名前を変更',
     menu: 'メニュー',
     watchers: (n) => `ほかに ${n} 件がこのプロジェクトを見ています`,
+  },
+
+  side: {
+    title: 'ちょっと質問',
+    unseen: 'エージェントにはこれが見えません',
+    thinking: '横で考え中',
+    retrying: (attempt: number, max: number, seconds: number): string =>
+      `API エラー、${seconds} 秒後に再試行 (${attempt}/${max})`,
+    cancel: 'キャンセル',
+    cancelled: 'キャンセルしました',
+    askAgain: 'もう一度聞く',
+    empty: '回答が返ってきませんでした',
+    failed: { ended: '回答の前に会話が止まりました', timeout: '10 分たっても回答がありません', refused: 'Codex は答えられませんでした' },
+    copy: '回答をコピー',
+    close: '閉じる (Esc)',
+    notSaved: 'チャットには保存されません',
+    askInChat: 'チャットで聞く',
+    askInChatHint: '質問を通常のメッセージとして入力欄に移します - そこでは Codex がファイルを変更したりコマンドを実行したりできます',
+    hint: '/btw または /side に続けて質問を入力してください。Codex は作業を止めずにこの会話の内容から答えます - ファイルを読むことはあっても、何も変更しません - 回答はチャットに残りません。',
   },
 
   thanks: {
@@ -742,6 +889,8 @@ export const ja: Dict = {
     share: '友達に教える',
     shareSub: '紹介の一文とリンクをコピーします',
     shareCopied: 'コピーしました - 好きなところに貼ってください',
+    tip: 'チップを贈る',
+    tipSub: 'Ko-fi で、1回でも毎月でも',
     shareText:
       'Amazing Codex GUI、いいですよ - JetBrains の IDE の中に、Codex をちゃんとしたパネルとして置けます：https://github.com/crmapache/amazing-codex',
   },
@@ -750,7 +899,7 @@ export const ja: Dict = {
     checking: 'Codex を探しています…',
     notFound: 'Codex が見つかりません',
     notFoundText:
-      'パネルは claude コマンドを通して動きます。インストール済みなら場所を指定してください - IDE から見える PATH は、ターミナルのものと同じとは限りません。',
+      'パネルは codex コマンドを通して動きます。インストール済みなら場所を指定してください - IDE から見える PATH は、ターミナルのものと同じとは限りません。',
     useThis: 'これを使う',
     whereLooked: 'パネルが探した場所',
     checkAgain: 'もう一度確認',
@@ -760,6 +909,8 @@ export const ja: Dict = {
     signInAs: (account: string): string => `${account} でサインイン`,
     signInText:
       'サインインは IDE のターミナルで一度だけです。Codex がブラウザーを開いて、あなたが戻るのを待ちます。パネルはそれを自分で受け取ります。',
+    heldBack: (names: string): string =>
+      `このアカウントはサインイン済みですが、このプロジェクトの Codex 設定（.codex/config.toml）が別の種類のサインインを求めています：${names}。サインインし直しても変わりません - 別のアカウントを選ぶか、プロジェクトの設定を変更してください。`,
     logIn: 'サインイン',
     openTerminalAgain: 'ターミナルをもう一度開く',
     finishInTerminal: 'ターミナルでサインインを終えてください - この画面は自動で閉じます。',
@@ -798,6 +949,11 @@ export const ja: Dict = {
     copyReply: '返信全体をコピー',
     moreActions: 'その他',
     copyMessage: 'このメッセージをコピー（添付はパスとして）',
+    editor: {
+      selected: (n, name) => `${name} の ${n} 行`,
+      opened: (name) => `${name} を表示中`,
+      open: (place) => `${place} · エディターで開く`,
+    },
     reuse: {
       label: '直して送り直す',
       hint: 'このメッセージを入力欄に戻して、直して送り直します',
@@ -885,9 +1041,9 @@ export const ja: Dict = {
     checkpoint: {
       cleared: '会話をクリアしました - これより上は覚えていません',
       earlier: '以前のメッセージ',
+      loadEarlier: '以前のメッセージを読み込む',
       notKept: '以前のメッセージはもう保存されていません',
       notOnPhone: '以前のメッセージはスマートフォンには送られません',
-      loadEarlier: '以前のメッセージを読み込む',
     },
 
     compact: {
@@ -935,6 +1091,22 @@ export const ja: Dict = {
       textWithCode: (code) => `Codex が予期せず終了しました（終了コード ${code}）。`,
     },
 
+    outranked: {
+      account: {
+        label: 'サインイン',
+        text: 'このプロジェクトの Codex 設定が、ここで選んだアカウントとは別のサインインを求めています:',
+      },
+      untrusted: {
+        label: '設定',
+        text: 'Codex はこのプロジェクト自身の設定を読んでいません - プロジェクトがまだ信頼されていないためです:',
+      },
+      open: 'Codex の設定',
+    },
+
+    sampling: {
+      note: '最新のモデルはサンプリングのパラメータを受け付けなくなりましたが、今回のリクエストには入っていました。Codex 自身は付けないので、リクエストの経路にあるもの - 多くは config.toml でモデルプロバイダーとして設定したゲートウェイやプロキシ - が付けています。',
+    },
+
     limit: {
       label: '上限',
       extraLabel: '追加利用',
@@ -954,12 +1126,14 @@ export const ja: Dict = {
     ask: {
       label: 'CODEX からの質問',
       blocks: (n) => `${n} 件の質問 · ここで止まっています`,
+      leftOver: (n) => `${n} 件の質問 · 答えないままです`,
       pickAny: '複数選べます',
       other: 'その他',
       ownAnswer: '自分で答えを書く…',
       send: '回答を送る',
       pickToContinue: '選ぶと続きます',
       note: '聞いたところからそのまま続きます',
+      leftOverNote: 'そのターンはとっくに終わっています - 答えは新しいメッセージとして送られます',
       expand: '質問を開く',
       collapse: '質問を閉じる',
       dismiss: '質問を片づける',
@@ -988,6 +1162,8 @@ export const ja: Dict = {
     queue: {
       label: '待機中',
       hint: (n) => `${n} 件がこのターンの後に順番に送られます · ドラッグで並べ替え`,
+      edit: '入力欄で編集',
+      editing: (key, button) => `入力欄で編集中 · ${key} か「${button}」でここに戻ります`,
     },
     selection: { quote: '引用', fork: 'ここから分岐' },
     streams: {
@@ -1060,6 +1236,7 @@ export const ja: Dict = {
       'no-executable': 'このマシンでは Codex が見つかりませんでした。',
       'no-store': '新しいアカウント用のフォルダーを作れませんでした。',
       'not-supported': 'この Codex は 2 つのサインインを区別できないため、何も追加されませんでした。',
+      'already-here': 'そのアカウントはすでにあります。Codex 自身のサインイン（codex login）なので、何も追加されませんでした。',
       'logout-failed': 'ログアウトできませんでした。ターミナルで試してください。',
       'already-running': 'すでにサインインが進んでいます。',
       unknown: 'うまくいきませんでした。',
@@ -1296,7 +1473,6 @@ export const ja: Dict = {
 
     scenarios: {
       running: '実行中',
-      repository: 'リポジトリ',
       inRepository: (name: string): string => `${name} 内`,
       opensProject: 'IDE では開いていません - 選ぶとそこで開きます',
       nothingRunning: 'このプロジェクトでいま動いているものはありません。',
@@ -1453,13 +1629,20 @@ export const ja: Dict = {
       projectFiles: 'プロジェクトのファイル',
       ofTotal: (shown, total) => `${shown}／${total}`,
       photosDropped: (n) => `あと ${n} 枚は 1 通に収まりません - まずこれらを送ってください。`,
-      photoTooBig: '1 通には収まりません。写真は 1 枚ずつ試してください。',
+      photoTooBig: 'この写真は縮小しても大きすぎます。',
+      photoTooBigOldIde: 'パソコンのプラグインは小さな写真しか受け取れません。この写真を送るにはプラグインを更新してください。',
+      photoUnreadable: 'このファイルは画像として開けませんでした。',
+      sending: '送信中…',
+      notDelivered: '届いていません',
+      retry: '再送',
+      discardUnsent: 'このメッセージを破棄',
     },
 
     limits: {
       title: '上限とコンテキスト',
       fiveHourWindow: '5時間のウィンドウ',
       weeklyWindow: '週のウィンドウ',
+      modelWindow: (model) => `${model} の週のウィンドウ`,
       paceNote: (percent) =>
         `淡い弧は一定ペースです。今日までなら週の ${percent}% までが「予定内」。明るい弧がそれより短いうちは計画どおりです。`,
       context: 'この会話のコンテキスト',
@@ -1485,6 +1668,7 @@ export const ja: Dict = {
     modeHint: (mode) => `権限モード：${mode}`,
     sessionLimit: '5時間の上限',
     weekLimit: '週の上限',
+    modelWeekLimit: (limit) => `${limit} の上限`,
     /** The ring of a Codex business seat's spending cap - see ExtraUsage.resets. */
     spendLimit: '利用額の上限',
     windowUsed: (title, percent) => `${title}：${percent}% 使用`,
@@ -1502,7 +1686,7 @@ export const ja: Dict = {
     weeklyOpus: '週の Opus',
     weeklySonnet: '週の Sonnet',
     weeklyApps: '週のアプリ',
-    weeklyWithExtra: '週（追加利用を含む）',
+    weeklyFable: '週の Fable',
     extra: '追加利用',
   },
 
@@ -1519,11 +1703,61 @@ export const ja: Dict = {
     modeHint: 'shift+tab',
   },
 
+  codexConfig: {
+    intro: 'Codex 本体の設定です。ターミナルが読むのと同じ config.toml なので、ここでの変更はターミナルにも反映されます。',
+    loading: 'Codex に設定を問い合わせています…',
+    noCli: 'このマシンに Codex が見つかりません。',
+    unreadable: 'Codex から設定が返ってきませんでした。少ししてからもう一度お試しください。',
+    groups: { work: 'Codex の動き方', terminal: 'ターミナルと「標準」のタブ', other: '実験的な機能' },
+    on: 'オン',
+    off: 'オフ',
+    saving: '保存しています…',
+    notSet: '未設定 - Codex が決めます',
+    lockedPolicy: '組織のポリシーで決められています - ここでは変更できません。',
+    lockedProject: 'プロジェクトの .codex/config.toml で決められています - ここで変えても優先されません。',
+    chips: 'パネルでは、タブごとに「モデル」「思考の深さ」「モード」のチップがこれを決めます。ここの値に従うのは、ターミナルと「標準」のままのタブです。',
+    failed: 'Codex はこの変更を受け付けませんでした。',
+    overridden: '保存しましたが、プロジェクトの設定かポリシーがより優先される値を決めているため、ここでは適用されません。',
+    save: '保存',
+    project: {
+      title: 'このプロジェクト',
+      none: '独自の Codex 設定はありません',
+      noneHint: 'プロジェクトに .codex/config.toml、フック、exec ポリシーがあれば、ここに表示されます。',
+      trusted: '信頼済み - Codex はプロジェクト自身の設定を読みます',
+      untrusted: '未信頼 - Codex はプロジェクト自身の設定を無視します',
+      sets: (names: string): string => `設定している項目：${names}`,
+      trust: 'このプロジェクトを信頼する',
+      untrust: '信頼をやめる',
+    },
+    labels: {
+      model_reasoning_summary: '推論の要約',
+      model_verbosity: '回答の長さ',
+      personality: 'パーソナリティ',
+      web_search: 'ウェブ検索',
+      'sandbox_workspace_write.network_access': 'プロジェクトのサンドボックスでのネットワーク接続',
+      approvals_reviewer: '承認リクエストを確認する人',
+      service_tier: 'サービスティア',
+      model_auto_compact_token_limit: '自動圧縮のしきい値（トークン）',
+      review_model: '/review のモデル',
+      model: 'モデル',
+      model_reasoning_effort: '思考の深さ',
+      approval_policy: '承認を求めるタイミング',
+      sandbox_mode: 'サンドボックス',
+      'features.network_proxy': 'ネットワークプロキシ',
+      'features.prevent_idle_sleep': '実行中はスリープさせない',
+    },
+  },
+
   commands: {
     resume: 'このプロジェクトの過去の会話を開く',
     fork: 'この会話を新しいタブで続ける',
     login: 'IDE のターミナルで Codex にサインインする',
     logout: 'サインアウトする - IDE のターミナルが開きます',
+    rename: 'このタブの名前を変更。名前なしならタブ上で入力欄を開く',
+    renameArgument: '[新しい名前]',
+    config: 'Codex の設定 - メニューで開く',
+    btw: '作業を止めずにちょっと質問する',
+    btwArgument: '<質問>',
     model: 'このセッションのモデルを切り替える',
     effort: 'Codex が動く前にどれだけ考えるかを決める',
     codeReview: 'Codex 自身のレビュアーで変更をレビューする',

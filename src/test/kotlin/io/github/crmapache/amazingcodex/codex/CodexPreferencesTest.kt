@@ -10,15 +10,11 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
 class CodexPreferencesTest : BasePlatformTestCase() {
 
     fun testSnapshotKeepsWhatWasWritten() {
-        CodexPreferences.model = "haiku"
-        CodexPreferences.effort = "low"
         CodexPreferences.mode = "acceptEdits"
         CodexPreferences.composerLayout = "right"
 
         val snapshot = CodexPreferences.snapshot()
 
-        assertEquals("haiku", snapshot.model)
-        assertEquals("low", snapshot.effort)
         assertEquals("acceptEdits", snapshot.mode)
         assertEquals("right", snapshot.composerLayout)
     }
@@ -56,6 +52,31 @@ class CodexPreferencesTest : BasePlatformTestCase() {
         assertEquals(listOf("glm-4.6"), CodexPreferences.usableModelNames(listOf("glm-4.6", "two words")))
     }
 
+    /**
+     * The indicators switched off around the field. What is stored is what is OFF - an empty setting means
+     * "all shown" - and the value comes in by a message, so anything that is not a plain word is dropped
+     * on the way in and on the way out.
+     */
+    fun testHiddenIndicatorsSurviveARoundTrip() {
+        CodexPreferences.hiddenIndicators = setOf("tokens", "thanks")
+
+        assertEquals(setOf("thanks", "tokens"), CodexPreferences.hiddenIndicators)
+        assertEquals(setOf("thanks", "tokens"), CodexPreferences.snapshot().hiddenIndicators)
+    }
+
+    fun testHiddenIndicatorsKeepOnlyPlainWords() {
+        CodexPreferences.hiddenIndicators = setOf(" week ", "with,comma", "two words", "", "a1")
+
+        assertEquals(setOf("week"), CodexPreferences.hiddenIndicators)
+    }
+
+    fun testNothingHiddenIsTheDefault() {
+        CodexPreferences.hiddenIndicators = setOf("week")
+        CodexPreferences.hiddenIndicators = emptySet()
+
+        assertEquals(emptySet<String>(), CodexPreferences.hiddenIndicators)
+    }
+
     fun testEmptyValueMeansDefault() {
         CodexPreferences.model = "opus"
         CodexPreferences.model = ""
@@ -71,6 +92,7 @@ class CodexPreferencesTest : BasePlatformTestCase() {
         CodexPreferences.mode = ""
         CodexPreferences.composerLayout = ""
         CodexPreferences.customModels = emptyList()
+        CodexPreferences.hiddenIndicators = emptySet()
         super.tearDown()
     }
 }

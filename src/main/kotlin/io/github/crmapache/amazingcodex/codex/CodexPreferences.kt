@@ -12,8 +12,6 @@ import com.intellij.ide.util.PropertiesComponent
 internal object CodexPreferences {
 
     data class Snapshot(
-        val model: String,
-        val effort: String,
         val mode: String,
         val newTabModel: String,
         val newTabEffort: String,
@@ -21,13 +19,14 @@ internal object CodexPreferences {
         val pasteCollapse: String,
         val sendKey: String,
         val gaugeVivid: Int,
+        val hiddenIndicators: Set<String>,
         val improveInstructions: String,
         val language: String,
+        val restoreTabs: Boolean,
+        val shareEditor: Boolean,
     )
 
     fun snapshot(): Snapshot = Snapshot(
-        model = model,
-        effort = effort,
         mode = mode,
         newTabModel = newTabModel,
         newTabEffort = newTabEffort,
@@ -35,8 +34,11 @@ internal object CodexPreferences {
         pasteCollapse = pasteCollapse,
         sendKey = sendKey,
         gaugeVivid = gaugeVivid,
+        hiddenIndicators = hiddenIndicators,
         improveInstructions = improveInstructions,
         language = language,
+        restoreTabs = restoreTabs,
+        shareEditor = shareEditor,
     )
 
     var model: String
@@ -79,19 +81,6 @@ internal object CodexPreferences {
     var newTabEffort: String
         get() = EffortLevels.normalize(read(NEW_TAB_EFFORT_KEY))
         set(value) = write(NEW_TAB_EFFORT_KEY, EffortLevels.normalize(value))
-
-    /**
-     * What a new tab genuinely starts on when nothing has been chosen for it in particular - the pin if
-     * there is one, and the last pick otherwise.
-     *
-     * Read by everything that has to SHOW that answer rather than launch by it: the chip over an empty
-     * tab in the panel, and the choice a phone opens a new conversation from. The launch itself takes a
-     * longer road, because it also knows which account is paying (see CodexSessions.newSession) - and
-     * an account nobody has worked on yet ends up exactly here.
-     */
-    fun startingModel(): String = newTabModel.ifEmpty { model }
-
-    fun startingEffort(): String = newTabEffort.ifEmpty { effort }
 
     /**
      * Where the input field sits: 'left' | 'bottom' | 'right' | 'compact'. Empty means a panel opened
@@ -180,6 +169,59 @@ internal object CodexPreferences {
         set(value) = write(LANGUAGE_KEY, value.trim())
 
     /**
+     * Which of the panel's two themes it wears: [THEME_DARK], [THEME_LIGHT], or empty - the default - for
+     * "the IDE's", dark under a dark look and feel and light under a light one (see PanelTheme).
+     *
+     * Empty rather than dark by default for the reason the language above is empty rather than English:
+     * somebody working in a light IDE should get a light panel without first having to discover that a
+     * switch exists. An explicit choice wins over the IDE's either way.
+     *
+     * Machine-wide: how bright a screen somebody wants is a matter of their eyes and their room, not of
+     * the repository that happens to be open. Read back through the same filter it is written through -
+     * a word this version does not know means "the IDE's", never a third theme.
+     */
+    var theme: String
+        get() = read(THEME_KEY).takeIf { it in THEMES }.orEmpty()
+        set(value) = write(THEME_KEY, value.trim().takeIf { it in THEMES }.orEmpty())
+
+    /**
+     * The panel's own text size in points, or [TEXT_SIZE_FOLLOW] - the default - for "the console
+     * font's", which is what the panel has always followed (see IdeTypography).
+     *
+     * Asked for by somebody who wanted the panel bigger than their editor: the console font is shared with
+     * the terminal and the run window, and turning it up for the panel turned all of them up. Whole points
+     * only, and within the bounds the zoom accepts anyway - a size nobody can set by hand is a size that
+     * cannot have been meant.
+     */
+    var textSize: Int
+        get() = read(TEXT_SIZE_KEY).toIntOrNull()?.takeIf { it in TEXT_SIZE_MIN..TEXT_SIZE_MAX } ?: TEXT_SIZE_FOLLOW
+        set(value) = write(TEXT_SIZE_KEY, if (value in TEXT_SIZE_MIN..TEXT_SIZE_MAX) value.toString() else "")
+
+    /**
+     * Whether the tabs open when a project was last closed - and what was being typed in them - come back
+     * when it is opened again (see TabMemory).
+     *
+     * On unless switched off, and stored the other way round for that reason: only "off" is ever written,
+     * so an empty setting means "as the panel does by default". Machine-wide: whether somebody likes to
+     * start clean is a habit of theirs, not of a repository.
+     */
+    var restoreTabs: Boolean
+        get() = read(RESTORE_TABS_KEY) != RESTORE_TABS_OFF
+        set(value) = write(RESTORE_TABS_KEY, if (value) "" else RESTORE_TABS_OFF)
+
+    /**
+     * Whether a message sent from the panel carries what the editor shows - the open file, and the lines
+     * selected in it (see EditorContext).
+     *
+     * On unless switched off, stored the other way round like [restoreTabs]: it is what Codex in a
+     * terminal does, and what the feedback that asked for it expected without being told. Machine-wide: it
+     * is a way of working, not a property of a repository.
+     */
+    var shareEditor: Boolean
+        get() = read(SHARE_EDITOR_KEY) != SHARE_EDITOR_OFF
+        set(value) = write(SHARE_EDITOR_KEY, if (value) "" else SHARE_EDITOR_OFF)
+
+    /**
      * The models somebody named by hand, because Claude Code does not name them (see CustomModels.tsx).
      *
      * Machine-wide beside the model and the mode above: which models exist is decided by how this
@@ -235,6 +277,26 @@ internal object CodexPreferences {
     var mutedSounds: Set<String>
         get() = read(MUTED_SOUNDS_KEY).split(',').map { it.trim() }.filter { it.isNotEmpty() }.toSet()
         set(value) = write(MUTED_SOUNDS_KEY, value.joinToString(","))
+
+    /**
+     * The indicators around the input field switched off by hand - the context bar and its figure, the
+     * usage rings, the token counter, the bubble and the heart. The same shape as [mutedSounds] and for the
+     * same reason: what is stored is what is OFF, so an indicator added in a later version arrives switched
+     * on for everyone rather than hidden for whoever once opened the list.
+     *
+     * Which ids exist the panel decides (see indicators.ts) - it drops a name it does not know. This side
+     * only keeps the value a plain list of words: it is written by a message, and a message can say
+     * anything.
+     */
+    var hiddenIndicators: Set<String>
+        get() = indicatorIds(read(HIDDEN_INDICATORS_KEY).split(','))
+        set(value) = write(HIDDEN_INDICATORS_KEY, indicatorIds(value).joinToString(","))
+
+    private fun indicatorIds(ids: Iterable<String>): Set<String> =
+        ids.map { it.trim() }.filter { INDICATOR_ID.matches(it) }.take(MAX_INDICATORS).toSortedSet()
+
+    private val INDICATOR_ID = Regex("[A-Za-z]{1,32}")
+    private const val MAX_INDICATORS = 32
 
     /**
      * Each sound's volume in per cent. Only those differing from full are written down: a sound not
@@ -341,6 +403,20 @@ internal object CodexPreferences {
     /** What the switch this setting grew out of wrote while it was on. */
     private const val CALM_COLORS_WAS_ON = "true"
 
+    /** The two themes a choice can name - see [theme]. Nothing chosen is the IDE's. */
+    const val THEME_DARK = "dark"
+    const val THEME_LIGHT = "light"
+    private val THEMES = setOf(THEME_DARK, THEME_LIGHT)
+
+    /**
+     * The text size's bounds, and the answer meaning "the console's" - see [textSize]. The bounds are the
+     * zoom's own (IdeTypography keeps the page between 0.6 and 2.5 of its 13-point design), rounded
+     * inwards to whole points.
+     */
+    const val TEXT_SIZE_FOLLOW = 0
+    const val TEXT_SIZE_MIN = 8
+    const val TEXT_SIZE_MAX = 32
+
     private const val UNUSABLE_IN_MODEL = "\"'`\\,"
     private const val MAX_MODEL_NAME = 120
     private const val MAX_CUSTOM_MODELS = 30
@@ -362,8 +438,15 @@ internal object CodexPreferences {
     private const val PASTE_COLLAPSE_KEY = "acx.pasteCollapse"
     private const val SEND_KEY_KEY = "acx.sendKey"
     private const val CALM_COLORS_KEY = "acx.calmColors"
+    private const val HIDDEN_INDICATORS_KEY = "acx.indicators.hidden"
     private const val IMPROVE_INSTRUCTIONS_KEY = "acx.improve.instructions"
     private const val LANGUAGE_KEY = "acx.language"
+    private const val THEME_KEY = "acx.theme"
+    private const val TEXT_SIZE_KEY = "acx.textSize"
+    private const val RESTORE_TABS_KEY = "acx.restoreTabs"
+    private const val RESTORE_TABS_OFF = "off"
+    private const val SHARE_EDITOR_KEY = "acx.shareEditor"
+    private const val SHARE_EDITOR_OFF = "off"
     private const val CUSTOM_MODELS_KEY = "acx.models.custom"
     private const val EXECUTABLE_KEY = "acx.executable"
     private const val MUTED_SOUNDS_KEY = "acx.sounds.muted"

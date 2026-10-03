@@ -103,6 +103,7 @@ const SHARED_WITH_ENGLISH: Record<string, Locale[]> = {
   'modes.plan.label': ['es', 'de', 'fr'],
   'modes.plan.short': ['es', 'de', 'fr'],
   'modes.auto.label': ['es', 'pt-BR', 'de', 'fr'],
+  'appearance.auto': ['de', 'fr'],
   'modes.auto.short': ['es', 'pt-BR', 'de', 'fr'],
   // Codex's own name for its default preset, and the word is the same in these languages.
   'modes.acceptEdits.label': ['es', 'pt-BR', 'de', 'fr'],
@@ -147,8 +148,6 @@ const SHARED_WITH_ENGLISH: Record<string, Locale[]> = {
   'scenarios.run.tokens': ['es', 'pt-BR'],
   // "Verdict" is the word itself in French.
   'mobile.scenarios.step.verdict': ['fr'],
-  // "Repository" is what German says too - the loan word, not a line that was skipped.
-  'mobile.scenarios.repository': ['de'],
 }
 
 /**

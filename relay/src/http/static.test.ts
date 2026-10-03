@@ -13,7 +13,7 @@ import { serveStatic } from './static.js'
  * The person who hits that is somebody with the app on their home screen, weeks later.
  */
 
-const root = mkdtempSync(join(tmpdir(), 'acc-static-'))
+const root = mkdtempSync(join(tmpdir(), 'acx-static-'))
 mkdirSync(join(root, 'assets'), { recursive: true })
 writeFileSync(join(root, 'index.html'), '<!doctype html>')
 writeFileSync(join(root, 'sw.js'), '// worker')
@@ -71,7 +71,7 @@ describe('what the relay lets a client keep', () => {
  */
 describe('what the relay refuses to read', () => {
   it('does not follow a link out of the folder it serves', () => {
-    const secret = join(root, '..', `acc-secret-${process.pid}`)
+    const secret = join(root, '..', `acx-secret-${process.pid}`)
     writeFileSync(secret, 'not for the internet')
     symlinkSync(secret, join(root, 'escape.txt'))
 

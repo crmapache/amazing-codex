@@ -23,6 +23,12 @@ internal object CodexCommands {
         data object Clear : Command
         data object Init : Command
         data class Review(val target: ReviewTarget) : Command
+        /**
+         * `/rename name` - the thread's name in Codex's record, and the tab's. The panel at the desk runs
+         * its own `/rename` before anything is sent (see catalog.ts); this is the one typed on a phone,
+         * which has no tab strip to rename in place.
+         */
+        data class Rename(val title: String) : Command
         /** Ordinary text - possibly an expanded prompt - with the skills it names. */
         data class Say(val text: String, val skills: List<Skill>) : Command
     }
@@ -37,7 +43,10 @@ internal object CodexCommands {
     data class Skill(val name: String, val path: String)
 
     /** The names the panel's `/` list offers for the actions below - see ProjectCatalog.commandHints. */
-    val BUILT_IN = listOf("compact", "clear", "new", "init", "review")
+    val BUILT_IN = listOf("compact", "clear", "new", "init", "review", "rename")
+
+    /** The longest name taken from `/rename` - a tab's name, not a paragraph. */
+    private const val RENAME_LIMIT = 120
 
     fun parse(text: String, promptsDir: File?, skills: Map<String, String>): Command {
         val trimmed = text.trimStart()
@@ -51,6 +60,8 @@ internal object CodexCommands {
             "clear", "new" -> Command.Clear
             "init" -> Command.Init
             "review" -> Command.Review(reviewTarget(rest))
+            // A bare `/rename` has nothing to name the thread with; it goes as text and Codex says so.
+            "rename" -> rest.takeIf { it.isNotBlank() }?.let { Command.Rename(it.take(RENAME_LIMIT)) } ?: Command.Say(text, emptyList())
             else -> promptOrSkill(head, rest, text, promptsDir, skills)
         }
     }

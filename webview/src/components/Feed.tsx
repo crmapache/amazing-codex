@@ -34,6 +34,7 @@ import {
   MetaRow,
   ModelStuckRow,
   ModelSwitchRow,
+  OutrankedRow,
   RetryRow,
   ThinkRow,
 } from './items/Rows'
@@ -103,6 +104,15 @@ interface FeedProps {
    * fresh one every render would undo the memo on every card of the feed.
    */
   signIn?: SignInOffer
+  /**
+   * Open the screen that decides which of Claude Code's settings layers this project loads - offered on
+   * the row about a repository overruling the chosen account (see OutrankedItem) and under a refusal that
+   * came from whatever those settings route the requests through (see ErrorItem.sampling).
+   *
+   * Absent on the phone and in a step log, like the sign-in above: there is no settings screen to open
+   * there. Hand in a STABLE function, for the same reason.
+   */
+  onCodexConfig?: () => void
   /**
    * Take a sent message back into the input field, to be corrected and sent again (see feed/reuse.ts).
    * Absent on the phone: the field there is its own and holds plain text rather than the panel's tokens.
@@ -196,6 +206,7 @@ export const Feed = ({
   onDismissError,
   onOpenLink,
   signIn,
+  onCodexConfig,
   onReuse,
   onLoadEarlier,
   userLabel,
@@ -822,6 +833,7 @@ export const Feed = ({
               onDismissError={onDismissError}
               onOpenLink={onOpenLink}
               signIn={signIn}
+              onCodexConfig={onCodexConfig}
               onReuse={onReuse}
               onLoadEarlier={onLoadEarlier}
               userLabel={userLabel}
@@ -889,6 +901,8 @@ interface ItemViewProps {
   onOpenLink: (url: string) => void
   /** The way back out of a dead sign-in - see FeedProps.signIn. */
   signIn?: SignInOffer
+  /** The screen of Codex's own settings - see FeedProps.onCodexConfig. */
+  onCodexConfig?: () => void
   onReuse?: (item: UserItem) => void
   onLoadEarlier?: () => void
   /** What stands over a sent message instead of "YOU" - see FeedProps.userLabel. */
@@ -924,6 +938,7 @@ const ItemView = memo(({
   onDismissError,
   onOpenLink,
   signIn,
+  onCodexConfig,
   onReuse,
   onLoadEarlier,
   userLabel,
@@ -1015,9 +1030,17 @@ const ItemView = memo(({
     case 'crash':
       return <CrashRow item={item} />
 
+    case 'outranked':
+      return <OutrankedRow item={item} onOpen={onCodexConfig} />
+
     case 'error':
       return (
-        <ErrorRow item={item} onDismiss={() => onDismissError(item.id)} onOpenLink={onOpenLink} signIn={signIn} />
+        <ErrorRow
+          item={item}
+          onDismiss={() => onDismissError(item.id)}
+          onOpenLink={onOpenLink}
+          signIn={signIn}
+        />
       )
 
     case 'limit':

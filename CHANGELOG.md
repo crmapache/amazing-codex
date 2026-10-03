@@ -8,6 +8,35 @@ belongs to that plugin and lives in its own repository.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-02
+
+- Added: side questions with `/btw` or `/side`, the way Codex's own terminal asks them. Type one at any moment, even while Codex is working, and the answer comes in a card above the input field without interrupting the turn. The question goes to a temporary copy of the conversation that knows everything the conversation does, may read and search files but changes nothing, and is thrown away afterwards: the agent never sees the question and nothing is saved. Follow-up questions keep the thread.
+- Added: the file open in the editor and the lines selected in it go with each message, in the form Codex's own `/ide` uses. A chip beside the paperclip shows what will go along and leaves it out of one message when clicked; a line under a sent message says what went with it. Settings - "Send the editor along" switches it off.
+- Added: a screen for Codex's own settings, opened by `/config` or from Settings. It reads Codex's config.toml the way Codex does, shows where each value comes from, locks what the project or your organization sets, and writes changes into the same file a terminal reads. A value written but overruled by the project says so. `/config key=value` writes one setting from the input field.
+- Added: trusting a project from the panel. Codex reads a project's own `.codex/config.toml`, hooks and exec policies only once the project is trusted, and until now the panel never asked. The settings screen shows whether this project has Codex settings of its own and whether they are read, with a button to trust it; a conversation in an untrusted project with settings of its own says so once, in its feed.
+- Added: when a project's own settings demand another kind of sign-in than the chosen account has, the feed and the sign-in screen say so by name, instead of offering a sign-in that would change nothing.
+- Added: tabs and what was typed in them come back after the IDE restarts, in their order and with their model, effort and mode. Nothing starts until a tab is shown or written into. Settings - "Tabs on start" switches it off.
+- Added: renaming a tab by double-clicking its name or with `/rename`. The name goes into Codex's own record, so the history, the search and `codex resume` show it too, and a name you gave is never replaced by a generated one.
+- Added: a light theme that follows the IDE by default, and a text size of the panel's own.
+- Added: switches for each indicator around the input field, including the ring of a business seat's spending limit.
+- Added: rings for Codex's extra limits beside the plan's five-hour and weekly ones, on plans that have them.
+- Added: scenarios are reordered by dragging, can let the main thread finish a card its own session could not, and show their cards' text as formatted text. Conversations raised by scenario runs no longer fill the history and the search.
+- Added: a tab that called you with a sound glows until you look at it.
+- Added: a message waiting in the queue can be edited.
+- Added: anonymous usage statistics, off until you press Allow on the card that asks once. Settings - "Usage statistics" shows the whole report and switches it off, which also deletes what was sent. The privacy policy lists every field.
+- Added: an opening splash with the plugin's new mark.
+- Changed: the plugin has its own mark (ACX) and its own relay for remote access. Phones paired before this version have to be paired again.
+- Changed: per-turn settings the panel sends now follow your config.toml: network access and extra writable folders of the workspace sandbox, and the reasoning summary.
+- Changed: "Default" in the model menu names the model your config.toml sets, when it sets one, and "auto" effort names its effort.
+- Fixed: on the phone, "load earlier messages" did nothing in long conversations written in Russian or another non-Latin script.
+- Fixed: a usage update about an extra limit could overwrite the five-hour and weekly rings.
+- Fixed: "the model picked is not the one answering" could appear on a tab left on Default.
+- Fixed: a question with options and its answer were missing from a conversation opened from the history, and a conversation that ended on a question lost it. It now comes back as a card to answer.
+- Fixed: signing in to an account in a drawer that held another account could later delete that drawer. A drawer is now replaced only when it confirms it holds the same account, and an API key is told apart from another key ending in the same characters.
+- Fixed: the same account could stand on the accounts screen twice. Duplicates merge once the remaining sign-in has proved it works, so a revoked sign-in never wins over a working one.
+- Fixed: the limit rings could stand still in one project while another one was working; every open project now shows the same picture of an account.
+- Fixed: a new tab's mode was read from a project's settings even when the project was not trusted, so the mode shown was not the one Codex used.
+
 ## [0.1.0] - 2026-09-19
 
 - Added: the panel drives the Codex CLI through `codex app-server` - one process per conversation,

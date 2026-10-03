@@ -2,6 +2,7 @@ package io.github.crmapache.amazingcodex.search
 
 import io.github.crmapache.amazingcodex.codex.CodexOneShot
 import io.github.crmapache.amazingcodex.codex.CodexPreferences
+import io.github.crmapache.amazingcodex.codex.StartingChoice
 import java.io.File
 import java.nio.file.Path
 import java.time.LocalDate
@@ -104,7 +105,7 @@ internal object AiSearch {
             CodexOneShot.Ask(
                 prompt = body(query),
                 instructions = SYSTEM_PROMPT,
-                model = CodexPreferences.startingModel().takeIf { it != "default" }.orEmpty(),
+                model = StartingChoice.model(accountId).takeIf { it != "default" }.orEmpty(),
                 effort = "low",
                 workingDirectory = corpus.toString(),
                 outputSchema = SCHEMA,

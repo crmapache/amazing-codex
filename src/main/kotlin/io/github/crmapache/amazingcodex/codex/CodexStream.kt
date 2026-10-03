@@ -76,6 +76,14 @@ internal class CodexStream(
                 emit(CodexDialect.compacting())
             }
 
+            // A remark of its own: the words that follow are a new block (see CodexDialect.textBlockStart) -
+            // said with the first of them, so a message that comes to nothing draws nothing.
+            "agentMessage" -> blockOwed = true
+
+            // A Stop hook sent the agent back to work: what it said before this was an ending of the turn,
+            // and the turn now goes on (see CodexDialect.messageEnd).
+            "hookPrompt" -> emit(CodexDialect.messageEnd())
+
             else -> if (CodexDialect.isTool(item)) drawCard(item)
         }
     }
@@ -91,9 +99,14 @@ internal class CodexStream(
         when (AppServer.text(item["type"])) {
             "agentMessage" -> {
                 val text = AppServer.text(item["text"])
+                if (text.isBlank()) blockOwed = false
                 if (text.isNotBlank()) {
                     lastAgentText = text
+                    startBlock()
                     emit(CodexDialect.assistantText(id, text, model(), uuid = id, usage = lastUsage))
+                    // An answer Codex marks as the final one ends the model's say, as far as it knows; a
+                    // Stop hook may still send it back (see "hookPrompt" in [itemStarted]).
+                    if (AppServer.text(item["phase"]) == FINAL_ANSWER) emit(CodexDialect.messageEnd())
                 }
             }
 
@@ -132,7 +145,18 @@ internal class CodexStream(
     }
 
     fun agentDelta(delta: String) {
-        if (delta.isNotEmpty()) emit(CodexDialect.textDelta(delta))
+        if (delta.isEmpty()) return
+        startBlock()
+        emit(CodexDialect.textDelta(delta))
+    }
+
+    /** A new block of words is owed by an agentMessage that has begun - see [itemStarted]. */
+    private var blockOwed = false
+
+    private fun startBlock() {
+        if (!blockOwed) return
+        blockOwed = false
+        emit(CodexDialect.textBlockStart())
     }
 
     fun reasoningDelta(delta: String) {
@@ -247,6 +271,7 @@ internal class CodexStream(
                 isError = failed && !CodexErrors.isAuth(info),
                 resultText = if (failed) message.ifEmpty { "The turn failed." } else lastAgentText,
                 usage = lastUsage,
+                apiErrorStatus = if (failed) CodexErrors.httpStatus(info) else null,
             ),
         )
 
@@ -299,6 +324,9 @@ internal class CodexStream(
         const val AUTH_FAILED = "authentication_failed"
 
         /** Codex does not say how many retries it will make; the card needs a figure, and this is its own. */
-        private const val MAX_RETRIES_SHOWN = 5
+        const val MAX_RETRIES_SHOWN = 5
+
+        /** The `phase` of an agentMessage that Codex means as the turn's answer (as against commentary). */
+        private const val FINAL_ANSWER = "final_answer"
     }
 }

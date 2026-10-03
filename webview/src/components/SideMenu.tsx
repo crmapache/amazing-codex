@@ -18,18 +18,23 @@ export type MenuScreen =
   | 'mcp'
   | 'plugins'
   | 'settings'
+  | 'appearance'
   | 'sounds'
   | 'calmColors'
+  | 'indicators'
   | 'remote'
   | 'remoteAbout'
   | 'accounts'
   | 'newChat'
+  | 'restoreTabs'
+  | 'shareEditor'
   | 'newChatModel'
   | 'newChatEffort'
   | 'newChatMode'
   | 'composerLayout'
   | 'pasteCollapse'
   | 'sendKey'
+  | 'codexConfig'
   | 'improvePrompt'
   | 'voice'
   | 'voiceLanguage'
@@ -38,6 +43,8 @@ export type MenuScreen =
   | 'language'
   | 'feedback'
   | 'feedbackLog'
+  | 'usageStats'
+  | 'usageStatsReport'
 
 /**
  * The state of remote access as the root row shows it - the word and the colour come from the caller.
@@ -60,15 +67,23 @@ export interface MenuSummary {
   statistics: string
   mcp: { connected: number; total: number } | null
   plugins: number | null
+  /** The theme's word and the size the panel is drawn at - "Auto · 13 pt". */
+  appearance: string
   sounds: string
   /** Whether the gauges are drawn calm rather than by the green-to-red ladder - "On" or "Off". */
   calmColors: string
+  /** How many of the indicators around the input field are on - "6 on", the sounds' words. */
+  indicators: string
   /**
    * What a new tab starts with - the three values of the screen behind "New chats", each written the way
    * its own row writes it. "As last chosen" is one of the answers here rather than an absence of one:
    * that IS the setting, and a row saying nothing would read as a row that has not loaded.
    */
   newChat: { model: string; effort: string; mode: string }
+  /** Whether the tabs come back after a restart - "On" or "Off". */
+  restoreTabs: string
+  /** Whether a message carries the open file and the selected lines - "On" or "Off". */
+  shareEditor: string
   composerLayout: string
   /** From how many lines a pasted text folds into a chip, or that it never does. */
   pasteCollapse: string
@@ -82,6 +97,8 @@ export interface MenuSummary {
   customModels: string
   /** The language in force, written in itself - "简体中文" rather than "Chinese". */
   language: string
+  /** Whether the anonymous usage statistics go - "On", "Off", or that the question is still open. */
+  usageStats: string
   remote: RemoteSummary
   /**
    * The Claude account in force, and a tone for its dot - the same shape remote has above, and drawn by
@@ -132,16 +149,22 @@ const AUTHOR_PRODUCT = 'Snakein'
  * One row instead of that group, and every new preference joins them rather than making the root longer.
  */
 const SETTINGS_SCREENS: MenuScreen[] = [
+  'appearance',
   'sounds',
   'calmColors',
+  'indicators',
   'newChat',
+  'restoreTabs',
+  'shareEditor',
   'composerLayout',
   'pasteCollapse',
   'sendKey',
+  'codexConfig',
   'improvePrompt',
   'voice',
   'customModels',
   'language',
+  'usageStats',
 ]
 
 /** The three lists behind "New chats" - one level deeper than the settings themselves (see parentOf). */
@@ -156,6 +179,8 @@ const NEW_CHAT_SCREENS: MenuScreen[] = ['newChatModel', 'newChatEffort', 'newCha
 export const parentOf = (screen: MenuScreen): MenuScreen => {
   if (screen === 'remoteAbout') return 'remote'
   if (screen === 'feedbackLog') return 'feedback'
+  // The report shown whole belongs to the screen that offered it, the way the feedback's preview does.
+  if (screen === 'usageStatsReport') return 'usageStats'
   // The language dictation listens in and the microphone it listens through are chosen on lists of their
   // own - sixty-odd languages will not fit beside a key field, and coming back from either belongs to the
   // voice screen rather than to the settings list two steps up.
@@ -280,6 +305,23 @@ const ICONS: Record<string, ReactNode> = {
       <path d="M8 6.2v3.6M6.2 8h3.6" />
     </svg>
   ),
+  /* A tab with an arrow curling back into it: the row is about tabs that come back. */
+  restoreTabs: (
+    <svg viewBox="0 0 16 16" aria-hidden="true" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2.4 6.2V4.4a1.2 1.2 0 011.2-1.2h3l1.2 1.4h4.6a1.2 1.2 0 011.2 1.2v6.8a1.2 1.2 0 01-1.2 1.2H6" />
+      <path d="M5.6 9.6a2.6 2.6 0 10-2.4 1.6" />
+      <path d="M1.9 9.9l1.3 1.3 1.3-1.3" />
+    </svg>
+  ),
+  /* A page of text with a band across it: a file, and lines of it picked out - what goes with a message. */
+  shareEditor: (
+    <svg viewBox="0 0 16 16" aria-hidden="true" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4.2 2.4h5.2l2.8 2.8v8a.8.8 0 01-.8.8H4.2a.8.8 0 01-.8-.8V3.2a.8.8 0 01.8-.8z" />
+      <path d="M9.4 2.4v2.8h2.8" />
+      <rect x="5.4" y="7.6" width="5.2" height="2.6" rx=".6" />
+      <path d="M5.8 12h3.2" />
+    </svg>
+  ),
   /* Rising bars: the row is about how hard a new tab thinks, and a level is the one thing a ladder of
      bars says without a word. A dial would have promised a gauge - something being measured rather than
      something being chosen. */
@@ -288,12 +330,29 @@ const ICONS: Record<string, ReactNode> = {
       <path d="M3.6 11.4V9.2M8 11.4V6.4M12.4 11.4V3.9" />
     </svg>
   ),
+  /* A disc half in shadow: the light and the dark side of one thing, which is what a theme is. */
+  appearance: (
+    <svg viewBox="0 0 16 16" aria-hidden="true" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.4">
+      <circle cx="8" cy="8" r="5.6" />
+      <path d="M8 2.4a5.6 5.6 0 010 11.2z" fill="currentColor" stroke="none" />
+    </svg>
+  ),
   /* A gauge at rest: the track and a short reading inside it. The row is about how the gauges are
-     painted, and a palette or a half-filled disc would have promised a theme instead. */
+     painted, and a palette or a half-filled disc would have promised a theme instead - the half-filled
+     disc is the appearance row's, above. */
   calmColors: (
     <svg viewBox="0 0 16 16" aria-hidden="true" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
       <rect x="1.9" y="5.6" width="12.2" height="4.8" rx="2.4" />
       <path d="M4.6 8h2.8" strokeWidth="2" />
+    </svg>
+  ),
+  /* Two usage rings side by side, the second half-drawn: the row is about which of the readings around the
+     field stay on the screen, and the rings are the ones everybody recognises. */
+  indicators: (
+    <svg viewBox="0 0 16 16" aria-hidden="true" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+      <circle cx="4.7" cy="8" r="2.9" />
+      <path d="M11.3 5.1a2.9 2.9 0 010 5.8" />
+      <path d="M11.3 10.9a2.9 2.9 0 010-5.8" strokeOpacity="0.4" />
     </svg>
   ),
   composerLayout: (
@@ -318,6 +377,14 @@ const ICONS: Record<string, ReactNode> = {
       <rect x="2" y="3.4" width="12" height="9.2" rx="1.6" />
       <path d="M11 6.2v2.2a0.9 0.9 0 0 1-0.9 0.9H5.4" />
       <path d="M6.9 7.9L5.2 9.3l1.7 1.4" />
+    </svg>
+  ),
+  /* A terminal's prompt: the row is about the CLI's own settings - the ones /config changes in a terminal -
+     and a cursor after a chevron is the one drawing that says "the terminal program" unread. */
+  codexConfig: (
+    <svg viewBox="0 0 16 16" aria-hidden="true" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="3" width="12" height="10" rx="1.6" />
+      <path d="M4.8 6.4l2 1.6-2 1.6M8.4 10h2.8" />
     </svg>
   ),
   feedback: (
@@ -349,6 +416,15 @@ const ICONS: Record<string, ReactNode> = {
     <svg viewBox="0 0 16 16" aria-hidden="true" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
       <rect x="4.7" y="4.7" width="6.6" height="6.6" rx="1.3" />
       <path d="M6.7 2.5v2.2M9.3 2.5v2.2M6.7 11.3v2.2M9.3 11.3v2.2M2.5 6.7h2.2M2.5 9.3h2.2M11.3 6.7h2.2M11.3 9.3h2.2" />
+    </svg>
+  ),
+  /* Three bars under a small heart: counts, given to help. The statistics tab's own drawing is a chart of
+     one's own work; this row is about the counts that leave for the author, and a second copy of that
+     drawing would say they are the same thing. */
+  usageStats: (
+    <svg viewBox="0 0 16 16" aria-hidden="true" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3.4 13.2V10M7 13.2V8.4M10.6 13.2V10.8" />
+      <path d="M11.9 3.1c.5-.6 1.6-.6 2 .1.4.6.2 1.3-.3 1.8L11.9 6.6 10.2 5c-.5-.5-.7-1.2-.3-1.8.4-.7 1.5-.7 2-.1z" />
     </svg>
   ),
   /* A globe rather than a letter: the row has to be recognisable from inside a language one cannot read,
@@ -617,6 +693,16 @@ export const SettingsScreen = ({
   return (
     <div className={s.screen}>
       <div className={s.rows}>
+        {/* First, because it is the row people open this list looking for: a panel too dark, too light
+            or too small is the complaint that arrives before any other. */}
+        <Row
+          icon="appearance"
+          iconClass={s.rowIconAppearance}
+          label={t.settings.rows.appearance.label}
+          sub={t.settings.rows.appearance.sub}
+          value={summary.appearance}
+          onClick={() => onPick('appearance')}
+        />
         <Row
           icon="sounds"
           iconClass={s.rowIconSounds}
@@ -636,6 +722,17 @@ export const SettingsScreen = ({
           value={summary.calmColors}
           onClick={() => onPick('calmColors')}
         />
+        {/* Right after the colours, and for the same question: how much of the panel's corner of the eye
+            the person wants filled - the colours decide how loudly the readings speak, this decides which
+            of them speak at all. */}
+        <Row
+          icon="indicators"
+          iconClass={s.rowIconIndicators}
+          label={t.settings.rows.indicators.label}
+          sub={t.settings.rows.indicators.sub}
+          value={summary.indicators}
+          onClick={() => onPick('indicators')}
+        />
         {/* One row for the three things a tab is born with, rather than three rows scattered down this
             list. They are one decision - "how does my work begin" - and the model and the effort had no
             row here at all: they were written only by picking them in a tab, which meant the way to
@@ -649,6 +746,26 @@ export const SettingsScreen = ({
           sub={t.settings.rows.newChat.sub}
           value=""
           onClick={() => onPick('newChat')}
+        />
+        {/* Right after the new chats: both are about tabs, one about how a tab begins and this about
+            whether the tabs outlive a restart. */}
+        <Row
+          icon="restoreTabs"
+          iconClass={s.rowIconRestoreTabs}
+          label={t.settings.rows.restoreTabs.label}
+          sub={t.settings.rows.restoreTabs.sub}
+          value={summary.restoreTabs}
+          onClick={() => onPick('restoreTabs')}
+        />
+        {/* Before the input field's own rows: it is about what a message carries, and they are about how
+            the field that writes it looks and behaves. */}
+        <Row
+          icon="shareEditor"
+          iconClass={s.rowIconShareEditor}
+          label={t.settings.rows.shareEditor.label}
+          sub={t.settings.rows.shareEditor.sub}
+          value={summary.shareEditor}
+          onClick={() => onPick('shareEditor')}
         />
         <Row
           icon="composerLayout"
@@ -673,6 +790,15 @@ export const SettingsScreen = ({
           sub={t.settings.rows.sendKey.sub}
           value={summary.sendKey}
           onClick={() => onPick('sendKey')}
+        />
+        {/* No value beside it: forty settings do not fold into one word. */}
+        <Row
+          icon="codexConfig"
+          iconClass={s.rowIconCodexConfig}
+          label={t.settings.rows.codexConfig.label}
+          sub={t.settings.rows.codexConfig.sub}
+          value=""
+          onClick={() => onPick('codexConfig')}
         />
         <Row
           icon="improvePrompt"
@@ -708,6 +834,16 @@ export const SettingsScreen = ({
           sub={t.settings.rows.language.sub}
           value={summary.language}
           onClick={() => onPick('language')}
+        />
+        {/* Last: it is about the plugin rather than about working in it, the way "Send feedback" closes
+            the root list - and like that row it takes the heart's colour, because both lead to the author. */}
+        <Row
+          icon="usageStats"
+          iconClass={s.rowIconUsage}
+          label={t.settings.rows.usageStats.label}
+          sub={t.settings.rows.usageStats.sub}
+          value={summary.usageStats}
+          onClick={() => onPick('usageStats')}
         />
       </div>
     </div>

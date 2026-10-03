@@ -12,6 +12,8 @@ export interface AuthState {
   executablePath?: string
   /** Where the executable was looked for - arrives only when it was not found. */
   searched?: string[]
+  /** The project's settings that keep the account's credential from counting here (see the `auth` message). */
+  heldBackBy?: string[]
 }
 
 interface LoginGateProps {
@@ -132,7 +134,11 @@ export const LoginGate = ({
     <div className={s.gate}>
       {/* Which account, whenever there is one to name: the button fills that account's drawer. */}
       <p className={s.gateTitle}>{account !== '' ? t.login.signInAs(account) : t.login.signIn}</p>
-      <p className={s.gateText}>{t.login.signInText}</p>
+      {/* Signed in, and held back by the project rather than by the credential: signing in again changes
+          nothing, so the screen says what does - another account, or the project's own settings. */}
+      <p className={s.gateText}>
+        {auth.heldBackBy && auth.heldBackBy.length > 0 ? t.login.heldBack(auth.heldBackBy.join(', ')) : t.login.signInText}
+      </p>
 
       <button type="button" className={s.gateButton} onClick={onLogin}>
         {waiting ? t.login.openTerminalAgain : t.login.logIn}

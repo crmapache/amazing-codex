@@ -4,6 +4,7 @@ import java.io.File
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -68,25 +69,37 @@ class CodexSettingsTest {
         assertEquals("", CodexSettings.value(file, "approval_policy"))
     }
 
+    /** An untrusted project's own settings are read by nobody - Codex skips the layer, so does the panel. */
     @Test
-    fun `the layers are the policy, the project and the person, highest first`() {
+    fun `an untrusted project has no layer, and the person's file outranks the system's`() {
         val project = Files.createTempDirectory("acx-settings-project").toFile()
         val sources = CodexSettings.sources(project.absolutePath)
 
-        assertEquals(
-            listOf(CodexSettings.Layer.POLICY, CodexSettings.Layer.PROJECT, CodexSettings.Layer.USER),
-            sources.map { it.layer },
-        )
-        assertEquals(File(HostOs.managedSettingsDirectory(), "config.toml"), sources[0].file)
-        assertEquals(File(project, ".codex/config.toml"), sources[1].file)
-        assertTrue(sources[2].file.path.endsWith("config.toml"))
+        assertEquals(listOf(CodexSettings.Layer.USER, CodexSettings.Layer.POLICY), sources.map { it.layer })
+        assertEquals(File(HostOs.managedSettingsDirectory(), "config.toml"), sources[1].file)
     }
 
     @Test
     fun `without a project there is no project layer`() {
         assertEquals(
-            listOf(CodexSettings.Layer.POLICY, CodexSettings.Layer.USER),
+            listOf(CodexSettings.Layer.USER, CodexSettings.Layer.POLICY),
             CodexSettings.sources(null).map { it.layer },
         )
+    }
+
+    @Test
+    fun `a project is trusted by its own table in the person's file, and by nothing else`() {
+        val project = Files.createTempDirectory("acx-trusted.project").toFile()
+        val config = Files.createTempFile("acx-settings", ".toml").toFile().apply { deleteOnExit() }
+
+        config.writeText("model = \"gpt-5.5\"\n\n[projects.\"/somewhere/else\"]\ntrust_level = \"trusted\"\n")
+        assertFalse(CodexSettings.trusted(config, project.absolutePath))
+
+        config.writeText("[projects.\"${project.absolutePath}\"]\ntrust_level = \"untrusted\"\n")
+        assertFalse(CodexSettings.trusted(config, project.absolutePath))
+
+        // Under the path the disk resolves it to, as Codex writes it when it was started there.
+        config.writeText("[projects]\n\n[projects.\"${project.canonicalPath}\"]\ntrust_level = \"trusted\" # by codex\n[tui]\n")
+        assertTrue(CodexSettings.trusted(config, project.absolutePath))
     }
 }

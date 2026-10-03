@@ -4,30 +4,15 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 
 /**
- * How often the subscription may be asked about, and whether the answer is about the account we asked
- * for. One register for the whole IDE, because both questions are about an ACCOUNT while everything
- * that asks them belongs to a project.
+ * How often the subscription may be asked about. One register for the whole IDE, because the question is
+ * about an ACCOUNT while everything that asks it belongs to a project: the server counts requests per
+ * account and starts refusing after a few in a row, and two open projects asking politely on their own
+ * schedules add up to one impolite one.
  *
- * Both halves come from the same discovery, and it is worth writing down because nothing on the screen
- * hints at it. The CLI keeps the usage figures it last fetched in `~/.claude.json` -
- * `cachedUsageUtilization` - and that file is shared by every account: the drawer variable moves the
- * credential and nothing else (see AccountStore), so the cache is stamped with the accountUuid of
- * whoever the shared profile happens to name. When a fresh process fails to reach the usage endpoint,
- * it answers out of that cache instead, for up to an hour, and says nothing about having done so. The
- * failure that triggers it is not exotic: the endpoint starts refusing after a few requests in a row,
- * and a panel that pings three accounts and retries each of them produces exactly that. What the person
- * then sees is one account's weekly percentage sitting under another account's name - which is the
- * report this was written for.
- *
- * So:
- *
- *  - **[claim] paces the questions**, per account and across every open project. The pace is the cure:
- *    an answer that never had to fall back is an answer about the right subscription.
- *  - **[trust] catches what gets through** on the one route that can still borrow - a live conversation,
- *    which runs in the CLI's own configuration - by the thing a borrowed answer cannot hide: it is the
- *    same window, to the second, as another account's. A one-off ping is exempt, because it is asked
- *    with a configuration of its own and has nobody to borrow from; judged all the same, it made two
- *    seats of one organisation silence each other (see [trust]).
+ * The plugin this one grew out of kept a second half here, a judge of whether an answer was really the
+ * account's own - Claude Code could answer out of a usage cache the whole machine shared. Codex asks the
+ * server for the limits of the credential the process holds, so there is nothing to borrow, and the judge
+ * is gone: it threw away honest answers (see ProjectUsage.receiveUsage).
  *
  * Kept in memory: it is about not asking twice in a moment, and after a restart there is nothing left
  * to pace.
@@ -35,12 +20,10 @@ import com.intellij.openapi.components.service
 @Service(Service.Level.APP)
 internal class UsageProbes {
 
-    /** The last week window accepted for an account, and when we accepted it. */
-    private class Seen(val week: CodexUsage.Window, val at: Long)
-
     private val askedAt = HashMap<String, Long>()
 
-    private val seen = HashMap<String, Seen>()
+    /** The accounts with a question already waiting out the pace - see [hold]. */
+    private val waiting = HashSet<String>()
 
     /**
      * Take the right to ask this account about its usage, or find out how long is left until it comes
@@ -62,56 +45,23 @@ internal class UsageProbes {
     }
 
     /**
-     * Whether this snapshot is about the account it arrived for.
+     * Take the one place for a question about this account that waits out the pace instead of being
+     * dropped, or find it taken (false).
      *
-     * [borrowable] is the first question and usually the last one. A one-off ping runs with a config
-     * directory of its own (see AccountStore.usageProbeEnvironment), so the only cache it can fall back
-     * on is that account's - there is nothing of anybody else's to borrow, and an answer from there is
-     * this account's whatever it says. A live conversation is the other case: it runs in the CLI's own
-     * configuration, where the cache is stamped with whoever the shared profile names.
+     * One place for the whole IDE rather than one per project, because the answer is the whole IDE's
+     * (see AccountUsage): the accounts screen asks for every row at once, several projects open at once
+     * each ask for their rings, and a question already on its way answers all of them. A place per
+     * project queued one question per project behind one another - each of them the moment the previous
+     * one freed the pace, a burst of exactly the kind that makes the endpoint refuse.
      *
-     * For those, the test is a twin: another account, asked within the hour the CLI's cache lives, whose
-     * weekly window is the same one - the same reset time and the same percentage.
-     *
-     * **It is deliberately not applied to a ping, and that is a fix rather than an optimisation.** The
-     * comparison is coarse by necessity - the percentage is a whole number and the reset times are
-     * matched to within minutes - so two seats of one organisation, onboarded together and both barely
-     * used, look exactly like a copy. Judged, they silenced each other: the accounts screen asks for
-     * every row at once, and the second row to answer showed a dash instead of a figure that was true.
-     *
-     * A refusal no longer takes the twin's record with it either. The retry goes past the conversations
-     * to a ping of its own (see ProjectUsage.retryLater), which cannot borrow anything - so one refusal
-     * settles the question, and there is no reason to make the honest account prove itself again.
-     *
-     * A snapshot with no weekly window is trusted as it comes: there is nothing to compare, and this is
-     * the ordinary shape of an account that has not opened its week yet.
+     * Whoever takes it gives it back with [release] when the wait is over, before asking.
      */
     @Synchronized
-    fun trust(
-        account: String,
-        snapshot: CodexUsage.Snapshot,
-        borrowable: Boolean,
-        now: Long = System.currentTimeMillis(),
-    ): Boolean {
-        val week = snapshot.week?.takeIf { it.resetsAt != null } ?: return true
+    fun hold(account: String): Boolean = waiting.add(account)
 
-        val twin = borrowable && seen.entries.any { (id, held) ->
-            id != account &&
-                now - held.at <= BORROWED_MS &&
-                held.week.percent == week.percent &&
-                held.week.sameWindowAs(week)
-        }
-
-        if (twin) return false
-
-        seen[account] = Seen(week, now)
-        return true
-    }
-
-    /** The account has been signed out of, or switched away from: its window says nothing about it now. */
     @Synchronized
-    fun forget(account: String) {
-        seen.remove(account)
+    fun release(account: String) {
+        waiting.remove(account)
     }
 
     companion object {
@@ -128,10 +78,5 @@ internal class UsageProbes {
          */
         const val URGENT_GAP_MS = 15_000L
 
-        /**
-         * How long a borrowed answer can keep circulating: the CLI serves its cached figures for an
-         * hour (`yQr` in the bundle), so a window seen inside that hour is still worth suspecting.
-         */
-        private const val BORROWED_MS = 60 * 60 * 1000L
     }
 }

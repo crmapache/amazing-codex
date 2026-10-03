@@ -244,6 +244,69 @@
   opacity: 0.75;
 }
 
+/* --- The usage question --------------------------------------------------------
+   The card that asks once whether the anonymous usage report may go (see UsageStats.tsx). The accent's
+   tint rather than the warn of a permission: it holds nothing up and nobody is waiting on it - it is a
+   request, and it should read as one beside a card that stops a turn. */
+
+.usageCard {
+  margin-bottom: 8px;
+  border: 1px solid var(--acc-accent-32);
+  border-radius: var(--acc-r-2xl);
+  background: var(--acc-accent-08);
+  overflow: hidden;
+}
+
+.usageHead {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  padding: 8px 11px 0;
+}
+
+.usageLabel {
+  flex: none;
+  font: 600 9.5px/1 var(--acc-mono);
+  letter-spacing: 0.09em;
+  color: var(--acc-accent-light);
+}
+
+.usageTitle {
+  min-width: 0;
+  font-size: 12px;
+  color: var(--acc-fg-body);
+}
+
+.usageBody {
+  margin: 6px 11px 0;
+  font-size: 11.5px;
+  line-height: 16px;
+  color: var(--acc-fg-dim);
+  text-wrap: pretty;
+}
+
+.usageActions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 11px;
+}
+
+/* A line rather than a third button: the two beside it are the answer, this only leads to what the answer
+   is about. */
+.usageMore {
+  padding: 0;
+  font-size: 11px;
+  color: var(--acc-accent-light);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  white-space: nowrap;
+}
+
+.usageMore:hover {
+  color: var(--acc-accent-hover);
+}
+
 /* --- The questions -------------------------------------------------------- */
 
 /* A column that can give way (see .dock and data-shrinks above): the head and the foot keep their height
@@ -861,6 +924,38 @@
   opacity: 0.5;
 }
 
+/* The pencil beside the cross: taking a message back is not throwing it away, so it lights up in the
+   accent rather than in the cross's red. */
+.queueEdit:hover:not(:disabled),
+.queueEdit:active:not(:disabled) {
+  background: var(--acc-accent-12);
+  color: var(--acc-accent);
+}
+
+/* The place of a message taken out to be edited: dashed and without a card's fill - it is where a
+   message will stand again, not a message. */
+.queueRowEditing {
+  border-style: dashed;
+  background: none;
+}
+
+.queueRowEditing:hover {
+  border-color: var(--acc-line);
+}
+
+.queueRowEditing .queueText {
+  color: var(--acc-fg-dim);
+}
+
+.queueEditingMark {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  display: grid;
+  place-items: center;
+  color: var(--acc-accent);
+}
+
 /* --- The quotes ------------------------------------------------------------ */
 
 .quotes {
@@ -999,6 +1094,12 @@
   gap: 6px;
   padding: 10px 12px 0;
   pointer-events: none;
+}
+
+/* The figure without its bar (see indicators.ts): it keeps the far end it always stood at rather than
+   moving to where the bar used to begin - the eye goes looking for it there. */
+.contextMeterRowFigure {
+  justify-content: flex-end;
 }
 
 /* Four pixels rather than three, and the same four for the fill: the fill used to glow, and the glow
@@ -1258,6 +1359,13 @@
   padding: 7px 11px 7px 9px;
 }
 
+/* The vertical gauge switched off (see indicators.ts): the left padding was the narrow one because the
+   gauge and its gap stood between it and the text - without them the text would sit closer to the left
+   edge than to the right one. After .boxCompact and .boxRail, so that it wins at equal specificity. */
+.boxNoGauge {
+  padding-left: 11px;
+}
+
 /* The same trick as .compactSelectors above - the shared .selectorAuto divides the row evenly among the
    three buttons, while position+z-index lift them above the menu's scrim (see .compactSelectors and
    .selectors in shell.module.css). Here that is not visible to the eye - the rail stands above the scrim's
@@ -1374,6 +1482,21 @@
   font-size: 13px;
   line-height: var(--acc-leading, 1.55);
   color: var(--acc-fg);
+}
+
+/*
+ * Neither the context bar nor its figure (see indicators.ts), so there is no row above the field, and the
+ * field's own top padding - the short one, because the bar's row stood above it - would put the first line
+ * against the frame. The bottom padding's eleven pixels instead, and the heights grow by the same four so
+ * that the field still holds three lines and five, not a line less a strip. Only in the ordinary layout:
+ * the narrow ones never had the row, and their fields carry no padding of their own.
+ */
+.boxBare .field {
+  padding-top: 11px;
+  min-height: 85px;
+  min-height: calc(3 * 1lh + 22px);
+  max-height: 127px;
+  max-height: calc(5 * 1lh + 22px);
 }
 
 /*
@@ -1513,7 +1636,8 @@
  * commanding), what one does with it on the right (Send, Queue, Stop). The usage used to stand at the left
  * edge and has moved down into the status line, where the heart is - it is a fact about the day rather than
  * about this draft (see StatusBar). The row does not wrap: a Send button that rode onto a second line reads
- * as a breakage.
+ * as a breakage. Dragged narrow it gives way instead - the squares leave one by one (see useToolsFit), and
+ * after them Queue and Send narrow down to a letter each (see .send).
  */
 .tools {
   display: flex;
@@ -1538,6 +1662,7 @@
 .toolGroups {
   display: flex;
   align-items: center;
+  flex: none;
   gap: 11px;
 }
 
@@ -1547,10 +1672,15 @@
   gap: 4px;
 }
 
+/* flex: none - the squares never narrow. Left to the default they could: the automatic minimum of a flex
+   item is the smaller of its width and its contents, and a 26px button around a 14px icon would give up
+   twelve pixels of itself before anything else in the row did. When the row runs short, squares leave it
+   whole instead (see useToolsFit). */
 .attach {
   display: flex;
   align-items: center;
   justify-content: center;
+  flex: none;
   width: 26px;
   height: 26px;
   border-radius: var(--acc-r-md);
@@ -1573,6 +1703,79 @@
 .attach:active {
   background: var(--acc-bg-control-hover);
   color: var(--acc-fg);
+}
+
+/*
+ * What the editor shows, going with the message (see EditorChip). The squares' height and fill, so it reads
+ * as one more thing in their row rather than as a notice, and the attachments' mono face, so the name reads
+ * as the name of a file.
+ *
+ * flex: none, like the squares: when the row runs short the name steps out whole before any square
+ * leaves (see droppableTools), rather than being shrunk by the layout - shrunk, it gave way together with
+ * Queue and Send and ended as a stub of a letter.
+ *
+ * The gap to the name is the name's own margin rather than the row's gap: without the name the chip is its
+ * padding and the drawing exactly, a square among squares.
+ */
+.editorChip {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  height: 26px;
+  margin-left: 6px;
+  padding: 0 7px;
+  border-radius: var(--acc-r-md);
+  background: var(--acc-neutral-12);
+  color: var(--acc-fg-dim);
+  font: 11px var(--acc-mono);
+  overflow: hidden;
+  transition:
+    background-color 80ms linear,
+    color 80ms linear;
+}
+
+.editorChip svg {
+  flex: none;
+}
+
+.editorChip:hover {
+  background: var(--acc-neutral-16);
+  color: var(--acc-fg);
+}
+
+/* The max-width and the margin are EDITOR_NAME_MAX and EDITOR_NAME_GAP in composerFit.ts: the row counts
+   with them while the name is out and cannot be measured by its box. */
+.editorChipText {
+  min-width: 0;
+  max-width: 200px;
+  margin-left: 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Out of the row for want of room: no width, but still there - its text keeps a width to be read by, and
+   that is how the row knows when there is room for it again (see useToolsFit). */
+.editorChipNameGone {
+  max-width: 0;
+  margin-left: 0;
+}
+
+/* Left out of this one message: still there to be pressed back, but plainly not going. */
+.editorChipOff {
+  background: none;
+  box-shadow: inset 0 0 0 1px var(--acc-line);
+  color: var(--acc-fg-ghost);
+}
+
+.editorChipOff .editorChipText {
+  text-decoration: line-through;
+}
+
+/* Beside a narrow field (compact, the side rails) the drawing alone: the column there is as wide as what
+   stands in it, and a file name would widen it at the field's expense. The name is in the hover. */
+.editorChipBare {
+  margin-left: 0;
 }
 
 /* The same recipe as .send:disabled, the dimming included - two kinds of dimmed buttons in one row have to
@@ -1863,12 +2066,16 @@
   flex-shrink: 1;
 }
 
+/* Stop and Force stop never narrow and never break a line: a Stop cut down to its square, or folded into
+   two lines inside a 26px button, is the one control here that must not be mistaken for anything else. */
 .stop {
   height: 26px;
   display: flex;
   align-items: center;
+  flex: none;
   gap: 7px;
   padding: 0 10px;
+  white-space: nowrap;
   border: 1px solid var(--acc-line-strong);
   border-radius: var(--acc-r-lg);
   font: 500 11.5px var(--acc-font);
@@ -1896,8 +2103,10 @@
   height: 26px;
   display: flex;
   align-items: center;
+  flex: none;
   gap: 7px;
   padding: 0 10px;
+  white-space: nowrap;
   border: 1px solid var(--acc-bad);
   border-radius: var(--acc-r-lg);
   background: var(--acc-bad-16);
@@ -1917,17 +2126,36 @@
   color: var(--acc-bad-text);
 }
 
+/*
+ * Queue and Send are the last things in the row to give way - after every square that can leave has left
+ * (see useToolsFit) - and they give way down to their first letter, never below it.
+ *
+ * A grid of two columns is what holds that floor: the first letter in a column of its own size, the rest in
+ * one that can shrink to nothing (minmax(0, ...)). A grid sized to its minimum puts every track at its
+ * floor, so the button's own smallest width is its padding and one letter, and the row's automatic minimum
+ * for a flex item is exactly that. No overflow on the button itself: a clipping box has no automatic
+ * minimum at all and would narrow on past the letter. The rest clips itself instead, without an ellipsis -
+ * on a button this narrow three dots would take the room of the letters they stand in for.
+ */
 .send {
   height: 26px;
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, max-content);
   align-items: center;
-  gap: 7px;
+  justify-content: center;
+  flex: 0 1 auto;
   padding: 0 11px;
   border-radius: var(--acc-r-lg);
   background: var(--acc-accent);
   color: var(--acc-on-accent);
   font: 600 11.5px var(--acc-font);
+  white-space: nowrap;
   transition: background-color 80ms linear;
+}
+
+.sendRest {
+  min-width: 0;
+  overflow: hidden;
 }
 
 .send:hover,
@@ -1972,6 +2200,24 @@
   background: var(--acc-warn-active);
 }
 
+/* A side question (`/btw`) goes beside the work rather than into it, and the button says so by stepping
+   back: the accent's soft fill and its line, the same pair the side-question card wears over the field
+   (see sideQuestion.module.css), rather than the solid fill that means "this goes to the agent". */
+.sendAside {
+  border: 1px solid var(--acc-accent-line);
+  background: var(--acc-accent-soft);
+  color: var(--acc-accent);
+}
+
+.sendAside:hover,
+.sendAside[data-hover] {
+  background: var(--acc-accent-20);
+}
+
+.sendAside:active {
+  background: var(--acc-accent-32);
+}
+
 /*
  * The holiday layer's third ornament: the Send button freezes over (see holiday.ts).
  *
@@ -1979,29 +2225,32 @@
  * ice is the button's own fill rather than something laid over it - the whole 26px still take the click,
  * and nothing decorative sits above a tap target.
  *
- * Three exclusions, and none of them is cosmetic. `Run` is orange because the draft is a shell command
+ * Four exclusions, and none of them is cosmetic. `Run` is orange because the draft is a shell command
  * and the panel marks everything genuinely done on the machine that colour - that is meaning, not
- * decoration. The queue button shares this class and is deliberately the neutral one beside `Send`. And a
- * disabled button has its own dimmed look, which the rule below would otherwise outrank at higher
+ * decoration. `Ask aside` steps back on purpose, for the same kind of reason: the question does not go to
+ * the agent at work. The queue button shares this class and is deliberately the neutral one beside `Send`.
+ * And a disabled button has its own dimmed look, which the rule below would otherwise outrank at higher
  * specificity.
  */
-[data-holiday] .send:not(.sendRun):not(.sendQueued):not(:disabled) {
+[data-holiday] .send:not(.sendRun):not(.sendAside):not(.sendQueued):not(:disabled) {
   position: relative;
-  overflow: hidden;
+  /* clip rather than hidden: a hidden overflow makes the button a scroll container, and a scroll container
+     has no automatic minimum in the row - Send would narrow on past its first letter (see .send). */
+  overflow: clip;
   border: 1px solid var(--acc-ice-line);
   background: var(--acc-ice);
   /* Lit from above and settled at the bottom, then the button's own drop onto the row beneath. */
   box-shadow:
     inset 0 1px 0 rgb(255 255 255 / 85%),
     inset 0 -1px 0 rgb(18 58 88 / 30%),
-    0 1px 3px rgb(var(--acc-ch-shade) / 45%);
+    0 1px 3px var(--acc-drop);
   color: var(--acc-ice-ink);
   text-shadow: 0 1px 0 rgb(255 255 255 / 45%);
 }
 
 /* The glaze along the top edge, and one slanted shine across the face. Pseudo-elements rather than nodes:
    the button's markup is one word of text, and the ice has no business in Composer.tsx. */
-[data-holiday] .send:not(.sendRun):not(.sendQueued):not(:disabled)::before {
+[data-holiday] .send:not(.sendRun):not(.sendAside):not(.sendQueued):not(:disabled)::before {
   content: '';
   position: absolute;
   inset: 1px 2px auto;
@@ -2011,7 +2260,7 @@
   pointer-events: none;
 }
 
-[data-holiday] .send:not(.sendRun):not(.sendQueued):not(:disabled)::after {
+[data-holiday] .send:not(.sendRun):not(.sendAside):not(.sendQueued):not(:disabled)::after {
   content: '';
   position: absolute;
   top: -2px;
@@ -2023,12 +2272,12 @@
   pointer-events: none;
 }
 
-[data-holiday] .send:not(.sendRun):not(.sendQueued):not(:disabled):hover,
-[data-holiday] .send:not(.sendRun):not(.sendQueued):not(:disabled)[data-hover] {
+[data-holiday] .send:not(.sendRun):not(.sendAside):not(.sendQueued):not(:disabled):hover,
+[data-holiday] .send:not(.sendRun):not(.sendAside):not(.sendQueued):not(:disabled)[data-hover] {
   background: var(--acc-ice-hover);
 }
 
-[data-holiday] .send:not(.sendRun):not(.sendQueued):not(:disabled):active {
+[data-holiday] .send:not(.sendRun):not(.sendAside):not(.sendQueued):not(:disabled):active {
   background: var(--acc-ice-active);
 }
 

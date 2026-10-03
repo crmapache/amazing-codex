@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { unbase64url } from '../core/crypto'
-import { deriveSessionTitle } from '../feed/title'
+import { deriveSessionTitle, resumedTitle, searchHitTitleSource } from '../feed/title'
 import type {
   AvailablePluginInfo,
   HistoryEntry,
@@ -11,6 +11,7 @@ import type {
   ShellMessage,
 } from '../protocol'
 import { ClockContext } from '../hooks/useNow'
+import { asideQuestion, NO_THREAD, sideHistory, sideThread, type SideAction, type SideExchange, type SideThread } from '../feed/side'
 import { planDecisionOf, useCardState } from '../hooks/useCardState'
 import { applyFact, emptyFacts, factsFor, isFact, liveRunsOf, type ProjectFacts } from './facts'
 import { shelfHome, type RepositoryChoice, type ShelfChoice } from './scenarios'
@@ -18,11 +19,33 @@ import { CALM_VIVID_FULL } from '../calmColors'
 import { useCalmColors } from '../hooks/useCalmColors'
 import { LocaleProvider, activeLocale } from '../i18n'
 import { RemoteClock } from './clock'
-import { applyMessage, emptyFeed, feedTicks, tickFeed, type MobileFeed } from './feed'
+import {
+  applyMessage,
+  emptyFeed,
+  feedTicks,
+  restoreOverdue,
+  RESTORE_PATIENCE_MS,
+  settleRestore,
+  tickFeed,
+  type MobileFeed,
+} from './feed'
 import { Link, type LinkState, type SessionLaunch } from './link'
+import {
+  confirmed,
+  dropped,
+  held,
+  loadUnconfirmed,
+  resendable,
+  resent,
+  saveUnconfirmed,
+  shownFor,
+  uploaded,
+  type Unconfirmed,
+} from './outbox'
 import {
   buildProjects,
   CAP_OPEN_BARE,
+  CAP_PARTS,
   chatKey,
   waitingFor,
   type AgentEntry,
@@ -35,6 +58,7 @@ import { tabHolding } from '../feed/resume'
 import { PIN_LIMIT, togglePin } from '../feed/pins'
 import type { FeedItem, TaskItem } from '../feed/types'
 import { usageOf, type UsageFacts } from '../feed/usage'
+import { NARROW, ROOMY } from './images'
 import { chatHits, rowOf } from '../feed/search'
 import type { PaintedTerm, ScenarioScope, SearchHit, SearchProgressStep, SearchScope } from '../protocol'
 import { Search, type SearchTab } from '../components/Search'
@@ -49,7 +73,7 @@ import { MessageSheet } from './screens/MessageSheet'
 import { NewSession } from './screens/NewSession'
 import { Pairing, type PairingOffer } from './screens/Pairing'
 import { Plugins } from './screens/Plugins'
-import { Projects } from './screens/Projects'
+import { Projects, type HomeAnchor } from './screens/Projects'
 import { ScenarioCardScreen } from './screens/ScenarioCardScreen'
 import { ScenarioEditor } from './screens/ScenarioEditor'
 import { ScenarioRun } from './screens/ScenarioRun'
@@ -162,6 +186,9 @@ export const App = () => {
   const [states, setStates] = useState<Record<string, LinkState>>({})
   const [feed, setFeed] = useState<MobileFeed>(emptyFeed())
   const [opening, setOpening] = useState<Opening | null>(null)
+  /** The same, for the handler of the IDE's answer, which is built once (see projectOpened). */
+  const openingRef = useRef(opening)
+  openingRef.current = opening
 
   /** Whether the side menu is out, and which sheet is folded up over the screen. */
   const [drawer, setDrawer] = useState(false)
@@ -178,6 +205,26 @@ export const App = () => {
    * screen. By chat, because a quote taken in one conversation has no business standing over another.
    */
   const [quotes, setQuotes] = useState<Record<string, string[]>>({})
+
+  /**
+   * The side questions of each conversation, by chat - `/btw`, with the panel's rules (see feed/side).
+   *
+   * On this phone and nowhere else, like the desk's: the IDE answers the device that asked and only it, the
+   * agent never sees the thread, and the transcript holds none of it - so a page the browser throws out takes
+   * the thread along, the way closing a terminal does.
+   */
+  const [sideThreads, setSideThreads] = useState<Record<string, SideThread>>({})
+  const sideThreadsRef = useRef(sideThreads)
+  sideThreadsRef.current = sideThreads
+  const sideCounter = useRef(0)
+
+  const sideStep = useCallback((key: string, action: SideAction) => {
+    setSideThreads((current) => {
+      if ((action.kind === 'progress' || action.kind === 'end') && !current[key]) return current
+      const next = sideThread(current[key] ?? NO_THREAD, action)
+      return next === current[key] ? current : { ...current, [key]: next }
+    })
+  }, [])
 
   /**
    * Which messages are held over the top of a conversation, by chat (see feed/pins.ts).
@@ -290,6 +337,15 @@ export const App = () => {
     loaded: boolean
     state: PanelState
   } | null>(null)
+
+  /**
+   * The card on the first screen the scenarios were entered from, and where it stood - see HomeAnchor.
+   *
+   * Here rather than in the list, because the list is exactly what is gone while somebody is in there:
+   * every screen is drawn in place of it. Set by the card's door, used and dropped by the list when it
+   * comes back.
+   */
+  const [homeAnchor, setHomeAnchor] = useState<HomeAnchor | null>(null)
 
   /** Moves the counters on the list of conversations once a second - see the effect below. */
   const [tick, setTick] = useState(0)
@@ -448,6 +504,56 @@ export const App = () => {
   /** Numbers the messages this device queues, so two put in the same millisecond are still two. */
   const queueCounter = useRef(0)
 
+  /** The same for the messages it sends outright - every one carries an identifier now (see outbox.ts). */
+  const messageCounter = useRef(0)
+
+  /**
+   * What this phone has sent and the IDE has not yet confirmed - see outbox.ts.
+   *
+   * Read back from the page's storage on the way in: a page thrown out of memory in a pocket comes back
+   * holding what it never heard about, and sends it again once the line is up (see resendHeld).
+   */
+  const [outbox, setOutbox] = useState<Unconfirmed[]>(() => loadUnconfirmed())
+  /** The same, for the handlers that are built once and would otherwise see the first list forever. */
+  const outboxRef = useRef(outbox)
+  outboxRef.current = outbox
+
+  useEffect(() => saveUnconfirmed(outbox), [outbox])
+
+  /**
+   * This phone's own clock, for the rows of the outbox only: they count from moments this phone stamped,
+   * so the machine's clock the rest of the screens run on would measure them against the wrong one. Ticks
+   * only while something is waiting.
+   */
+  const [outboxNow, setOutboxNow] = useState(() => Date.now())
+  const outboxWaiting = outbox.length > 0
+  useEffect(() => {
+    if (!outboxWaiting) return
+    setOutboxNow(Date.now())
+    const timer = window.setInterval(() => setOutboxNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [outboxWaiting])
+
+  /**
+   * The line to an IDE is back with fresh keys: whatever was sent into the gap goes out again.
+   *
+   * Safe however often it happens - the IDE takes a message once by its identifier and only confirms a
+   * second copy (see ArrivedMessages.kt) - and limited to what is recent, so a message from an hour ago
+   * waits for the person rather than going out on its own (see resendable).
+   */
+  const resendHeld = useCallback((agentId: string) => {
+    const now = Date.now()
+    const due = resendable(outboxRef.current, agentId, now)
+    if (due.length === 0) return
+
+    setOutbox((list) => resent(list, new Set(due.map((one) => one.id)), now))
+    for (const one of due) {
+      void (links.current[agentId]?.command(one.projectKey, one.body) ?? Promise.resolve(false)).then(() =>
+        setOutbox((list) => uploaded(list, one.id, Date.now())),
+      )
+    }
+  }, [])
+
   /** Which conversation the feed on screen belongs to - a late message from another one is dropped. */
   const watching = useRef<{ agentId: string; projectKey: string; sessionId: string } | null>(null)
 
@@ -600,6 +706,51 @@ export const App = () => {
   grantArrived.current = dictation.grant
 
   const receive = useCallback((agentId: string, message: ShellMessage, projectKey: string) => {
+    // A side question's progress and its end: answered to this phone alone, about a conversation that may no
+    // longer be on screen, and nothing the feed has a place for (see feed/side). Stamped with the IDE's clock,
+    // which is the clock the card counts against here (see hooks/useNow).
+    if (message.type === 'sideProgress' || message.type === 'sideAnswer') {
+      const key = chatKey(agentId, projectKey, message.sessionId)
+      sideStep(
+        key,
+        message.type === 'sideProgress'
+          ? {
+              kind: 'progress',
+              id: message.id,
+              status: message.status,
+              attempt: message.attempt,
+              maxRetries: message.maxRetries,
+              delayMs: message.delayMs,
+              errorStatus: message.errorStatus,
+              at: clockOf(agentId).now(),
+            }
+          : {
+              kind: 'end',
+              id: message.id,
+              outcome: message.outcome,
+              text: message.text,
+              notice: message.notice,
+              reason: message.reason,
+              message: message.message,
+            },
+      )
+      return
+    }
+
+    // The IDE has a message this phone sent (see outbox.ts). Ahead of every guard below: it may be about a
+    // conversation no longer on screen, and the row it settles belongs to that one.
+    if (message.type === 'promptReceived') {
+      setOutbox((list) => confirmed(list, message.id))
+      return
+    }
+
+    // The echo of it says the same, and is the one that arrives when the confirmation was the frame lost
+    // on the way back. Not taken here - it goes on into the feed like any other.
+    if (message.type === 'promptEcho' && message.id) {
+      const id = message.id
+      setOutbox((list) => confirmed(list, id))
+    }
+
     // The one answer that belongs to a project rather than to a conversation, and the one that arrives
     // while nothing is being watched at all - the screen that asked for it is a list of past
     // conversations, not a feed.
@@ -854,7 +1005,7 @@ export const App = () => {
     }
 
     setFeed((previous) => applyMessage(previous, message, clockOf(agentId).now()))
-  }, [clockOf, cards])
+  }, [clockOf, cards, sideStep])
 
   /** Watch a conversation from the beginning and show it. */
   const enter = useCallback((agentId: string, projectKey: string, sessionId: string, decide: boolean) => {
@@ -870,20 +1021,27 @@ export const App = () => {
     setScreen({ at: decide ? 'decide' : 'thread', agentId, projectKey, sessionId })
   }, [cards])
 
-  /** How a request to open a closed project ended - see [startSession]. */
+  /**
+   * How a request to open a closed project ended - see [startSession].
+   *
+   * Read off the ref and acted on outside the state's updater. What follows is anything but pure - it
+   * sets other state and talks to the IDE - and an updater is run twice under StrictMode: the scenarios
+   * screen, opened this way off a closed project's card, was subscribed to the project twice for one answer.
+   */
   const projectOpened = useCallback(
     (agentId: string, result: { sessionId: string; ok: boolean; projectKey?: string; error?: string }) => {
-      setOpening((current) => {
-        if (!current || current.agentId !== agentId || current.sessionId !== result.sessionId) return current
+      const current = openingRef.current
+      if (!current || current.agentId !== agentId || current.sessionId !== result.sessionId) return
 
-        if (result.ok && result.projectKey) {
-          if (current.then) current.then(result.projectKey)
-          else enter(agentId, result.projectKey, result.sessionId, false)
-          return null
-        }
+      if (result.ok && result.projectKey) {
+        openingRef.current = null
+        setOpening(null)
+        if (current.then) current.then(result.projectKey)
+        else enter(agentId, result.projectKey, result.sessionId, false)
+        return
+      }
 
-        return { ...current, error: result.error || 'The IDE could not open that project.' }
-      })
+      setOpening({ ...current, error: result.error || 'The IDE could not open that project.' })
     },
     [enter],
   )
@@ -903,7 +1061,11 @@ export const App = () => {
           if (list.at !== undefined) clockOf(agent.agentId).observe(list.at)
           setInventories((current) => ({ ...current, [agent.agentId]: list }))
         },
-        onState: (state) => setStates((current) => ({ ...current, [agent.agentId]: state })),
+        onState: (state) => {
+          setStates((current) => ({ ...current, [agent.agentId]: state }))
+          // Keys agreed and the machine answering - what was sent into the gap goes out again.
+          if (state === 'connected') resendHeld(agent.agentId)
+        },
         onProjectOpened: (result) => projectOpened(agent.agentId, result),
         onResync: () => resync(agent.agentId),
       })
@@ -911,7 +1073,7 @@ export const App = () => {
       links.current[agent.agentId] = link
       void link.connect()
     }
-  }, [agents, receive, projectOpened, resync, clockOf])
+  }, [agents, receive, projectOpened, resync, clockOf, resendHeld])
 
   /**
    * A pairing code scanned while this app was already open.
@@ -989,6 +1151,63 @@ export const App = () => {
     links.current[current.agentId]?.watch(current.projectKey, current.sessionId, feed.seq)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [states])
+
+  /**
+   * A conversation asked for and not answered: ask again, and if the line has gone quiet, dial it again.
+   *
+   * The IDE answers a subscription at once - the restore starts with its very first frame - so a screen
+   * still waiting a few seconds later is waiting for something that is not coming. The request goes out
+   * once and nothing about it is confirmed: sent into a socket that died while the phone was in a pocket,
+   * it was lost with no sign, and "Loading the conversation…" stood until the beat noticed the silence a
+   * minute on, or until somebody gave up and reloaded the page.
+   *
+   * First the request is said again and the line is knocked on; if nothing at all has come back since the
+   * wait began, the line is dead whatever the socket says, and it is dialled afresh - the way back from
+   * that asks for the conversation by itself (see the effect above).
+   */
+  const connectedHere = watching.current ? states[watching.current.agentId] === 'connected' : false
+  useEffect(() => {
+    const current = watching.current
+    if (!current || feed.loaded || feed.restoring || !connectedHere) return
+
+    const since = Date.now()
+    let knocked = false
+
+    const timer = window.setInterval(() => {
+      const link = links.current[current.agentId]
+      if (!link) return
+
+      if (knocked && !link.heardSince(since)) {
+        link.redial()
+        return
+      }
+
+      knocked = true
+      link.wake()
+      link.watch(current.projectKey, current.sessionId, seen.current)
+    }, WATCH_PATIENCE_MS)
+
+    return () => window.clearInterval(timer)
+  }, [screen, feed.loaded, feed.restoring, connectedHere])
+
+  /**
+   * And a restore that went quiet is ended by the clock, not only by the next message - see
+   * restoreOverdue. In a conversation where nothing else is happening there is no next message.
+   */
+  useEffect(() => {
+    if (!feed.restoring) return
+
+    const timer = window.setTimeout(() => {
+      const current = watching.current
+      if (!current) return
+      setFeed((previous) => {
+        const now = clockOf(current.agentId).now()
+        return restoreOverdue(previous, now) ? settleRestore(previous, now) : previous
+      })
+    }, RESTORE_PATIENCE_MS + 1_000)
+
+    return () => window.clearTimeout(timer)
+  }, [feed.restoring, feed.restoringSince, clockOf])
 
   /**
    * Whether this phone can reach anything at all.
@@ -1073,9 +1292,58 @@ export const App = () => {
 
   const open = useCallback((entry: SessionEntry) => enter(entry.agentId, entry.projectKey, entry.sessionId, entry.awaitsYou), [enter])
 
-  const command = useCallback((agentId: string, projectKey: string, message: unknown) => {
-    links.current[agentId]?.command(projectKey, message)
-  }, [])
+  /** Resolves once it has left this phone, or could not - see Link.command. */
+  const command = useCallback(
+    (agentId: string, projectKey: string, message: unknown): Promise<boolean> =>
+      links.current[agentId]?.command(projectKey, message) ?? Promise.resolve(false),
+    [],
+  )
+
+  /**
+   * A side question from this phone - the panel's askAside (see App.tsx), with one difference: the moment it
+   * was asked is read off the IDE's clock, the one the card counts its seconds against here (see hooks/useNow).
+   * Sent outright rather than held: an answer is all that confirms one, and a resend would ask it twice.
+   */
+  const askAside = useCallback(
+    (agentId: string, projectKey: string, sessionId: string, question: string, replaces?: string) => {
+      const key = chatKey(agentId, projectKey, sessionId)
+      const id = `side-${Date.now().toString(36)}-${sideCounter.current++}-${Math.random().toString(36).slice(2, 6)}`
+      const history = sideHistory(sideThreadsRef.current[key] ?? NO_THREAD, replaces)
+
+      sideStep(key, { kind: 'ask', id, question, at: clockOf(agentId).now(), ...(replaces ? { replaces } : {}) })
+      command(agentId, projectKey, { type: 'sideQuestion', sessionId, id, question, history })
+    },
+    [clockOf, command, sideStep],
+  )
+
+  /**
+   * A message into a conversation, kept until the IDE says it has it - see outbox.ts.
+   *
+   * The identifier travels inside the message: it is what the IDE answers with, and what it recognises a
+   * second copy by.
+   */
+  const sendHeld = useCallback(
+    (agentId: string, projectKey: string, sessionId: string, body: Record<string, unknown> & { id: string }, text: string) => {
+      const now = Date.now()
+      setOutbox((list) => held(list, { id: body.id, agentId, projectKey, sessionId, body, text, firstAt: now, sentAt: now }))
+      // The IDE's confirmation is waited for from the moment the last byte has left - a message with
+      // photos takes a while to get that far over a mobile line (see outbox.ts).
+      void command(agentId, projectKey, body).then(() => setOutbox((list) => uploaded(list, body.id, Date.now())))
+    },
+    [command],
+  )
+
+  /** Retry on a row that was not delivered: the same message again, identifier and all. */
+  const retryHeld = useCallback(
+    (id: string) => {
+      const one = outboxRef.current.find((item) => item.id === id)
+      if (!one) return
+
+      setOutbox((list) => resent(list, new Set([id]), Date.now()))
+      void command(one.agentId, one.projectKey, one.body).then(() => setOutbox((list) => uploaded(list, id, Date.now())))
+    },
+    [command],
+  )
 
   /**
    * Ask an IDE about its MCP servers.
@@ -1277,6 +1545,34 @@ export const App = () => {
   }, [])
 
   /**
+   * A project's scenarios, off the button on its card.
+   *
+   * A closed project is opened in the IDE first - its shelves are read through the hub, and the hub comes
+   * with the window (see openRepository). The screen goes up at once rather than after the window does:
+   * opening takes seconds, and a card that does nothing for that long reads as a missed tap. It says
+   * "Opening the project…" meanwhile, and is re-aimed at the key the project is open under once the IDE
+   * answers - along with the anchor, since the card is drawn under that key from then on.
+   */
+  const openProjectScenarios = useCallback(
+    (agentId: string, projectKey: string, closed: boolean) => {
+      if (!closed) {
+        openScenarios(agentId, projectKey)
+        return
+      }
+
+      setScenarioNote('')
+      setScreen({ at: 'scenarios', agentId, projectKey })
+      openRepository(agentId, projectKey, (opened) => {
+        setHomeAnchor((current) =>
+          current?.project === `${agentId}:${projectKey}` ? { ...current, project: `${agentId}:${opened}` } : current,
+        )
+        openScenarios(agentId, opened)
+      })
+    },
+    [openScenarios, openRepository],
+  )
+
+  /**
    * Every project of every paired IDE, as a place a scenario may be kept - see RepositoryChoice.
    *
    * Whether one can take a shared scenario is known only once its shelves have arrived; until then it is
@@ -1466,8 +1762,7 @@ export const App = () => {
       }
 
       const sessionId = newSessionId()
-      const title = deriveSessionTitle(entry.title, 40)
-      const titleSource = entry.titleSource === 'heuristic' ? 'heuristic' : 'llm'
+      const { title, titleSource } = resumedTitle(entry.title, entry.titleSource)
 
       // A project the IDE is not holding open has to be opened first, and the conversation travels with
       // that request rather than after it - the window takes seconds, and a phone waiting to send the
@@ -1530,7 +1825,8 @@ export const App = () => {
     stepLog?.state ?? initialPanelState,
     stepScreen && stepLog ? `${stepLog.runId}:${stepLog.key}` : '',
     (before) => {
-      if (!stepScreen || !stepLog) return
+      // A request without a boundary is a log's first page - see the same guard at the desk.
+      if (!stepScreen || !stepLog || before === undefined) return
       command(stepScreen.agentId, stepScreen.projectKey, {
         type: 'scenarioLog',
         runId: stepLog.runId,
@@ -1661,8 +1957,7 @@ export const App = () => {
         type: 'resumeSession',
         sessionId,
         conversationId: hit.conversationId,
-        title: deriveSessionTitle(hit.title, 40),
-        titleSource: hit.named ? 'llm' : 'heuristic',
+        ...resumedTitle(hit.title, searchHitTitleSource(hit)),
       })
       enter(search.agentId, search.projectKey, sessionId, false)
     },
@@ -1908,7 +2203,17 @@ export const App = () => {
           onNew={(project) => setScreen({ at: 'new', agentId: project.agentId, projectKey: project.key })}
           onMenu={() => setDrawer(true)}
           onSearch={(project) => openSearch(project.agentId, project.key, '')}
-          onRun={(project, runId) => openRun(project.agentId, project.key, runId, 'sessions')}
+          onScenarios={(project, anchor) => {
+            setHomeAnchor(anchor)
+            openProjectScenarios(project.agentId, project.key, project.closed)
+          }}
+          canOpenBare={(agentId) => (inventories[agentId]?.caps ?? []).includes(CAP_OPEN_BARE)}
+          onRun={(project, runId, anchor) => {
+            setHomeAnchor(anchor)
+            openRun(project.agentId, project.key, runId, 'sessions')
+          }}
+          anchor={homeAnchor}
+          onAnchored={() => setHomeAnchor(null)}
           onHide={hide}
           onShowHidden={showHidden}
           onHistory={(project) => {
@@ -2028,11 +2333,7 @@ export const App = () => {
             live={liveRunsOf(held)}
             queue={held?.queue ?? null}
             project={projectNameOf(projects, at.agentId, at.projectKey)}
-            repository={{ agentId: at.agentId, projectKey: at.projectKey }}
             repositories={repositories}
-            // Another repository is the same screen opened over another project: its shelves are that
-            // project's facts, and watching it is how they arrive (see openScenarios).
-            onPickRepository={openScenarios}
             onOpenRepository={(repo, then) => openRepository(repo.agentId, repo.projectKey, then)}
             opening={{
               going: opening !== null && opening.sessionId === '' && opening.error === '',
@@ -2488,10 +2789,23 @@ export const App = () => {
               facts[`${screen.agentId}:${screen.projectKey}`] ?? emptyFacts(),
               chatAccounts[chatKey(screen.agentId, screen.projectKey, screen.sessionId)] ?? '',
             )}
+            // Photos at full size where the machine takes a message in parts, one frame's worth where it
+            // predates them - see images.ts.
+            photos={(inventories[screen.agentId]?.caps ?? []).includes(CAP_PARTS) ? ROOMY : NARROW}
             connected={states[screen.agentId] === 'connected'}
             loading={!feed.loaded}
             voice={dictation}
             onSend={(prompt: OutgoingPrompt) => {
+              // A side question goes beside the work, the panel's way, and never as a message: the agent
+              // would only answer "/btw isn't available in this environment" (see feed/side).
+              const aside = asideQuestion(prompt.text)
+              if (aside !== null) {
+                const key = chatKey(screen.agentId, screen.projectKey, screen.sessionId)
+                if (aside) askAside(screen.agentId, screen.projectKey, screen.sessionId, aside)
+                else sideStep(key, { kind: 'show' })
+                return
+              }
+
               // The first message names the tab, with the panel's own rule and the panel's own function -
               // otherwise a conversation begun from a phone stays "new session" at the desk for as long as
               // it lasts. The better name from the model replaces this one when it arrives.
@@ -2503,9 +2817,12 @@ export const App = () => {
                 })
               }
 
-              command(screen.agentId, screen.projectKey, {
+              sendHeld(screen.agentId, screen.projectKey, screen.sessionId, {
                 type: 'prompt',
                 sessionId: screen.sessionId,
+                // Kept on this phone until the IDE answers with it, and how the IDE tells a resend from a
+                // new message - see outbox.ts.
+                id: `m-${Date.now().toString(36)}-${messageCounter.current++}-${Math.random().toString(36).slice(2, 6)}`,
                 text: prompt.text,
                 // The pieces the card is drawn from travel with the message: the shell keeps them and
                 // echoes them back, which is how this screen - and the panel at the desk - shows what was
@@ -2517,14 +2834,31 @@ export const App = () => {
                 // Photos from the phone travel as bytes: there is no path on this device the agent could
                 // read (see prompt.images in protocol.ts).
                 images: prompt.images,
-              })
+              }, prompt.text)
 
               setQuotes((current) => ({ ...current, [key]: [] }))
             }}
             // Queued in the IDE rather than on this device: the page holding it is thrown out while the
             // phone sits in a pocket, and that is exactly when a queued message matters (see SessionQueue).
+            // Held until the IDE confirms it like a message sent outright - a queued one lost on the way
+            // would otherwise simply never appear in the list.
+            side={sideThreads[chatKey(screen.agentId, screen.projectKey, screen.sessionId)] ?? NO_THREAD}
+            onAsideCancel={(id: string) =>
+              command(screen.agentId, screen.projectKey, { type: 'sideQuestionCancel', sessionId: screen.sessionId, id })
+            }
+            onAsideAgain={(exchange: SideExchange) =>
+              askAside(screen.agentId, screen.projectKey, screen.sessionId, exchange.question, exchange.id)
+            }
+            onAsideClose={() => sideStep(chatKey(screen.agentId, screen.projectKey, screen.sessionId), { kind: 'hide' })}
             onQueue={(prompt: OutgoingPrompt) => {
-              command(screen.agentId, screen.projectKey, {
+              const aside = asideQuestion(prompt.text)
+              if (aside !== null) {
+                // Queue is not offered for one (see Composer), but the send key may still bring it here.
+                if (aside) askAside(screen.agentId, screen.projectKey, screen.sessionId, aside)
+                return
+              }
+
+              sendHeld(screen.agentId, screen.projectKey, screen.sessionId, {
                 type: 'queuePrompt',
                 sessionId: screen.sessionId,
                 id: `q-${Date.now().toString(36)}-${queueCounter.current++}`,
@@ -2532,10 +2866,13 @@ export const App = () => {
                 tokens: prompt.tokens,
                 quotes: prompt.quotes,
                 images: prompt.images,
-              })
+              }, prompt.text)
 
               setQuotes((current) => ({ ...current, [key]: [] }))
             }}
+            unsent={shownFor(outbox, screen.agentId, screen.projectKey, screen.sessionId, outboxNow)}
+            onRetry={retryHeld}
+            onDiscard={(id: string) => setOutbox((list) => dropped(list, id))}
             onUnqueue={(id: string) =>
               command(screen.agentId, screen.projectKey, {
                 type: 'unqueuePrompt',
@@ -2637,8 +2974,6 @@ export const App = () => {
                 }
               : undefined
           }
-          onScenarios={menuProject ? () => openScenarios(menuProject.agentId, menuProject.key) : undefined}
-          liveRuns={menuProject ? liveRunsOf(facts[`${menuProject.agentId}:${menuProject.key}`]) : []}
           onMcp={menuProject ? () => openMachineScreen('mcp', menuProject.agentId, menuProject.key) : undefined}
           onPlugins={
             menuProject ? () => openMachineScreen('plugins', menuProject.agentId, menuProject.key) : undefined
@@ -2830,6 +3165,13 @@ const EMPTY_COUNTS = { chat: 0, project: 0, conversations: 0 }
 
 /** How long the typing pauses before a query goes out - the panel's figure (see App.tsx). */
 const SEARCH_DEBOUNCE_MS = 160
+
+/**
+ * How long a conversation asked for may go unanswered before it is asked for again - see the wait for a
+ * conversation in App. The IDE answers at once; this is the round trip through the relay with room to
+ * spare on a poor signal, and short next to a person looking at "Loading".
+ */
+const WATCH_PATIENCE_MS = 8_000
 
 /** How many pages above a jump may fetch on its own - the panel's figure (see App.tsx). */
 const JUMP_PAGE_LIMIT = 40

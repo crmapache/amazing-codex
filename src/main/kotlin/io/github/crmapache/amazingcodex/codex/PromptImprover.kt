@@ -94,7 +94,7 @@ internal object PromptImprover {
             CodexOneShot.Ask(
                 prompt = body(draft, attachments, rejected),
                 instructions = SYSTEM_PROMPT,
-                model = CodexPreferences.startingModel().takeIf { it != "default" }.orEmpty(),
+                model = StartingChoice.model(accountId).takeIf { it != "default" }.orEmpty(),
                 effort = "low",
                 workingDirectory = workingDirectory,
                 accountId = accountId,

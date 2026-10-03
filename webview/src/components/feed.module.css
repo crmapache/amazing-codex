@@ -293,6 +293,9 @@
 
 /* --- The empty state ------------------------------------------------------- */
 
+/* The same side gutters as every row of the feed, and the lines centred as text rather than only as
+   boxes: a narrow panel folds the title in two, and a folded paragraph centred as a box is a box as wide as
+   the panel - its lines ran from the left edge, flush against it. */
 .empty {
   height: 100%;
   display: flex;
@@ -300,6 +303,8 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
+  padding: 0 var(--acc-feed-gutter, 16px);
+  text-align: center;
   color: var(--acc-fg-faint);
 }
 
@@ -431,6 +436,46 @@
   color: var(--acc-fg-body);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* What the editor showed when the message went (see EditorLine): under the message, quiet - it is what
+   the message was about, not something said. */
+.userEditor {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  margin-top: 6px;
+  padding: 0;
+  font: 11px var(--acc-mono);
+  color: var(--acc-fg-faint);
+  text-align: left;
+}
+
+.userEditor svg {
+  flex: none;
+}
+
+.userEditorText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.userEditorOpens {
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .userEditorOpens:hover {
+    color: var(--acc-fg-dim);
+  }
+
+  .userEditorOpens:hover .userEditorText {
+    text-decoration: underline dotted;
+    text-underline-offset: 2px;
+  }
 }
 
 /* A piece the panel filled in itself - a repeat of the agent's question beside the answer to it (see
@@ -896,6 +941,104 @@
   }
 }
 
+/* --- The agent's text inside a card that is about something else (see Glance) ---------- */
+
+/*
+ * The type is the card's own - size, line height and colour all come from the line it stands in - and
+ * only the marks are the feed's: bold, code, a link's colour. The paragraphs stand shoulder to shoulder,
+ * with no gap between them: a gap is a fraction of a line, and the cap below counts whole ones.
+ */
+.glance {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.glanceFlow {
+  flex: none;
+  display: block;
+}
+
+.glanceCapped {
+  max-height: calc(var(--acc-glance-lines) * 1lh);
+  overflow: hidden;
+}
+
+/* The end of the text rather than its beginning: pressed to the bottom of the box, the column runs out of
+   room at its top, and that is the side the box cuts away. */
+.glanceNewest {
+  justify-content: flex-end;
+}
+
+/* The last line fades rather than breaking off - where the text goes on is plain without an ellipsis that
+   would have to know which of three kinds of block it lands in. */
+.glanceCutBottom {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 1lh), rgb(0 0 0 / 0.15));
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1lh), rgb(0 0 0 / 0.15));
+}
+
+.glanceCutTop {
+  mask-image: linear-gradient(to top, #000 calc(100% - 1lh), rgb(0 0 0 / 0.15));
+  -webkit-mask-image: linear-gradient(to top, #000 calc(100% - 1lh), rgb(0 0 0 / 0.15));
+}
+
+.glanceBlock {
+  display: block;
+}
+
+.glanceHeading {
+  font-weight: 600;
+  color: var(--acc-glance-strong, var(--acc-fg));
+}
+
+/* Hanging, the way the feed's list is: the mark sticks out and a wrapped line lines up with the text. */
+.glanceBullet {
+  padding-left: 1.3em;
+  text-indent: -1.3em;
+}
+
+.glanceMarker {
+  font-family: var(--acc-mono);
+  color: var(--acc-fg-fainter);
+}
+
+.glanceQuote {
+  padding-left: 8px;
+  border-left: 2px solid var(--acc-quote-32);
+}
+
+/* Bold lights up to the main text colour, as in the feed, unless the line it stands in has a colour of its
+   own to keep - a verdict says so through --acc-glance-strong. */
+.glanceStrong {
+  font-weight: 600;
+  color: var(--acc-glance-strong, var(--acc-fg));
+}
+
+.glanceCode {
+  padding: 0 2px;
+  border-radius: var(--acc-r-xs);
+  background: var(--acc-neutral-12);
+  color: var(--acc-agent-light);
+  font-family: var(--acc-mono);
+  font-size: 0.92em;
+}
+
+.glanceCodeBlock {
+  display: block;
+  padding: 1px 6px;
+  border-radius: var(--acc-r-xs);
+  background: var(--acc-neutral-12);
+  color: var(--acc-fg-mono);
+  font-family: var(--acc-mono);
+  font-size: 0.92em;
+  white-space: pre-wrap;
+}
+
+.glanceLink {
+  color: var(--acc-branch-light);
+}
+
 /* The wrapper holds the block's padding and the room for the button: the pre itself scrolls horizontally,
    and a button inside it would ride away with a long line. */
 .codeBlockWrap {
@@ -1045,11 +1188,51 @@
   font-weight: 600;
 }
 
-.tableCellCenter {
+/*
+ * On a phone the table keeps its columns and scrolls sideways, as a table does on any phone.
+ *
+ * At `width: 100%` a browser meets a table wider than its box by squeezing every column down to its
+ * longest word - which on 390 points is a word per line and a five-column answer three screens tall, with
+ * nothing left to scroll. `max-content` lets the columns be as wide as what is in them, and the wrapper
+ * above already scrolls. `min-width` keeps a small table as wide as the answer, the way it was.
+ *
+ * The cap on a cell is what keeps a column of sentences from becoming one line a screen long: past it a
+ * cell wraps, as prose. It sits on a block inside the cell rather than on the cell, because what `max-width`
+ * does to a table cell is left undefined by CSS, and browsers - Safari among them - ignore it.
+ */
+[data-acc-density='touch'] .table {
+  width: max-content;
+  min-width: 100%;
+}
+
+[data-acc-density='touch'] .tableCell {
+  display: block;
+  max-width: min(18em, 70vw);
+}
+
+/* A block does not follow the cell's text-align, only its lines do: in a column wider than the cap (a small
+   table stretched to the answer's width) a centred or right-aligned cell would sit at the left. */
+[data-acc-density='touch'] .table .tableCellCenter .tableCell {
+  margin-inline: auto;
+}
+
+[data-acc-density='touch'] .table .tableCellRight .tableCell {
+  margin-left: auto;
+}
+
+/* A sideways swipe that reaches the table's edge stays in it rather than going on to the browser's own
+   "back" gesture. */
+[data-acc-density='touch'] .tableWrap {
+  overscroll-behavior-x: contain;
+}
+
+/* Under the table's name, as `.table td` is: on their own these lost to its `text-align: left`, and a column
+   the answer marked `---:` or `:---:` was drawn flush left all the same. */
+.table .tableCellCenter {
   text-align: center;
 }
 
-.tableCellRight {
+.table .tableCellRight {
   text-align: right;
 }
 
@@ -1641,7 +1824,7 @@
   position: absolute;
   inset: 0;
   z-index: 23;
-  background: rgb(var(--acc-ch-shade) / 55%);
+  background: var(--acc-scrim);
 }
 
 /* Stretched to the output area rather than hung from its top, unlike the search window: a list of hits
@@ -2379,6 +2562,59 @@
 .crashText {
   font-size: 11.5px;
   color: var(--acc-bad-text);
+}
+
+/* --- The repository outranks the chosen account ----------------------------- */
+
+/* Warm rather than red, and it is the whole point of the row: nothing is broken - the turn ran and was
+   answered - but it was paid for by somebody other than the account on screen. Laid out like .crash
+   above, with the button on its own end of the row. */
+.outranked {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin: 12px 0;
+  padding: 6px 9px;
+  border: 1px solid var(--acc-warn-32);
+  border-radius: var(--acc-r-md);
+  background: var(--acc-warn-06);
+}
+
+.outrankedLabel {
+  font: 600 9px/1 var(--acc-mono);
+  letter-spacing: 0.09em;
+  color: var(--acc-warn);
+}
+
+.outrankedText {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--acc-fg-dim);
+}
+
+/* The variable names inside the sentence: monospace, because they are identifiers somebody is about to
+   go and find in a file, and wrapped rather than cut - the one that matters may be the last. */
+.outrankedNames {
+  margin-left: 6px;
+  font: 11.5px var(--acc-mono);
+  color: var(--acc-warn);
+  overflow-wrap: anywhere;
+}
+
+.outrankedButton {
+  padding: 3px 8px;
+  border: 1px solid var(--acc-warn-32);
+  border-radius: var(--acc-r-sm);
+  background: transparent;
+  font-size: 11px;
+  color: var(--acc-warn);
+  cursor: pointer;
+}
+
+.outrankedButton:hover {
+  background: var(--acc-warn-12);
 }
 
 /* --- The working indicator ------------------------------------------------- */

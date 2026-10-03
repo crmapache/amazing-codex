@@ -17,6 +17,7 @@ import type {
   MetaItem,
   ModelStuckItem,
   ModelSwitchItem,
+  OutrankedItem,
   RetryItem,
   ThinkItem,
 } from '../../feed/types'
@@ -410,6 +411,37 @@ export const CrashRow = ({ item }: { item: CrashItem }) => {
 }
 
 /**
+ * The repository's settings overrule the account this conversation runs on (see OutrankedItem).
+ *
+ * A warning rather than an error, and it carries the one thing a warning is worth: the way out. The
+ * names are printed as they stand in the settings file - they are identifiers, and whoever reads this row
+ * is about to go and look for them in it.
+ *
+ * The button is absent on a phone and in a replay, for the reason the sign-in button beside it is: there
+ * is no settings screen to open there, and a record of a past conversation must not ask anybody to fix
+ * anything.
+ */
+export const OutrankedRow = ({ item, onOpen }: { item: OutrankedItem; onOpen?: () => void }) => {
+  const t = useT()
+  const words = item.reason === 'untrusted' ? t.feed.outranked.untrusted : t.feed.outranked.account
+
+  return (
+    <div className={s.outranked}>
+      <span className={s.outrankedLabel}>{words.label}</span>
+      <span className={s.outrankedText}>
+        {words.text}
+        {item.names.length > 0 ? <span className={s.outrankedNames}>{item.names.join(', ')}</span> : null}
+      </span>
+      {onOpen ? (
+        <button type="button" className={s.outrankedButton} onClick={onOpen}>
+          {t.feed.outranked.open}
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
+/**
  * The way back from a turn that died on the sign-in - what the panel offers on the error row itself.
  *
  * A whole object rather than a bare handler because the press does not answer at once: the sign-in
@@ -489,6 +521,11 @@ export const ErrorRow = ({
             ) : null}
           </>
         ) : null}
+
+        {/* A refusal in the API's own words says nothing about who put that parameter into the request -
+            and the answer is never "the panel", which is what everybody reading it assumes. So the row
+            says it in words, and points at the screen where the route is set (see ErrorItem.sampling). */}
+        {item.sampling ? <span className={s.errorNote}>{t.feed.sampling.note}</span> : null}
       </div>
 
       <button type="button" className={s.errorDismiss} onClick={onDismiss}>

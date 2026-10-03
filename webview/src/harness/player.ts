@@ -1,4 +1,13 @@
-import type { PaintedTerm, SearchHit, ShellMessage, VoiceHotkey, VoiceHotkeySlot, WebviewMessage } from '../protocol'
+import type {
+  CodexConfigSetting,
+  PaintedTerm,
+  QueuedMessage,
+  SearchHit,
+  ShellMessage,
+  VoiceHotkey,
+  VoiceHotkeySlot,
+  WebviewMessage,
+} from '../protocol'
 import { answerScenarios } from './scenarioDesk'
 import { bootstrap, SESSION } from './events'
 import { SHOWCASE_HISTORY } from './scenarios/showcase'
@@ -16,6 +25,9 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
  */
 let lastShellRequest: { id: string; command: string } | undefined
 
+/** The last side question the panel sent (`/btw`) - what the 'sideRetry' and 'sideAnswer' steps answer. */
+let lastSideRequest: { sessionId: string; id: string } | undefined
+
 /**
  * The model the harness's own stream is signing answers with, and how many picks have been made.
  *
@@ -28,6 +40,52 @@ let lastShellRequest: { id: string; command: string } | undefined
  */
 let streamSignature = ''
 let modelPicks = 0
+
+/**
+ * What a new tab starts on, as the IDE keeps it (see StartingChoice): the pins, the last pick and the
+ * default mode. The IDE works the answer out and the panel only draws it, so the harness has to answer
+ * too - without it a pick here would never reach the chip over an untouched tab. There are no accounts
+ * in the harness, so the answer is the pin over the last pick: what the IDE says on a machine whose
+ * account remembers nothing of its own.
+ */
+const newTab = { pinnedModel: '', pinnedEffort: '', lastModel: '', lastEffort: '', mode: '' }
+/** The hand-added list as it last came in - what a removal is measured against (see setCustomModels). */
+let customList: string[] = []
+
+const announceNewTabDefaults = (): void => {
+  window.__accReceive?.({
+    type: 'newTabDefaults',
+    model: newTab.pinnedModel,
+    effort: newTab.pinnedEffort,
+    mode: newTab.mode,
+    startingModel: newTab.pinnedModel || newTab.lastModel,
+    startingEffort: newTab.pinnedEffort || newTab.lastEffort,
+    unpinnedModel: newTab.lastModel,
+    unpinnedEffort: newTab.lastEffort,
+  })
+}
+/**
+ * Codex's own settings as the IDE would read them (see CodexConfigDesk) - every kind of row the screen
+ * draws: switches, values to pick, a free one, one the project's own config holds, one whose value nobody
+ * has written, one a policy narrows, and an experimental switch.
+ */
+let codexConfigSettings: CodexConfigSetting[] = [
+  { key: 'model_reasoning_summary', options: ['auto', 'concise', 'detailed', 'none'], value: 'auto', group: 'work' },
+  { key: 'model_verbosity', options: ['low', 'medium', 'high'], value: 'low', group: 'work', lockedBy: 'project' },
+  { key: 'personality', options: ['none', 'friendly', 'pragmatic'], group: 'work' },
+  { key: 'web_search', options: ['disabled', 'cached', 'live'], value: 'cached', group: 'work' },
+  { key: 'sandbox_workspace_write.network_access', options: ['true', 'false'], value: 'false', group: 'work' },
+  { key: 'approvals_reviewer', options: ['user', 'auto_review'], value: 'user', group: 'work' },
+  { key: 'service_tier', options: [], free: true, group: 'work' },
+  { key: 'model', options: [], free: true, value: 'gpt-5.6-sol', group: 'terminal' },
+  { key: 'model_reasoning_effort', options: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'], value: 'max', group: 'terminal' },
+  { key: 'approval_policy', options: ['untrusted', 'on-request', 'never'], value: 'on-request', group: 'terminal' },
+  { key: 'sandbox_mode', options: ['read-only', 'workspace-write'], value: 'workspace-write', group: 'terminal', lockedBy: 'policy' },
+  { key: 'features.prevent_idle_sleep', options: ['true', 'false'], value: 'false', group: 'other' },
+]
+
+/** The project's own layer as the harness plays it: present, not trusted yet - the state the block exists for. */
+let codexProject = { present: true, trusted: false, sets: ['forced_login_method', 'model_verbosity'] }
 
 /** A pick as the stream would sign it: Codex signs its answers with the very id that was picked. */
 const signatureOf = (pick: string): string => (pick && pick !== 'default' ? pick : '')
@@ -103,10 +161,13 @@ let harnessCurrent = ''
 let harnessAdds = 0
 let harnessAdding = false
 
-/** Invented shares, so the rows carry real-looking figures rather than a bare tick. */
-const ACCOUNT_USAGE: Record<string, { session: number; week: number }> = {
-  '': { session: 34, week: 61 },
-  a2: { session: 88, week: 12 },
+/**
+ * Invented shares, so the rows carry real-looking figures rather than a bare tick. The third account's
+ * plan keeps no model week of its own, so the "no ring" case is on the screen too.
+ */
+const ACCOUNT_USAGE: Record<string, { session: number; week: number; fable?: number }> = {
+  '': { session: 34, week: 61, fable: 47 },
+  a2: { session: 88, week: 12, fable: 9 },
   a3: { session: 5, week: 5 },
 }
 
@@ -127,6 +188,11 @@ const sendAccounts = (): void => {
       account: account.id,
       session: { percent: share.session, resets: new Date(Date.now() + 2 * 3600_000).toISOString() },
       week: { percent: share.week, resets: new Date(Date.now() + 4 * 86_400_000).toISOString() },
+      // Always the whole list, as the plugin sends it: an empty one is "this plan keeps none".
+      models:
+        share.fable === undefined
+          ? []
+          : [{ label: 'Fable', percent: share.fable, resets: new Date(Date.now() + 2 * 86_400_000).toISOString() }],
     })
   }
 }
@@ -227,6 +293,50 @@ const answerAccounts = (message: WebviewMessage): void => {
       ]
       sendAccounts()
     }, 1_800)
+  }
+}
+
+/**
+ * The usage statistics, played by the harness: an answer to the card is taken and said back, and the
+ * report is a made-up one in the exact shape UsageReport.kt builds - so the screen that shows it can be
+ * looked at without an IDE, and what it shows is what a real one would.
+ */
+const SAMPLE_USAGE_REPORT = JSON.stringify(
+  {
+    schema: 1,
+    install: '(a random id, made when you allow this)',
+    env: { plugin: '0.14.0', ide: 'WS', ideVersion: '2026.2', os: 'mac', arch: 'arm64', cli: '2.3.1', lang: 'en' },
+    settings: { remote: false, voice: false, layout: 'bottom', sendKey: 'enter', restoreTabs: true, theme: 'auto', accounts: 1 },
+    days: [
+      {
+        day: new Date().toISOString().slice(0, 10),
+        minutes: 94,
+        conversations: 3,
+        prompts: 21,
+        turns: 20,
+        turnSeconds: 1480,
+        edits: 34,
+        linesAdded: 612,
+        linesRemoved: 188,
+        filesEdited: 9,
+        sittings: [48, 12, 34],
+        tools: { Read: 61, Edit: 34, Bash: 22, Grep: 14, MCP: 3 },
+        models: { Opus: 20 },
+        slash: { compact: 1 },
+        features: { 'screen:history': 1, improve_prompt: 2, fork: 1, copy: 4 },
+      },
+    ],
+  },
+  null,
+  2,
+)
+
+const answerUsageStats = (message: WebviewMessage): void => {
+  if (message.type === 'setUsageStats') {
+    window.__accReceive?.({ type: 'usageStats', consent: message.granted ? 'granted' : 'declined', lastSent: message.granted ? Date.now() : 0 })
+  }
+  if (message.type === 'usageStatsPreview') {
+    setTimeout(() => window.__accReceive?.({ type: 'usageStatsReport', text: SAMPLE_USAGE_REPORT }), 300)
   }
 }
 
@@ -954,11 +1064,97 @@ const answerSearch = (message: WebviewMessage): void => {
   }
 }
 
+/**
+ * The queue of each conversation, held here as the IDE holds it (see SessionQueue.kt) - with the pieces a
+ * message was typed in, because the pencil hands them back to the field whole.
+ */
+type HeldQueued = QueuedMessage & { tokens: unknown; quotes: string[] }
+
+const queues = new Map<string, HeldQueued[]>()
+
+const sayQueue = (sessionId: string): void => {
+  const items = (queues.get(sessionId) ?? []).map(({ id, text, attach, images }) => ({ id, text, attach, images }))
+  window.__accReceive?.({ type: 'queue', sessionId, items })
+}
+
+/**
+ * A sound over the open tab, answered the way ClaudePanel.playAlert answers it: it "plays" only when nobody
+ * is looking, and then the panel is told so and the open tab lights up. Nobody looking, here, is this browser
+ * tab hidden or in the background - switch to another one while a turn runs, and come back.
+ */
+const answerSound = (message: WebviewMessage): void => {
+  if (message.type !== 'sound' || !message.onlyIfAway || !message.sessionId) return
+  if (document.visibilityState === 'visible' && document.hasFocus()) return
+
+  window.__accReceive?.({ type: 'calledAway', sessionId: message.sessionId, sound: message.sound })
+}
+
+/**
+ * Queue, the cross, a drag and the pencil, answered the way ClaudeSessionHub answers them - so the queue
+ * above the field can be worked by hand here. Nothing is ever fired out of it: the harness has no turn
+ * that ends by itself, and a scenario that wants one plays it.
+ */
+const answerQueue = (message: WebviewMessage): void => {
+  if (message.type === 'queuePrompt') {
+    const list = queues.get(message.sessionId) ?? []
+    if (list.some((item) => item.id === message.id)) return
+
+    const entry: HeldQueued = {
+      id: message.id,
+      text: message.text,
+      attach: message.attach ?? '',
+      images: message.images?.length ?? 0,
+      tokens: message.tokens,
+      quotes: message.quotes ?? [],
+    }
+    const at = message.before ? list.findIndex((item) => item.id === message.before) : -1
+    queues.set(message.sessionId, at >= 0 ? [...list.slice(0, at), entry, ...list.slice(at)] : [...list, entry])
+    sayQueue(message.sessionId)
+    return
+  }
+
+  if (message.type === 'unqueuePrompt') {
+    queues.set(message.sessionId, (queues.get(message.sessionId) ?? []).filter((item) => item.id !== message.id))
+    sayQueue(message.sessionId)
+    return
+  }
+
+  if (message.type === 'reorderQueue') {
+    const list = queues.get(message.sessionId) ?? []
+    const named = message.ids.flatMap((id) => list.filter((item) => item.id === id))
+    queues.set(message.sessionId, [...named, ...list.filter((item) => !message.ids.includes(item.id))])
+    sayQueue(message.sessionId)
+    return
+  }
+
+  if (message.type === 'takeQueued') {
+    const list = queues.get(message.sessionId) ?? []
+    const at = list.findIndex((item) => item.id === message.id)
+    const taken = list[at]
+    if (!taken) return
+
+    const rest = list.filter((item) => item.id !== message.id)
+    queues.set(message.sessionId, rest)
+    sayQueue(message.sessionId)
+    window.__accReceive?.({
+      type: 'queuedTaken',
+      sessionId: message.sessionId,
+      id: taken.id,
+      ...(rest[at] ? { before: rest[at]!.id } : {}),
+      text: taken.text,
+      tokens: taken.tokens,
+      quotes: taken.quotes,
+    })
+  }
+}
+
 const listenToPanel = () => {
   // A scenario replayed from the top reads its history from the top too. The counter is a module's own,
   // so without this the mark stayed dead after the pages ran out once, for the rest of the browser tab.
   earlierPages = 0
+  lastSideRequest = undefined
   typedIntoFeed = []
+  queues.clear()
 
   if (window.__accSend) return
 
@@ -972,6 +1168,18 @@ const listenToPanel = () => {
     })()
 
     if (message?.type === 'bash') lastShellRequest = { id: message.id, command: message.command }
+
+    // A side question is taken at once, as the CLI takes one - its "started" comes back before anything
+    // else - and a cancel is answered the way the CLI answers it, so the card's Cancel works here too.
+    if (message?.type === 'sideQuestion') {
+      lastSideRequest = { sessionId: message.sessionId, id: message.id }
+      const { sessionId, id } = message
+      setTimeout(() => window.__accReceive?.({ type: 'sideProgress', sessionId, id, status: 'started' }), 0)
+    }
+    if (message?.type === 'sideQuestionCancel') {
+      const { sessionId, id } = message
+      setTimeout(() => window.__accReceive?.({ type: 'sideAnswer', sessionId, id, outcome: 'cancelled' }), 0)
+    }
 
     // In the IDE an external address is opened by the shell in the system browser; here the browser is
     // the harness's own, so a link (the PR in the header, the thanks menu) genuinely opens instead of
@@ -1041,20 +1249,85 @@ const listenToPanel = () => {
 
     // The shell is the only one who can say what effort a conversation works at (see
     // ClaudeSessionHub.changeEffort), so here the harness plays that part: without the answer the chip
-    // would stand "chosen" forever and the applied state would never be seen.
+    // would stand "chosen" forever and the applied state would never be seen. And what the next tab
+    // starts at, which the same pick decides (see newTab above).
     if (message?.type === 'setEffort') {
       window.__accReceive?.({ type: 'effort', sessionId: message.sessionId, effort: message.effort })
+      newTab.lastEffort = message.effort
+      announceNewTabDefaults()
+    }
+
+    // The three halves of the "New chats" screen, answered as the IDE answers them.
+    if (message?.type === 'setDefaultModel') {
+      newTab.pinnedModel = message.model
+      announceNewTabDefaults()
+    }
+
+    if (message?.type === 'setDefaultEffort') {
+      newTab.pinnedEffort = message.effort
+      announceNewTabDefaults()
+    }
+
+    if (message?.type === 'setDefaultMode') {
+      newTab.mode = message.mode
+      announceNewTabDefaults()
     }
 
     // The hand-added models are kept by the IDE and told back to every window (see ClaudePanel), so the
     // harness plays that half too: without the answer the screen would still fill - the panel sets its
     // own state on the press - and the one thing that could go wrong, a list that never comes back,
-    // would be invisible here.
+    // would be invisible here. A model taken off the list stops being a pin and a last pick with it.
     if (message?.type === 'setCustomModels') {
       window.__accReceive?.({ type: 'customModels', models: message.models })
+      const gone = customList.filter((name) => !message.models.includes(name))
+      customList = message.models
+      if (gone.includes(newTab.pinnedModel)) newTab.pinnedModel = ''
+      if (gone.includes(newTab.lastModel)) newTab.lastModel = ''
+      announceNewTabDefaults()
+    }
+
+    /*
+     * Claude Code's own settings: the list at once, a change a moment later - the real one is a run of
+     * the CLI and takes a few seconds, which is exactly the wait the screen has to hold its rows through.
+     * A value the CLI would refuse ("Learning" style, in this play) comes back unchanged with its sentence.
+     */
+    if (message?.type === 'askCodexConfig') {
+      window.__accReceive?.({ type: 'codexConfig', settings: codexConfigSettings, project: codexProject })
+    }
+
+    // Trusting the project reads the config again: the project's own value now holds, unlocked or not.
+    if (message?.type === 'setProjectTrust') {
+      const { trusted } = message
+      window.setTimeout(() => {
+        codexProject = { ...codexProject, trusted }
+        window.__accReceive?.({
+          type: 'codexConfig',
+          settings: codexConfigSettings,
+          project: codexProject,
+          outcome: { key: 'projects.trust_level', ok: true },
+        })
+      }, 900)
+    }
+
+    if (message?.type === 'setCodexConfig') {
+      const { key, value } = message
+      window.setTimeout(() => {
+        // A value written and overruled - the personality the project's settings would set - says so.
+        const overridden = key === 'personality' && value === 'friendly'
+        codexConfigSettings = codexConfigSettings.map((setting) =>
+          setting.key === key ? { ...setting, value: overridden ? setting.value : value } : setting,
+        )
+        window.__accReceive?.({
+          type: 'codexConfig',
+          settings: codexConfigSettings,
+          project: codexProject,
+          outcome: overridden ? { key, ok: false, message: 'overridden' } : { key, ok: true },
+        })
+      }, 1500)
     }
 
     if (message) answerFeedback(message)
+    if (message) answerUsageStats(message)
     if (message) answerHistoryPage(message)
     if (message) answerAgentTranscript(message)
     if (message) answerResume(message)
@@ -1064,6 +1337,8 @@ const listenToPanel = () => {
     if (message) answerAccounts(message)
     if (message) answerLogin(message)
     if (message) answerScenarios(message)
+    if (message) answerQueue(message)
+    if (message) answerSound(message)
   }
 
   window.dispatchEvent(new Event('acc:ready'))
@@ -1081,8 +1356,12 @@ const listenToPanel = () => {
  */
 const answerModel = (message: Extract<WebviewMessage, { type: 'setModel' }>): void => {
   modelPicks += 1
-  const stuck = modelPicks % 3 === 0
-  const signature = stuck ? streamSignature : signatureOf(message.model) || streamSignature
+  const carried = signatureOf(message.model) || streamSignature
+  // A pick of the model already at work cannot fail to arrive - it is already here - and the panel
+  // rightly says nothing about it (see picksAnother in feed/build.ts). Stepping over such a pick keeps
+  // the promise of this cycle honest: every third pick that asks for something ELSE does not take.
+  const stuck = modelPicks % 3 === 0 && carried !== streamSignature
+  const signature = stuck ? streamSignature : carried
 
   // Answered a beat later, never in the same tick. The panel marks the pick as "asked for" straight after
   // handing it outwards, so an answer given synchronously lands BEFORE that mark and the mark then stands
@@ -1095,6 +1374,9 @@ const answerModel = (message: Extract<WebviewMessage, { type: 'setModel' }>): vo
       model: message.model,
       applied: true,
     } as never)
+    // Remembered as the IDE remembers an applied pick, and the next tab's answer told to the panel.
+    newTab.lastModel = message.model
+    announceNewTabDefaults()
   }, 120)
 
   if (!signature) return
@@ -1248,6 +1530,43 @@ export class ScenarioPlayer {
       return
     }
 
+    if (step.kind === 'sideRetry' || step.kind === 'sideAnswer') {
+      // The "started" the bridge sends back for the question goes out on the next tick; step mode runs these
+      // steps without a pause, and a retry delivered before it would be wiped by it - the CLI's own order is
+      // "started" first.
+      await sleep(0)
+      const request = lastSideRequest
+      if (!request) {
+        console.warn('[harness] no side question to answer; was a /btw typed before this step?')
+        return
+      }
+
+      window.__accReceive?.(
+        step.kind === 'sideRetry'
+          ? {
+              type: 'sideProgress',
+              sessionId: request.sessionId,
+              id: request.id,
+              status: 'api_retry',
+              attempt: step.attempt,
+              maxRetries: step.maxRetries,
+              delayMs: step.delayMs,
+              errorStatus: step.errorStatus,
+            }
+          : {
+              type: 'sideAnswer',
+              sessionId: request.sessionId,
+              id: request.id,
+              outcome: step.outcome,
+              text: step.text,
+              notice: step.notice,
+              reason: step.reason,
+              message: step.message,
+            },
+      )
+      return
+    }
+
     const message: ShellMessage =
       step.kind === 'shell' ? step.message : { type: 'agent', sessionId: SESSION, event: step.event }
 
@@ -1256,6 +1575,14 @@ export class ScenarioPlayer {
     if (step.kind === 'agent') {
       const event = step.event as { type?: string; model?: string; message?: { model?: string } }
       streamSignature = event.message?.model ?? (event.type === 'system' ? event.model : undefined) ?? streamSignature
+    }
+
+    // A queue a scenario puts up is the queue the harness holds from then on (see answerQueue).
+    if (message.type === 'queue') {
+      queues.set(
+        message.sessionId,
+        message.items.map((item) => ({ ...item, tokens: [{ kind: 'text', value: item.text }], quotes: [] })),
+      )
     }
 
     window.__accReceive?.(message)

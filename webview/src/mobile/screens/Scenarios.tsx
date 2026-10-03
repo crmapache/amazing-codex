@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { formatDuration } from '../../feed/tools'
+import { useGrowthFlash } from '../../hooks/useGrowthFlash'
 import { useNow } from '../../hooks/useNow'
 import { useLocale, useT } from '../../i18n'
 import type { Scenario, ScenarioQueued, ScenarioQueueState, ScenarioRunSummary, ScenarioSchedule } from '../../protocol'
@@ -47,14 +48,11 @@ interface ScenariosProps {
    */
   queue: { state: ScenarioQueueState; unread: boolean } | null
   project: string
-  /** The project whose shelf this screen shows - the one named by the row over the shelf. */
-  repository: { agentId: string; projectKey: string }
-  /** Every project of every paired IDE, for the row that picks one - see RepositoryChoice. */
+  /** Every project of every paired IDE, for where a new scenario is kept - see RepositoryChoice. */
   repositories: RepositoryChoice[]
-  onPickRepository: (agentId: string, projectKey: string) => void
   /**
-   * A closed repository was picked for a shelf: the IDE opens it, and `then` is told the key it is open
-   * under. Opening takes seconds, and the screen says so meanwhile (see [opening]).
+   * A closed repository was picked to keep a new scenario in: the IDE opens it, and `then` is told the key
+   * it is open under. Opening takes seconds, and the screen says so meanwhile (see [opening]).
    */
   onOpenRepository: (repository: RepositoryChoice, then: (projectKey: string) => void) => void
   opening: { going: boolean; error: string }
@@ -112,9 +110,7 @@ export const Scenarios = ({
   live,
   queue,
   project,
-  repository,
   repositories,
-  onPickRepository,
   onOpenRepository,
   opening,
   problem,
@@ -163,6 +159,7 @@ export const Scenarios = ({
     queue: waiting.length,
     schedule: timetableOf(schedules, list).count,
   }
+  const queueFlash = useGrowthFlash(queue ? waiting.length : null)
 
   const shared = list.filter((one) => one.scope === 'user')
   const own = list.filter((one) => one.scope === 'project')
@@ -223,7 +220,8 @@ export const Scenarios = ({
               {/* Lit for work that is happening and for a queue that has STOPPED - the two things
                   worth knowing without opening the band. */}
               <span
-                className={`${m.bandTabCount} ${
+                key={one === 'queue' ? queueFlash : 0}
+                className={`${m.bandTabCount} ${one === 'queue' && queueFlash ? m.bandTabGrew : ''} ${
                   (one === 'runs' && counts.runs > 0) || (one === 'queue' && queue?.state.held) ? m.bandTabLive : ''
                 }`}
               >
@@ -238,7 +236,9 @@ export const Scenarios = ({
         {problem ? <p className={m.noteBad}>{outcomeText(t, problem)}</p> : null}
         {opening.going ? <p className={m.noteOk}>{t.mobile.newSession.opening}</p> : null}
         {opening.error ? <p className={m.noteBad}>{opening.error}</p> : null}
-        {shelves === null && <p className={m.empty}>{t.common.loading}</p>}
+        {/* Not while the project is being opened for this screen: that note already says why nothing is
+            here yet, and a second one under it says the same thing less exactly. */}
+        {shelves === null && !opening.going && !opening.error && <p className={m.empty}>{t.common.loading}</p>}
 
         {band === 'runs' ? (
           <>
@@ -281,6 +281,14 @@ export const Scenarios = ({
                     {t.scenarios.moreRuns(past.length - shown)}
                   </button>
                 )}
+
+                {/* The way back, where the list ends: after "show more" that is the whole history away
+                    from the top, and folding it should not mean scrolling back up past it. */}
+                {shown > RUNS_SHOWN && past.length > RUNS_SHOWN && (
+                  <button type="button" className={m.wideButton} onClick={() => setShown(RUNS_SHOWN)}>
+                    {t.scenarios.fewerRuns}
+                  </button>
+                )}
               </>
             )}
           </>
@@ -294,9 +302,10 @@ export const Scenarios = ({
 
             {/*
               The shelf every project shares comes first: it is the same whichever project this screen was
-              opened from, and it is the one a phone most often wants. The repository's shelf follows,
-              under a row that names the repository and changes it - "in this repository" used to stand
-              there alone, and from a sofa there was no telling which one, nor any way to look at another.
+              opened from, and it is the one a phone most often wants. The repository's own follows, under
+              its name. There is no picking another one here any more: the screen is opened off a project's
+              own card (see Projects), so which repository it is about is decided by the tap that opened it,
+              and another one is a step back and one card away.
             */}
             <p className={m.bandTitle}>{t.scenarios.shelves.user}</p>
             {shared.length === 0 ? (
@@ -304,14 +313,6 @@ export const Scenarios = ({
             ) : (
               shared.map(card)
             )}
-
-            <div className={m.card}>
-              <button type="button" className={m.foldRow} onClick={() => setSheet({ kind: 'repo' })}>
-                <span className={m.foldName}>{t.mobile.scenarios.repository}</span>
-                <span className={m.foldValue}>{project}</span>
-                <span className={m.taskRowChevron}>›</span>
-              </button>
-            </div>
 
             <p className={m.bandTitle}>{t.mobile.scenarios.inRepository(project)}</p>
             {!shelves.canShare ? (
@@ -427,10 +428,9 @@ export const Scenarios = ({
           onAfterSuccess={(afterSuccess) => setSheet({ ...sheet, afterSuccess })}
           onQueue={() => {
             onQueue(sheet.scenario, sheet.values, sheet.afterSuccess)
+            // Back to the shelf rather than over to the queue, as on the desk: turns are lined up several at
+            // a time, and the count on the Queue tab lighting up is the press's answer (useGrowthFlash).
             setSheet({ kind: 'none' })
-            // Straight to the band it went to: a turn added to a list nobody is looking at is a press
-            // with no visible answer.
-            setBand('queue')
           }}
           onClose={() => setSheet({ kind: 'none' })}
         />
@@ -516,42 +516,6 @@ export const Scenarios = ({
           onClose={() => setSheet({ ...sheet, picking: false })}
         />
       ) : null}
-
-      {sheet.kind === 'repo' ? (
-        <PickSheet
-          title={t.mobile.scenarios.repository}
-          value={String(
-            repositories.findIndex(
-              (one) => one.agentId === repository.agentId && one.projectKey === repository.projectKey,
-            ),
-          )}
-          // Numbered rather than keyed by the two ids joined: neither id promises to be free of the
-          // character that would join them.
-          options={repositories.map((one, index) => ({
-            id: String(index),
-            label: one.name,
-            // A closed project's shelf is read through its hub, and the hub comes with the window: picking
-            // one opens the project in the IDE first, the way "Open & start" does, and the row says so.
-            // A machine too old to open one that way says the plain truth instead and is not offered:
-            // this client is served by the relay and outruns the plugin behind it (see CAP_OPEN_BARE).
-            hint: one.closed
-              ? one.canOpen
-                ? t.mobile.scenarios.opensProject
-                : t.mobile.sessions.projectClosed
-              : undefined,
-            disabled: one.closed && !one.canOpen,
-          }))}
-          onPick={(id) => {
-            const chosen = repositories[Number(id)]
-            setSheet({ kind: 'none' })
-            if (!chosen) return
-            if (chosen.closed && !chosen.canOpen) return
-            if (chosen.closed) onOpenRepository(chosen, (key) => onPickRepository(chosen.agentId, key))
-            else onPickRepository(chosen.agentId, chosen.projectKey)
-          }}
-          onClose={() => setSheet({ kind: 'none' })}
-        />
-      ) : null}
     </>
   )
 }
@@ -570,7 +534,6 @@ type Sheet =
       values: Record<string, string>
     }
   | { kind: 'new'; description: string; shelf: ShelfChoice; picking: boolean }
-  | { kind: 'repo' }
 
 /**
  * One run that is going: what it is doing, and the two or three things to do about it.

@@ -66,20 +66,40 @@ import type { Dict } from './i18n/en'
 import { StatisticsTab, type StatisticsView } from './components/stats/StatisticsTab'
 import { dressAll, summarize } from './stats/achievements'
 import { ChoiceList, LayoutChoice } from './components/Choices'
+import { Appearance, appearanceSummary } from './components/Appearance'
 import { CalmColors } from './components/CalmColors'
+import { RestoreTabs } from './components/RestoreTabs'
+import { ShareEditor } from './components/ShareEditor'
+import { UsageConsentCard, UsageReportScreen, UsageScreen } from './components/UsageStats'
+import { Indicators } from './components/Indicators'
+import {
+  indicatorsSummary,
+  normalizeHidden,
+  sameHidden,
+  shownIndicators,
+  toggleIndicator,
+  type HiddenIndicators,
+  type IndicatorId,
+} from './indicators'
 import { CustomModels } from './components/CustomModels'
 import { PasteCollapse } from './components/PasteCollapse'
+import { CodexConfig, EMPTY_CODEX_CONFIG, TRUST_KEY, type CodexConfigState } from './components/CodexConfig'
 import { PermissionPanel } from './components/PermissionPanel'
 import { Plugins } from './components/Plugins'
 import { Queue } from './components/Queue'
+import { editorKey } from './feed/editorContext'
 import { Quotes, type Quote } from './components/Quotes'
 import { SelectionMenu } from './components/SelectionMenu'
 import { Tooltips } from './components/Tooltips'
 import { Remote, RemoteAbout, remoteState, type RemoteStatus } from './components/Remote'
 import { Accounts, accountState, currentAccountName, type AccountsState } from './components/Accounts'
 import { Sounds } from './components/Sounds'
-import { StatusBar, UsageMeters, type Anchor, type SelectorKind } from './components/StatusBar'
-import { SHARE, shareText, thanksMenu, thanksUrl } from './components/Thanks'
+import { metersShown, StatusBar, UsageMeters, type Anchor, type SelectorKind } from './components/StatusBar'
+import { countsAsThanks, SHARE, shareText, thanksMenu, thanksUrl } from './components/Thanks'
+import { SideQuestionCard } from './components/SideQuestion'
+import { ASIDE_COMMAND, NO_THREAD, sideHistory, sideThread, type SideAction, type SideThread } from './feed/side'
+import { markPanelReady } from './components/Splash'
+import { Welcome } from './components/Welcome'
 import { useCalmColors } from './hooks/useCalmColors'
 import { useHoliday } from './hooks/useHoliday'
 import { useHoverTarget } from './hooks/useHoverTarget'
@@ -95,11 +115,14 @@ import { deferFollowUpForCompact } from './feed/compact'
 import { waitsForTheTurn } from './feed/delivery'
 import { PASTE_COLLAPSE_DEFAULT, PASTE_COLLAPSE_NEVER, pasteCollapseLines, referenceChip } from './feed/reference'
 import { normalizeSendKey, sendKeyOptions, sendKeySummary, type SendKey } from './sendKey'
+import { DESIGN_SIZE, TEXT_SIZE_FOLLOW, normalizeTextSize, type TextSize } from './textSize'
+import { applyTheme, normalizeThemeChoice, resolveTheme, type ThemeChoice } from './theme'
 import { reusableMessage } from './feed/reuse'
+import { draftKey, restoredDraft, savableDraft, type SavedDraft } from './feed/draftMemory'
 import { isUntouchedTab, tabHolding, tabTakesConversation } from './feed/resume'
 import { chatHits, rowOf } from './feed/search'
 import { openedAgentOf } from './feed/workflow'
-import { deriveSessionTitle } from './feed/title'
+import { deriveSessionTitle, resumedTitle, searchHitTitleSource } from './feed/title'
 import {
   appendChip,
   appendText,
@@ -155,19 +178,25 @@ import type {
   VoiceBalance,
   VoiceHotkeySlot,
   StatisticsData,
-  TitleSource,
+  EditorRef,
+  UsageStatsConsent,
 } from './protocol'
 import {
   NO_SOUND_PREFS,
   SOUND_IDS,
+  answersCall,
+  callAnswered,
+  callsStanding,
   isMuted,
   rememberPanel,
   setVolume,
   soundForPanel,
   toggleSound,
+  toneOf,
   volumeOf,
   type SoundMemory,
   type SoundPrefs,
+  type TabCall,
 } from './sounds'
 import {
   AgentTranscriptContext,
@@ -346,6 +375,27 @@ const reportChips = (tokens: UserToken[], quotesBeside: number): void => {
  */
 const SLIDER_SAVE_DELAY_MS = 250
 
+/** Keys that do nothing on their own - pressed alone, they do not answer a tab's call (see `activeCalling`). */
+const MODIFIER_KEYS = new Set(['Meta', 'Control', 'Alt', 'Shift', 'CapsLock'])
+
+/**
+ * How long the text size waits for the presses to stop before it is sent - and the page zooms.
+ *
+ * Longer than a slider's quarter second, and for a reason a slider does not have: the size is applied by
+ * zooming the whole page, the settings screen included, so every applied step moves the button under the
+ * pointer. Zoomed on each press, the third quick press of "larger" would land beside the button. The
+ * figure on the screen answers at once; the panel follows once the hand is still.
+ */
+const TEXT_SIZE_SAVE_DELAY_MS = 600
+
+/**
+ * How long a draft waits for the typing to pause before it goes to the IDE (see draftMemory.ts). Long
+ * enough that a sentence is one save rather than forty, short enough that a crash takes a word or two at
+ * most. An emptied field is said at once - a message sent and then restored after a restart would be the
+ * one thing worse than a lost draft.
+ */
+const DRAFT_SAVE_DELAY_MS = 700
+
 /**
  * For how long after pressing "sign out" a lost login counts as one's own doing rather than as news. With
  * room to spare for the sign-out itself: it goes through the IDE's terminal, where the person has yet to
@@ -366,6 +416,13 @@ interface Draft {
 }
 
 const EMPTY_DRAFT: Draft = { tokens: [], quotes: [] }
+
+/** Nothing to send: no text, no attachment and no quote. A tab never written into has no draft at all. */
+const draftEmpty = (draft: Draft | undefined): boolean =>
+  !draft ||
+  (draft.quotes.length === 0 &&
+    !draft.tokens.some((token) => token.kind === 'chip') &&
+    plainText(draft.tokens).trim().length === 0)
 
 /** The search folded into a feed's corner - see the capsule state in App and SearchCapsule.tsx. */
 interface SearchCapsuleState {
@@ -431,6 +488,33 @@ export const App = () => {
   const [active, setActive] = useState(MAIN_SESSION)
   const [drafts, setDrafts] = useState<Record<string, Draft>>({})
   /**
+   * A queued message taken out into this tab's field to be edited, by tab - and where it goes back to:
+   * before `before`, or at the end when that is null (see takeQueued in protocol.ts).
+   *
+   * The panel's own rather than the IDE's: the message itself is simply out of the queue, and what is
+   * remembered here is only the place it left. It lasts while the field holds something - a field emptied
+   * by sending, or by hand, has let go of that message one way or another (see the effect over drafts).
+   */
+  const [queueEdits, setQueueEdits] = useState<Record<string, { before: string | null }>>({})
+  /**
+   * The shell's tabs as its last list named them - read by the message that follows that list in the
+   * same batch (see `activeTab`), before any render has put the list into state.
+   */
+  const shellTabs = useRef<string[]>([MAIN_SESSION])
+  /**
+   * Whether the IDE has said which tab to show, and handed over its drafts. Until it has, this panel
+   * reports neither: the tab on screen at the first render is the default rather than a choice, and an
+   * empty field at the first render is a field not given its draft yet - reported, either would overwrite
+   * what the IDE was about to hand back (see TabMemory on the plugin's side).
+   */
+  const [shellNamedTab, setShellNamedTab] = useState(false)
+  const draftsKnown = useRef(false)
+  /** What each tab's draft was when it was last sent, and the saves waiting for the typing to pause. */
+  const draftsSent = useRef<Record<string, string>>({})
+  const draftSaves = useRef<Record<string, { timer: number; draft: SavedDraft }>>({})
+  /** The tab last reported as on screen - a status change re-renders the strip, and says nothing new. */
+  const tabReported = useRef('')
+  /**
    * What has been ticked and written into the agent's question, by tab and by the call that asked it.
    *
    * Here beside the drafts rather than inside the card, and for the same reason the drafts are here: this
@@ -451,6 +535,15 @@ export const App = () => {
    * this here" kind hangs in the air.
    */
   const [shellRuns, setShellRuns] = useState<Record<string, ShellRun[]>>({})
+  /**
+   * The side questions of each tab - `/btw` (see feed/side). The panel's alone: the agent never sees them
+   * and the CLI writes none of them into the transcript, so nothing else anywhere could bring them back.
+   */
+  const [sideThreads, setSideThreads] = useState<Record<string, SideThread>>({})
+  // Read by the asking itself, which needs the thread as it stands to send its history along - and sends
+  // from outside a state update, where React may call an updater twice.
+  const sideThreadsRef = useRef(sideThreads)
+  sideThreadsRef.current = sideThreads
   /**
    * A file dragged from the IDE or from a file manager is being held over the panel (see fileDrag). The
    * drag itself never reaches the page, so the input field's highlight is lit by the shell's message
@@ -478,13 +571,15 @@ export const App = () => {
    * new tab, a fork and the IDE's next start begin from it.
    */
   /**
-   * What a new tab starts with, in two halves that are deliberately not one.
+   * What a new tab starts with, in halves that are deliberately not one.
    *
-   * `model` and `effort` are the last pick made in any tab - written by the MODEL and EFFORT chips, as
-   * they always were. `newTabModel` and `newTabEffort` are the pins from the "New chats" screen, and
-   * empty - the usual case - means "whatever was last picked". So an untouched tab is drawn by the pins
-   * where there are any and by the last pick where there are not (see startingModel below), and pinning
-   * a model is not something a pick in some other tab can quietly undo.
+   * `newTabModel` and `newTabEffort` are the pins from the "New chats" screen, and empty - the usual case
+   * - means "whatever was last picked". `model` and `effort` are what that comes to right now, and
+   * `startingModel`/`startingEffort` the answer an untouched tab is drawn by. The last four are the IDE's
+   * and only the IDE's: they read the account in use, what it remembers and which models it can run (see
+   * StartingChoice), and a formula of the panel's own, a pin over the machine's last pick, drew Sonnet
+   * over a tab that came up on Opus whenever the account remembered otherwise. So a pick here writes
+   * none of them - the IDE remembers it and tells every window what a new tab starts on now.
    */
   const [prefs, setPrefs] = useState({
     model: '',
@@ -495,6 +590,8 @@ export const App = () => {
     mode: 'manual',
     newTabModel: '',
     newTabEffort: '',
+    startingModel: '',
+    startingEffort: 'high',
   })
   /**
    * What language the panel speaks, in two halves: the choice somebody made and what the IDE itself is
@@ -515,6 +612,11 @@ export const App = () => {
   const locale = activeLocale(language.chosen, language.ide)
   const t = useDict(locale)
   const [auth, setAuth] = useState<AuthState | null>(null)
+  // The IDE's first word about the CLI and the sign-in is what the opening splash waits for: from here on
+  // what lies under it is a real screen - the panel or the gate saying what is missing - not "Checking…".
+  useEffect(() => {
+    if (auth) markPanelReady()
+  }, [auth])
   /**
    * Whether the "no questions" mode is allowed on this machine. The shell finds that out from the CLI
    * itself and answers with a message of its own, so until the answer comes we assume it is not: leading
@@ -565,12 +667,55 @@ export const App = () => {
    */
   const [sendKey, setSendKeyState] = useState<SendKey>('enter')
   /**
+   * Claude Code's own settings, as the IDE last read them - the screen `/config` opens (see CodexConfig).
+   * Asked for when the screen opens: the list costs a run of the CLI the first time, and the values are
+   * files anybody may have edited since.
+   */
+  const [codexConfig, setCodexConfigState] = useState<CodexConfigState>(EMPTY_CODEX_CONFIG)
+  /**
+   * The setting a change is on its way for - one at a time (see CodexConfig). A ref beside the state for
+   * the message handler, which is set up once and has to see the key of the change it is answering.
+   */
+  const [codexConfigPending, setCodexConfigPending] = useState<string | null>(null)
+  const codexConfigPendingRef = useRef<string | null>(null)
+  codexConfigPendingRef.current = codexConfigPending
+  /** What the CLI said about a change it did not take, by setting - see CodexConfig's `failures`. */
+  const [codexConfigFailures, setCodexConfigFailures] = useState<Record<string, string>>({})
+  /**
    * How much colour the gauges keep - the whole green-to-red ladder, one calm tone, or anything between.
    *
    * The full ladder until the IDE says otherwise, for the same reason as the two settings above: the
    * harness has no IDE behind it, and the ladder is what the panel has always shown.
    */
   const [calmVivid, setCalmVividState] = useState(CALM_VIVID_FULL)
+  /**
+   * Whether the tabs come back after a restart, drafts and all (see TabMemory on the plugin's side). On
+   * until the IDE says otherwise: it is the default, and the harness has no IDE to say it.
+   */
+  const [restoreTabs, setRestoreTabsState] = useState(true)
+  /**
+   * Whether a message carries what the editor shows (see EditorContext on the plugin's side). On until the
+   * IDE says otherwise, like the switch above.
+   */
+  const [shareEditor, setShareEditorState] = useState(true)
+  /**
+   * What the editor beside the panel shows right now - the file in front of the person and the lines
+   * selected in it. Null with no text editor open, and always in the harness until a scenario says otherwise.
+   */
+  const [editorContext, setEditorContext] = useState<EditorRef | null>(null)
+  /**
+   * What each tab's next message goes without: the file and lines on screen when its chip was pressed off
+   * (see editorKey). Keyed by what was on screen rather than a plain flag, so selecting other lines - a new
+   * thing to show - puts the chip back on by itself; and forgotten when the message goes.
+   */
+  const [editorSkips, setEditorSkips] = useState<Record<string, string>>({})
+  /**
+   * The indicators around the input field switched off by hand - see indicators.ts. None until the IDE
+   * says otherwise, for the same reason as the settings above: the harness has no IDE behind it, and
+   * everything shown is what the panel has always drawn.
+   */
+  const [hiddenIndicators, setHiddenIndicatorsState] = useState<HiddenIndicators>([])
+  const indicators = useMemo(() => shownIndicators(hiddenIndicators), [hiddenIndicators])
   /**
    * The models somebody added by hand, because Claude Code does not offer them (see CustomModels.tsx).
    *
@@ -591,6 +736,21 @@ export const App = () => {
   // The whole of what the calm mode does to the screen: the gauges are painted through roles the root
   // swaps under this attribute (see useCalmColors and tokens.css).
   useCalmColors(calmVivid)
+  /**
+   * The theme as the IDE states it: the choice in the settings and whether the IDE is dark (see
+   * theme.ts). Nothing until the IDE has said it - the page opened in the theme the address named (see
+   * main.tsx), and a default here would repaint that first frame on the way to the real answer.
+   */
+  const [theme, setThemeState] = useState<{ choice: ThemeChoice; ideDark: boolean } | null>(null)
+  useEffect(() => {
+    if (theme) applyTheme(resolveTheme(theme.choice, theme.ideDark))
+  }, [theme])
+  /**
+   * The panel's own text size and the console's, for the settings screen - the zoom itself is the IDE's
+   * (see textSize.ts). The console's size is the design's until the IDE says otherwise, which is what
+   * the harness shows.
+   */
+  const [textSize, setTextSizeState] = useState<TextSize>({ chosen: TEXT_SIZE_FOLLOW, console: DESIGN_SIZE })
   const [loginWaiting, setLoginWaiting] = useState(false)
   /**
    * Why the sign-in could not even be started, when it could not (see protocol.ts).
@@ -641,6 +801,14 @@ export const App = () => {
    * a fresh opening resets it to the root itself (see openMenu).
    */
   const [sideMenu, setSideMenu] = useState<{ open: boolean; screen: MenuScreen }>({ open: false, screen: 'menu' })
+  /**
+   * The anonymous usage statistics on this machine: the answer to their question and when a report last
+   * went. Null until the IDE says - the card that asks is drawn only on an answer of "never asked", so a
+   * panel that has heard nothing yet (the harness, a page reloaded mid-flight) asks nothing.
+   */
+  const [usageStats, setUsageStatsState] = useState<{ consent: UsageStatsConsent; lastSent: number } | null>(null)
+  /** The report shown whole on its screen - null while it is being built (see UsageReportScreen). */
+  const [usageStatsReport, setUsageStatsReport] = useState<string | null>(null)
   /** The panel's own version, for the foot of the menu. Absent until the shell's `init` arrives. */
   const [pluginVersion, setPluginVersion] = useState('')
 
@@ -656,6 +824,12 @@ export const App = () => {
   })
   /** The tick boxes and the volume of the sound alerts - see sounds.ts. */
   const [soundPrefs, setSoundPrefs] = useState<SoundPrefs>(NO_SOUND_PREFS)
+  /**
+   * The tabs that called with a sound and have not been opened since, and what about - they glow in the
+   * strip until they are (see TabGlow in Header). The sound says that something happened; with a dozen
+   * tabs open only this says where.
+   */
+  const [calls, setCalls] = useState<Record<string, TabCall>>({})
   /** The project's past conversations: null means the list has not arrived yet (see the startup requests). */
   const [history, setHistory] = useState<HistoryEntry[] | null>(null)
   /**
@@ -1184,14 +1358,14 @@ export const App = () => {
   const mode = panel.pendingMode ?? panel.permissionMode ?? prefs.mode
 
   /**
-   * What a tab that has not started yet will start on - the pin if there is one, the last pick otherwise.
+   * What a tab that has not started yet will start on - as the IDE worked it out (see StartingChoice).
    *
-   * The same formula the IDE launches by (see ClaudePreferences.startingModel), and it has to be: the
-   * chip over an empty tab is a promise about the process that tab will raise, and a chip naming the last
-   * pick while the launch used the pin would be that promise broken before the first message.
+   * Taken rather than computed, and that is the whole of it: the chip over an empty tab is a promise
+   * about the process that tab will raise, and only the IDE knows everything that process is launched by
+   * - the pin, the account in use, what it was last left on, which models it can run.
    */
-  const startingModel = prefs.newTabModel || prefs.model
-  const startingEffort = prefs.newTabEffort || prefs.effort
+  const startingModel = prefs.startingModel
+  const startingEffort = prefs.startingEffort
 
   // Which model is genuinely running - see resolvePanelModel, and there too why it was split out into a
   // function of its own. Measured against this tab's own model where it has one (see PanelState.ownModel):
@@ -1246,6 +1420,68 @@ export const App = () => {
     },
     [],
   )
+
+  /**
+   * Every change of a draft goes to the IDE, which keeps it across a restart of itself and a reload of
+   * this page (see draftMemory.ts). After a pause in the typing rather than on every key, and an emptied
+   * field at once: a message sent must not come back as a draft because the save of its last keystroke
+   * was still waiting when the IDE went down.
+   */
+  useEffect(() => {
+    if (!draftsKnown.current) return
+
+    for (const [session, draft] of Object.entries(drafts)) {
+      const saved = savableDraft(draft)
+      const key = draftKey(saved)
+
+      window.clearTimeout(draftSaves.current[session]?.timer)
+      delete draftSaves.current[session]
+
+      // Cancelled above before this check, not after it. A message typed into an empty field and sent
+      // inside the pause brings the draft straight back to what the IDE already holds - nothing - and a
+      // check first left the save of its last keystroke waiting, to land after the send: the message came
+      // back as a draft on the next start, and a command in it went out a second time glued to the next.
+      if ((draftsSent.current[session] ?? '') === key) continue
+
+      const flush = () => {
+        delete draftSaves.current[session]
+        draftsSent.current[session] = key
+        send({ type: 'saveDraft', sessionId: session, draft: saved })
+      }
+
+      if (!saved) flush()
+      else draftSaves.current[session] = { timer: window.setTimeout(flush, DRAFT_SAVE_DELAY_MS), draft: saved }
+    }
+  }, [drafts])
+
+  // The saves still waiting go out before the page does - a reload of the page is exactly the moment a
+  // draft is supposed to survive.
+  useEffect(() => {
+    const flush = () => {
+      for (const [session, pending] of Object.entries(draftSaves.current)) {
+        window.clearTimeout(pending.timer)
+        draftsSent.current[session] = draftKey(pending.draft)
+        send({ type: 'saveDraft', sessionId: session, draft: pending.draft })
+      }
+      draftSaves.current = {}
+    }
+
+    window.addEventListener('pagehide', flush)
+    return () => window.removeEventListener('pagehide', flush)
+  }, [])
+
+  /**
+   * The tab on screen, told to the IDE: it is the tab put back on screen after a restart, and a restored
+   * tab's conversation comes up the first time it is shown (see ClaudeSessionHub.showTab). Only the
+   * shell's tabs - statistics and a run being watched are this screen's own and mean nothing there.
+   */
+  useEffect(() => {
+    if (!shellNamedTab || active === tabReported.current) return
+    if (!sessions.some((session) => session.id === active)) return
+
+    tabReported.current = active
+    send({ type: 'tabShown', sessionId: active })
+  }, [shellNamedTab, active, sessions])
 
   /** A tick or a word put into the agent's question - see askDrafts. */
   const editAskDraft = useCallback((session: string, askId: string, next: AskDraft) => {
@@ -1380,6 +1616,20 @@ export const App = () => {
   }, [sideMenu.open, sideMenu.screen])
 
   /**
+   * What the settings-sources screen cannot be drawn honestly without: the names the repository sets
+   * right now, and whether this Claude Code knows the flag at all.
+   *
+   * Asked when the screen opens rather than carried in `init`, because the second half costs a process
+   * (`claude --help`) and the first reads two files that anybody may have edited since the panel started.
+   * Once per opening: neither answer changes while somebody looks at three options.
+   */
+  useEffect(() => {
+    // The list costs a question to Codex, and the values are files that may have changed since the
+    // screen was last open.
+    if (sideMenu.open && sideMenu.screen === 'codexConfig') send({ type: 'askCodexConfig' })
+  }, [sideMenu.open, sideMenu.screen])
+
+  /**
    * The statistics tab is looked at and the figures grow under it: a turn ends, a minute passes. Asked
    * for again every half-minute while it is the active tab - the ticker on the IDE's side marks minutes
    * at the same pace, so asking more often would show nothing new.
@@ -1471,6 +1721,33 @@ export const App = () => {
   }
   /** A run's sequence number - the id's uniqueness comes from it, see runShell. */
   const shellSeq = useRef(0)
+
+  /** One step of a tab's side-question thread (see feed/side). */
+  const sideStep = useCallback((session: string, action: SideAction) => {
+    setSideThreads((current) => {
+      // An answer for a thread already forgotten - a closed tab, a cleared conversation - stays forgotten.
+      if (action.kind === 'progress' || action.kind === 'end') {
+        if (!current[session]) return current
+      }
+      const next = sideThread(current[session] ?? NO_THREAD, action)
+      return next === current[session] ? current : { ...current, [session]: next }
+    })
+  }, [])
+
+  /**
+   * A tab's side questions belong to the conversation they were asked about. A cleared or replaced one is
+   * a different conversation, and its first follow-up would carry the old thread's answers as context.
+   */
+  const forgetSide = (session: string) => {
+    setSideThreads((current) => {
+      if (!(session in current)) return current
+      const next = { ...current }
+      delete next[session]
+      return next
+    })
+  }
+  /** A side question's sequence number - see askAside. */
+  const sideSeq = useRef(0)
 
   /**
    * A paste into the input field with whatever came from the IDE: a link from the editor, a file from a
@@ -1582,8 +1859,69 @@ export const App = () => {
       sound,
       volume: volumeOf(prefs, sound),
       onlyIfAway: sessionId === activeRef.current,
+      sessionId,
     })
+
+    // The tab the sound came from lights up, so that "which one was that" has an answer in the strip.
+    // Only a call that sounds: the light answers the sound, and an occasion switched off asked nothing.
+    // The open tab waits for the shell's word instead: it sounds only if nobody is looking at it, and only
+    // the shell knows whether that is so (see `calledAway`).
+    if (sessionId === activeRef.current) return
+    setCalls((current) => ({ ...current, [sessionId]: { tone: toneOf(sound), at: Date.now() } }))
   }, [])
+
+  /**
+   * Opening a tab answers its call, and the light goes (fading - see TabGlow). A closed tab takes its call
+   * with it, from whichever client it was closed.
+   *
+   * Opening is the CHANGE to a tab, not being the one on screen: the open tab has a call only because its
+   * sound played to somebody who was away, and this effect runs on every change to the list of tabs - a
+   * turn starting in another one would otherwise put the light out before anybody came back to see it.
+   */
+  const openedBefore = useRef(active)
+  useEffect(() => {
+    const open = new Set(sessions.map((session) => session.id))
+    const opened = active === openedBefore.current ? '' : active
+    openedBefore.current = active
+    setCalls((current) => callsStanding(current, opened, open))
+  }, [active, sessions])
+
+  /**
+   * The open tab's call is answered by the first thing done in it: a click, a key, a turn of the wheel - or
+   * a click on the lit tab itself.
+   *
+   * Not by the window coming back into focus, and not by the pointer crossing the panel on its way
+   * somewhere: the light is there so that a person who was away can see WHERE something happened, and a
+   * light that went out the moment the IDE was brought forward would be gone before anybody looked. Not by
+   * the rest of the tab strip either - picking another tab there leaves this one calling in the background,
+   * where opening it again is what answers it (see answersCall). Listening only while there is a call to
+   * answer.
+   */
+  const activeCalling = calls[active] !== undefined
+  useEffect(() => {
+    if (!activeCalling) return
+
+    const acted = (event: Event) => {
+      if (event.target instanceof Element) {
+        const inStrip = event.target.closest('[data-tab-strip]') !== null
+        const tab = event.target.closest('[data-tab]')?.getAttribute('data-tab') ?? ''
+        if (!answersCall({ inStrip, tab }, activeRef.current)) return
+      }
+      // A modifier on its own is a hand on its way somewhere else - Cmd+Tab to another window starts here.
+      if (event instanceof KeyboardEvent && MODIFIER_KEYS.has(event.key)) return
+      setCalls((current) => callAnswered(current, activeRef.current))
+    }
+
+    const options = { capture: true, passive: true }
+    window.addEventListener('pointerdown', acted, options)
+    window.addEventListener('keydown', acted, options)
+    window.addEventListener('wheel', acted, options)
+    return () => {
+      window.removeEventListener('pointerdown', acted, options)
+      window.removeEventListener('keydown', acted, options)
+      window.removeEventListener('wheel', acted, options)
+    }
+  }, [activeCalling])
 
   /** The deferred write of the sound settings - see changeSoundPrefs. */
   const soundSaveTimer = useRef<number | undefined>(undefined)
@@ -1782,6 +2120,8 @@ export const App = () => {
                 // cleared (see newTabDefaults below, which is the same read).
                 newTabModel: message.preferences?.newTabModel ?? '',
                 newTabEffort: message.preferences?.newTabEffort ?? '',
+                startingModel: message.preferences?.startingModel ?? current.startingModel,
+                startingEffort: message.preferences?.startingEffort || current.startingEffort,
               }))
               if (message.preferences.composerLayout) {
                 setComposerLayoutState(normalizeComposerLayout(message.preferences.composerLayout))
@@ -1796,10 +2136,15 @@ export const App = () => {
               setSendKeyState(normalizeSendKey(message.preferences.sendKey))
               // The same: a hundred is an answer, and it is the one that puts the ladder back.
               setCalmVividState(calmVividOf({ vivid: message.preferences.calmVivid }))
+              // And the same once more: an empty list is "everything shown", the answer that puts a
+              // switched-off indicator back.
+              setHiddenIndicatorsState(normalizeHidden(message.preferences.hiddenIndicators))
               setLanguage({
                 chosen: message.preferences.language ?? '',
                 ide: message.preferences.ideLanguage ?? '',
               })
+              setRestoreTabsState(message.preferences.restoreTabs !== false)
+              setShareEditorState(message.preferences.shareEditor !== false)
             }
             if (message.improve) setImproveInstructions(message.improve)
             feed({
@@ -1826,6 +2171,49 @@ export const App = () => {
             setLanguage({ chosen: message.language ?? '', ide: message.ideLanguage ?? '' })
             break
 
+          /**
+           * The settings-sources screen, answered in full: the choice, what the repository sets, and -
+           * when it was asked for - whether this Claude Code knows the flag at all.
+           *
+           * `supported` is kept from the previous answer when this one leaves it out, rather than reset
+           * to "unknown": the IDE sends this message on every change of the choice too, and a warning
+           * about an old CLI must not blink out and back on every press.
+           */
+          /**
+           * Claude Code's own settings, read afresh - on opening the screen and after every change. The
+           * outcome is read only for the change this page is waiting on: the hub hands this message to a
+           * page that joins later as well, and an old failure must not appear under a row nobody touched.
+           */
+          case 'codexConfig': {
+            // While Codex is being asked, what the screen already shows stays on it.
+            setCodexConfigState((current) => ({
+              settings: message.loading && message.settings.length === 0 ? current.settings : message.settings,
+              loading: Boolean(message.loading),
+              error: message.error ?? '',
+              project: message.project ?? current.project,
+            }))
+            const outcome = message.outcome
+            if (outcome && outcome.key === codexConfigPendingRef.current) {
+              setCodexConfigPending(null)
+              setCodexConfigFailures((current) => {
+                const next = { ...current }
+                if (outcome.ok) delete next[outcome.key]
+                else next[outcome.key] = outcome.message ?? ''
+                return next
+              })
+            }
+            break
+          }
+
+          /**
+           * A conversation came up on an account the repository's settings overrule (see OutrankedItem).
+           * A row in that conversation's feed rather than a notice over the panel: it belongs to the
+           * launch it happened at, and every other tab may be running on something else entirely.
+           */
+          case 'accountOutranked':
+            feed({ session: message.sessionId, action: { kind: 'outranked', names: message.names, reason: message.reason } })
+            break
+
           /** The no-stress colour mode, told again outside `init` and for the same two reasons. */
           case 'calmColors': {
             const vivid = calmVividOf(message)
@@ -1835,6 +2223,27 @@ export const App = () => {
             // window, and that is obeyed at once.
             if (calmSent.current === vivid) calmSent.current = undefined
             else setCalmVividState(vivid)
+            break
+          }
+
+          /**
+           * The switched-off indicators, told again outside `init`: the setting is the machine's, so a
+           * second window must apply a change it did not make - and a window that joins later is handed
+           * this right after the `init` it was cached with (see PROJECT_ORDER in ClaudeSessionHub).
+           */
+          case 'indicators': {
+            const hidden = normalizeHidden(message.hidden)
+            // Our own answers, come back round in the order they were sent: the IDE tells every window,
+            // this one included (see setHiddenIndicators in ClaudePanel). Taken at face value, the echo of
+            // the first of two quick presses would flip the second switch back for a moment. Anything
+            // that is not one of ours is the other window, and that is obeyed at once.
+            const ours = indicatorsSent.current.findIndex((sent) => sameHidden(sent, hidden))
+            if (ours >= 0) {
+              indicatorsSent.current = indicatorsSent.current.slice(ours + 1)
+            } else {
+              indicatorsSent.current = []
+              setHiddenIndicatorsState(hidden)
+            }
             break
           }
 
@@ -1869,6 +2278,7 @@ export const App = () => {
            */
           case 'sessions': {
             const known = message.sessions.map((info) => info.id)
+            shellTabs.current = known
             // The strip as it stands NOW, before the news is applied: the neighbour of a tab that has
             // been closed cannot be found in a list the tab is already gone from (see tabAfterElsewhere).
             const before = sessionsRef.current
@@ -1894,6 +2304,60 @@ export const App = () => {
             )
             break
           }
+
+          /**
+           * The tab to put on screen - the one that was there when the panel was last closed or
+           * reloaded. It follows `sessions` in the same batch, so the tab it names is on that list already
+           * (see shellTabs); an empty name, or one the list no longer has, leaves the screen as it is.
+           */
+          case 'activeTab':
+            if (message.sessionId && shellTabs.current.includes(message.sessionId)) setActive(message.sessionId)
+            setShellNamedTab(true)
+            break
+
+          /**
+           * The drafts the IDE held - after a restart off disk, after a reload of the page from its memory.
+           * A field that already holds something keeps it: whatever is in it now was typed after the draft
+           * being restored was saved. Written down as already sent, so it does not travel straight back.
+           */
+          case 'drafts': {
+            for (const [session, raw] of Object.entries(message.drafts)) {
+              const restored = restoredDraft(raw)
+              if (!restored) continue
+
+              const current = draftsRef.current[session]
+              if (current && (current.tokens.length > 0 || current.quotes.length > 0)) continue
+
+              draftsSent.current[session] = draftKey(savableDraft(restored))
+              editDraft(session, restored)
+            }
+            draftsKnown.current = true
+            break
+          }
+
+          /** The switch for all of the above, flipped in another window. */
+          case 'restoreTabs':
+            setRestoreTabsState(message.on)
+            break
+
+          // Whether a message carries what the editor shows - flipped here or in another window.
+          case 'shareEditor':
+            setShareEditorState(message.on)
+            break
+
+          // The usage statistics' question, answered here or in any other IDE on the machine.
+          case 'usageStats':
+            setUsageStatsState({ consent: message.consent, lastSent: message.lastSent })
+            break
+
+          case 'usageStatsReport':
+            setUsageStatsReport(message.text)
+            break
+
+          // What the editor beside this panel shows now (see EditorContext.kt).
+          case 'editorContext':
+            setEditorContext(message.context ?? null)
+            break
 
           /**
            * A feed is about to be handed over from the shell's journal. Everything up to restoreFinished
@@ -2008,6 +2472,7 @@ export const App = () => {
                 tokens: (message.tokens ?? []) as UserToken[],
                 quotes: message.quotes ?? [],
                 steering: message.steering,
+                ...(message.editor ? { editor: message.editor } : {}),
               },
             })
             break
@@ -2016,6 +2481,11 @@ export const App = () => {
           // What this conversation is waiting to say, as the IDE holds it - see SessionQueue.kt.
           case 'queue':
             feed({ session: message.sessionId, action: { kind: 'queue', items: message.items } })
+            break
+
+          // The pencil on a queued message was pressed here - the message, whole, for the field.
+          case 'queuedTaken':
+            takeBackQueued(message.sessionId, message.before ?? null, message.text, message.tokens, message.quotes ?? [])
             break
 
           case 'planResolved':
@@ -2037,10 +2507,16 @@ export const App = () => {
           // message (see submit) whatever that guess was, the placeholder included: the shell asks for
           // the name and throws away an answer about a conversation that a /clear has wiped in the
           // meantime, so anything arriving here is about the conversation the tab is holding now.
+          //
+          // Except over a name the person typed: the shell refuses the model's answer there too (see
+          // SessionRegistry.rename), but one already on its way when the person renamed the tab arrives
+          // after the name was put on this strip, and would stand until the list came back.
           case 'sessionTitle':
             setSessions((current) =>
               current.map((session) =>
-                session.id === message.sessionId ? { ...session, title: message.title, titleSource: 'llm' } : session,
+                session.id === message.sessionId && session.titleSource !== 'user'
+                  ? { ...session, title: message.title, titleSource: 'llm' }
+                  : session,
               ),
             )
             break
@@ -2174,6 +2650,7 @@ export const App = () => {
             // with its very first message.
             if (message.event.type === 'conversation_reset') {
               forgetShellCommands(message.sessionId)
+              forgetSide(message.sessionId)
               setShellRuns((current) => ({ ...current, [message.sessionId]: [] }))
               // The tab's title is part of the conversation that has just been wiped too: without a
               // reset it would hang on from the previous subject, and the next message would no longer
@@ -2483,6 +2960,31 @@ export const App = () => {
             })
             break
 
+          case 'sideProgress':
+            sideStep(message.sessionId, {
+              kind: 'progress',
+              id: message.id,
+              status: message.status,
+              attempt: message.attempt,
+              maxRetries: message.maxRetries,
+              delayMs: message.delayMs,
+              errorStatus: message.errorStatus,
+              at: Date.now(),
+            })
+            break
+
+          case 'sideAnswer':
+            sideStep(message.sessionId, {
+              kind: 'end',
+              id: message.id,
+              outcome: message.outcome,
+              text: message.text,
+              notice: message.notice,
+              reason: message.reason,
+              message: message.message,
+            })
+            break
+
           case 'bashResult': {
             // Into the card as in a terminal, as one stream: the errors are mixed in with the ordinary
             // output exactly where the command itself printed them.
@@ -2534,8 +3036,35 @@ export const App = () => {
             setDockAnchor(message.anchor)
             break
 
-          case 'typography':
+          // The open tab's sound played, so nobody was looking at it: it lights up like a background one,
+          // and stays lit until something is done in it (see the effect over `activeCalling`). A tab that
+          // was closed while the sound was on its way has nobody left to call.
+          case 'calledAway':
+            if (!sessionsRef.current.some((session) => session.id === message.sessionId)) break
+            setCalls((current) => ({
+              ...current,
+              [message.sessionId]: { tone: toneOf(message.sound), at: Date.now() },
+            }))
+            break
+
+          case 'typography': {
             applyTypography(message.monoFamily, message.uiFamily, message.lineHeight)
+            const chosen = normalizeTextSize(message.textSize)
+            // Our own sizes, come back round in the order they were sent - the same care as the
+            // indicators': the echo of the first of three presses must not pull the figure back two
+            // points while the other two are on their way. Anything else is the other window, or a
+            // change of font in the IDE, and that is taken as it stands.
+            const ours = textSizeSent.current.indexOf(chosen)
+            textSizeSent.current = ours >= 0 ? textSizeSent.current.slice(ours + 1) : []
+            setTextSizeState((current) => ({
+              chosen: ours >= 0 ? current.chosen : chosen,
+              console: message.consoleSize ?? current.console,
+            }))
+            break
+          }
+
+          case 'theme':
+            setThemeState({ choice: normalizeThemeChoice(message.theme), ideDark: message.ideDark })
             break
 
           case 'statistics': {
@@ -2664,10 +3193,11 @@ export const App = () => {
             break
 
           /**
-           * What a new tab starts with, changed somewhere else - another window of this machine, or the
-           * screen in this one answering back. Machine-wide settings arrive this way rather than only in
-           * `init` (see calmColors and customModels), and this one has a second reader beside the screen:
-           * the chip over an untouched tab draws itself from these very values.
+           * What a new tab starts with, changed somewhere else - another window of this machine, a pick
+           * in a tab, an account switched to, or the screen in this one answering back. Machine-wide
+           * settings arrive this way rather than only in `init` (see calmColors and customModels), and
+           * this one has a second reader beside the screen: the chip over an untouched tab draws itself
+           * from the answer it carries.
            */
           case 'newTabDefaults':
             setPrefs((current) => ({
@@ -2675,6 +3205,10 @@ export const App = () => {
               newTabModel: message.model,
               newTabEffort: message.effort,
               mode: normalizeMode(message.mode),
+              model: message.unpinnedModel,
+              effort: message.unpinnedEffort || current.effort,
+              startingModel: message.startingModel,
+              startingEffort: message.startingEffort || current.startingEffort,
             }))
             break
 
@@ -2683,14 +3217,15 @@ export const App = () => {
             break
 
           case 'model':
-            // The setting follows the model in force rather than the one chosen: a rejected one must
-            // neither stand as a tick in the menu nor travel as a flag into the next tab - with it the
-            // process would not come up at all. Not for a birth: the model a conversation came up on is
-            // this tab's, and a past conversation's model is no choice for the next tab (see protocol.ts).
-            if (!message.born) setPrefs((current) => ({ ...current, model: message.model }))
+            // What this answer means for the NEXT tab is the IDE's to say, and it says so with
+            // `newTabDefaults` once the pick is remembered - a rejected one is not, a phone's never is,
+            // and the account in use decides what the next tab reads it against (see StartingChoice).
             feed({
+              // `born` travels on: the shell names a tab's model to a client that has just joined as
+              // well as at a birth, and read as a choice that announcement accused a conversation of
+              // running on a model nobody picked (see the modelApplied action).
               session: message.sessionId,
-              action: { kind: 'modelApplied', model: message.model, error: message.error },
+              action: { kind: 'modelApplied', model: message.model, error: message.error, born: message.born },
             })
             break
 
@@ -2878,6 +3413,131 @@ export const App = () => {
     setSendKeyState(key)
   }, [])
 
+  /**
+   * One of Claude Code's own settings changed, by the CLI itself (see CodexConfigDesk). Shown changed at
+   * once, the way a switch has to answer a press; the IDE answers with the files read again a few seconds
+   * later, and that answer - not this guess - is what stays on the screen.
+   */
+  const setCodexConfigValue = useCallback((key: string, value: string) => {
+    if (codexConfigPendingRef.current !== null) return
+
+    setCodexConfigPending(key)
+    setCodexConfigFailures((current) => {
+      const next = { ...current }
+      delete next[key]
+      return next
+    })
+    setCodexConfigState((current) => ({
+      ...current,
+      settings: current.settings.map((setting) => (setting.key === key ? { ...setting, value } : setting)),
+    }))
+    send({ type: 'setCodexConfig', key, value })
+  }, [])
+
+  /**
+   * Trust this project, or stop trusting it (see CodexConfigDesk.trust). Held like a setting's change -
+   * one at a time, under its own key - and drawn by the answer the IDE sends after it, which reads
+   * Codex's config again rather than taking the press on trust.
+   */
+  const setProjectTrust = useCallback((trusted: boolean) => {
+    if (codexConfigPendingRef.current !== null) return
+
+    setCodexConfigPending(TRUST_KEY)
+    setCodexConfigFailures((current) => {
+      const next = { ...current }
+      delete next[TRUST_KEY]
+      return next
+    })
+    send({ type: 'setProjectTrust', trusted })
+  }, [])
+
+  /** The screen `/config` opens - declared up here because the command runs from [runLocal]. */
+  const openCodexConfig = useCallback(() => {
+    setMenu(null)
+    setSideMenu({ open: true, screen: 'codexConfig' })
+  }, [])
+
+  /** The lists sent and not yet heard back - see the 'indicators' case above. */
+  const indicatorsSent = useRef<HiddenIndicators[]>([])
+
+  /**
+   * One indicator switched on or off. Applied here at once and sent whole: the IDE keeps the list and
+   * tells every window, but the switch under the finger must move on the press rather than on the trip.
+   */
+  const toggleShownIndicator = useCallback(
+    (id: IndicatorId) => {
+      const hidden = toggleIndicator(hiddenIndicators, id)
+      indicatorsSent.current = [...indicatorsSent.current, hidden]
+      send({ type: 'setHiddenIndicators', hidden: [...hidden] })
+      setHiddenIndicatorsState(hidden)
+    },
+    [hiddenIndicators],
+  )
+
+  /**
+   * The theme, chosen in the settings. Applied here at once and sent: the IDE tells every window, this
+   * one included, but the panel under the pointer must turn on the press rather than on the round trip.
+   * Until the IDE has spoken the IDE is taken for dark - the only case is the harness, which says it at
+   * once anyway.
+   */
+  const setTheme = useCallback((choice: ThemeChoice) => {
+    send({ type: 'setTheme', theme: choice })
+    setThemeState((current) => ({ choice, ideDark: current?.ideDark ?? true }))
+  }, [])
+
+  /** The sizes sent and not yet heard back, and the one waiting to be sent - see setTextSize. */
+  const textSizeSent = useRef<number[]>([])
+  const textSizeTimer = useRef<number | undefined>(undefined)
+  const textSizePending = useRef<number | undefined>(undefined)
+
+  /**
+   * The panel's own text size, or TEXT_SIZE_FOLLOW for the console's.
+   *
+   * The figure changes at once and the size is sent once the presses stop (TEXT_SIZE_SAVE_DELAY_MS): the
+   * IDE zooms the page on it, and a page zooming between two presses moves the button from under the
+   * second one.
+   */
+  const setTextSize = useCallback((size: number) => {
+    const chosen = normalizeTextSize(size)
+    setTextSizeState((current) => ({ ...current, chosen }))
+
+    textSizePending.current = chosen
+    window.clearTimeout(textSizeTimer.current)
+    textSizeTimer.current = window.setTimeout(() => {
+      textSizeTimer.current = undefined
+      textSizePending.current = undefined
+      textSizeSent.current = [...textSizeSent.current, chosen]
+      send({ type: 'setTextSize', size: chosen })
+    }, TEXT_SIZE_SAVE_DELAY_MS)
+  }, [])
+
+  // The same flush as the sliders' below: a size pressed in the last moment before a reload is a size
+  // that was set, and it must not come back as it was.
+  useEffect(() => {
+    const flush = () => {
+      if (textSizeTimer.current === undefined || textSizePending.current === undefined) return
+      window.clearTimeout(textSizeTimer.current)
+      textSizeTimer.current = undefined
+      send({ type: 'setTextSize', size: textSizePending.current })
+      textSizePending.current = undefined
+    }
+
+    window.addEventListener('pagehide', flush)
+    return () => window.removeEventListener('pagehide', flush)
+  }, [])
+
+  /** Whether the tabs come back after a restart - applied here at once, and every window is told. */
+  const setRestoreTabs = useCallback((on: boolean) => {
+    send({ type: 'setRestoreTabs', on })
+    setRestoreTabsState(on)
+  }, [])
+
+  /** Whether a message carries what the editor shows - applied here at once, and every window is told. */
+  const setShareEditor = useCallback((on: boolean) => {
+    send({ type: 'setShareEditor', on })
+    setShareEditorState(on)
+  }, [])
+
   /** The deferred write of the gauges' colour, and the last figure sent - see setCalmColors. */
   const calmSaveTimer = useRef<number | undefined>(undefined)
   const calmSent = useRef<number | undefined>(undefined)
@@ -2930,18 +3590,15 @@ export const App = () => {
       send({ type: 'setCustomModels', models })
       setCustomModelsState(models)
 
-      // A model taken off the list stops being the choice new tabs are drawn with, exactly as it stops
-      // being the one the IDE launches them on (see setCustomModels in ClaudePanel). Both halves or
-      // neither: left standing here, the chip would go on naming a model that is in no menu until the
-      // first message of a tab brought the real one back. Only what was on THIS list is touched - a
-      // model out of the CLI's own catalogue is none of its business.
+      // A model taken off the list stops being the pin behind "New chats", exactly as it stops being one
+      // in the IDE (see setCustomModels in ClaudePanel) - the row on that screen answers on the press, as
+      // every pin does. What an untouched tab is drawn by follows from the IDE's answer (see
+      // newTabDefaults): it clears the account's memory and the last pick there too. Only what was on
+      // THIS list is touched - a model out of the CLI's own catalogue is none of its business.
       const gone = customModels.filter((name) => !models.includes(name))
-      if (gone.includes(prefs.model)) setPrefs((current) => ({ ...current, model: '' }))
-      // And the pin behind "New chats", which is the stronger of the two: it is what an untouched tab is
-      // drawn by and what the IDE launches one on (see startingModel).
       if (gone.includes(prefs.newTabModel)) setPrefs((current) => ({ ...current, newTabModel: '' }))
     },
-    [customModels, prefs.model, prefs.newTabModel],
+    [customModels, prefs.newTabModel],
   )
 
   /**
@@ -3052,7 +3709,10 @@ export const App = () => {
    * PanelState.pins).
    */
   const togglePinned = useCallback(
-    (id: string) => dispatchPanel({ session: active, action: { kind: 'pin', id } }),
+    (id: string) => {
+      send({ type: 'stat', kind: 'feature', id: 'pin' })
+      dispatchPanel({ session: active, action: { kind: 'pin', id } })
+    },
     [active],
   )
 
@@ -3074,6 +3734,13 @@ export const App = () => {
   /**
    * The answer to the agent's question returns through the very tool call that asked it: the turn stands
    * precisely on it and carries on from the same place rather than starting anew with the next message.
+   *
+   * Unless there is no turn left to stand on it - a conversation abandoned on a question and opened
+   * again from the history (see revivedAsk in build.ts). Then the very same answer travels as an
+   * ordinary message, which is what the shell does with it when nobody is waiting (see answerAsk in
+   * SessionPermissions), and the feed has to be told that a turn is beginning rather than being written
+   * into: marked as steering, the panel showed neither the spinner nor the counter over an agent that
+   * was, by then, genuinely working.
    *
    * Into the feed the answer still goes as the person's own line: otherwise the conversation would keep a
    * question with not a trace of an answer to it.
@@ -3116,11 +3783,11 @@ export const App = () => {
             { kind: 'text', value: `\n${entry.answer}` },
           ]),
           quotes: [],
-          steering: true,
+          steering: running,
         },
       })
     },
-    [cards, active, forgetAskDraft],
+    [cards, active, forgetAskDraft, running],
   )
 
   const decidePermission = useCallback(
@@ -3164,6 +3831,14 @@ export const App = () => {
           return
         }
 
+        // An open side-question card is closed before anything is stopped: it was asked precisely so as
+        // not to stop the agent, and the key that dismisses it must not do the very thing it avoided.
+        if (sideThreadsRef.current[active]?.open) {
+          event.preventDefault()
+          sideStep(active, { kind: 'hide' })
+          return
+        }
+
         if (!running) return
         event.preventDefault()
         send({ type: 'stop', sessionId: active })
@@ -3190,7 +3865,7 @@ export const App = () => {
 
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [mode, availableModes, setMode, running, active])
+  }, [mode, availableModes, setMode, running, active, sideStep])
 
   /**
    * A fork from a selected piece: the agent gets the whole conversation up to this point but carries on in
@@ -3271,7 +3946,9 @@ export const App = () => {
        * which is the only route it has at all.
        */
       if (parentPanel?.model) {
-        dispatchPanel({ session: id, action: { kind: 'modelApplied', model: parentPanel.model } })
+        // As a fact about the fork rather than as a pick made in it: nobody chose anything here, and the
+        // parent's model is simply what this tab came up on (see the modelApplied action).
+        dispatchPanel({ session: id, action: { kind: 'modelApplied', model: parentPanel.model, born: true } })
       }
       if (parentPanel?.permissionMode) {
         dispatchPanel({
@@ -3289,6 +3966,11 @@ export const App = () => {
   /**
    * A new tab from scratch - both the ordinary one from the "+" button and the single one that greets the
    * user after they have closed every one of them.
+   *
+   * The keyboard goes to the new tab's field at once, as it does after a fork. A new tab is opened to be
+   * written into, and left where the click put it the focus stayed on the "+" itself - so the first space
+   * of the first sentence pressed the button again and opened a second tab (reported as "an 'n' creates a
+   * new tab": the sentence began with "Can").
    */
   const startSession = useCallback((id: string) => {
     setSessions((current) => [
@@ -3296,6 +3978,7 @@ export const App = () => {
       { id, title: defaultTitle(id), state: 'idle', groupId: id, depth: 0, titleSource: 'default' },
     ])
     setActive(id)
+    setFocusToken((current) => current + 1)
     // Without a name rather than with the stand-in this screen draws: a non-empty title is what the shell
     // reads as "somebody has already named this tab" (see SessionRegistry.open), and a tab marked as named
     // is never renamed by its first message afterwards - neither by the guess made here nor by the model's
@@ -3354,6 +4037,22 @@ export const App = () => {
   )
 
   /**
+   * A name the person typed into a tab - see TabNameField in Header. Put on the strip at once, as a guessed
+   * name is (see submit): the shell answers with the same list a moment later, and waiting for it would
+   * leave the old name standing under the hand that has just replaced it. Which name wins is the shell's
+   * to decide (see SessionRegistry.rename) - this one outranks every other there, so the answer agrees.
+   */
+  /** The tab whose name is being typed - see Header's `naming`. */
+  const [namingTab, setNamingTab] = useState<string | null>(null)
+
+  const nameSession = useCallback((id: string, title: string) => {
+    setSessions((current) =>
+      current.map((session) => (session.id === id ? { ...session, title, titleSource: 'user' } : session)),
+    )
+    send({ type: 'nameSession', sessionId: id, title })
+  }, [])
+
+  /**
    * A past conversation opens in the tab named here - the one on screen when there is nothing in it to
    * lose, a tab of its own otherwise (see [resume], which decides which).
    *
@@ -3364,8 +4063,7 @@ export const App = () => {
    */
   const openResumed = useCallback(
     (entry: HistoryEntry, target: string, wasScenarioHead = false) => {
-      const title = deriveSessionTitle(entry.title, 40)
-      const titleSource: TitleSource = entry.titleSource === 'heuristic' ? 'heuristic' : 'llm'
+      const { title, titleSource } = resumedTitle(entry.title, entry.titleSource)
 
       setSideMenu({ open: false, screen: 'menu' })
       setSessions((current) =>
@@ -3387,6 +4085,7 @@ export const App = () => {
       dispatchPanel({ session: target, action: { kind: 'resumed', conversationId: entry.id } })
       setActiveStream('main')
       forgetShellCommands(target)
+      forgetSide(target)
       setShellRuns((current) => ({ ...current, [target]: [] }))
       delete soundMemory.current[target]
 
@@ -3470,7 +4169,9 @@ export const App = () => {
     runLog?.state ?? initialPanelState,
     runLog ? `${runLog.runId}:${runLog.key}` : '',
     (before) => {
-      if (!runLog) return
+      // A step's log names its boundary from its first page on (see withEarlier), and a request without
+      // one is that first page - it would put the log back to its end over whatever has been read above.
+      if (!runLog || before === undefined) return
       send({
         type: 'scenarioLog',
         runId: runLog.runId,
@@ -3573,7 +4274,7 @@ export const App = () => {
         title: hit.title,
         updatedAt: hit.at,
         messages: 0,
-        titleSource: hit.named ? 'llm' : 'heuristic',
+        titleSource: searchHitTitleSource(hit),
       })
 
       const hits = chatHits(all, hit.conversationId)
@@ -3670,7 +4371,6 @@ export const App = () => {
    */
   const pickModel = useCallback(
     (model: string) => {
-      setPrefs((current) => ({ ...current, model }))
       send({ type: 'setModel', sessionId: active, model })
       // Until the agent answers we show what was chosen - otherwise the choice looks lost; the answer
       // either confirms it or brings the previous model back.
@@ -3691,11 +4391,11 @@ export const App = () => {
   /**
    * The effort of THIS conversation - and, as with the model, the one the next tab will start on. Both
    * at once, and deliberately: the choice applies where it was made, while the tabs already open keep
-   * working at whatever they were started at (see ClaudeSessionHub.changeEffort).
+   * working at whatever they were started at (see ClaudeSessionHub.changeEffort). The second half is the
+   * IDE's to announce (see newTabDefaults).
    */
   const pickEffort = useCallback(
     (effort: string) => {
-      setPrefs((current) => ({ ...current, effort }))
       send({ type: 'setEffort', sessionId: active, effort })
       // Shown as chosen until the shell answers - for the same reason as the model: without it the
       // choice looks lost for as long as the message travels.
@@ -3704,8 +4404,33 @@ export const App = () => {
     [active],
   )
 
+  /**
+   * A side question - `/btw` (see feed/side). It stands in the tab's thread at once as "thinking" and goes
+   * to the IDE with the thread's earlier answers, so a follow-up has them; [replaces] asks one that ended
+   * without an answer again, in its own place.
+   */
+  const askAside = useCallback(
+    (session: string, question: string, replaces?: string) => {
+      sideSeq.current += 1
+      const id = `side-${Date.now()}-${sideSeq.current}`
+      const history = sideHistory(sideThreadsRef.current[session] ?? NO_THREAD, replaces)
+
+      sideStep(session, { kind: 'ask', id, question, at: Date.now(), ...(replaces ? { replaces } : {}) })
+      send({ type: 'sideQuestion', sessionId: session, id, question, history })
+    },
+    [sideStep],
+  )
+
   const runLocal = useCallback(
     ({ name, argument }: LocalCommand) => {
+      // Asked at once whatever the agent is doing - that is the whole of it: the question goes beside the
+      // turn rather than into it, and a bare `/btw` brings the thread back up, as in the terminal.
+      if (name === ASIDE_COMMAND) {
+        if (argument) askAside(active, argument)
+        else sideStep(active, { kind: 'show' })
+        return
+      }
+
       if (name === 'model') {
         pickModel(argument)
         return
@@ -3734,9 +4459,26 @@ export const App = () => {
         return
       }
 
+      // A name renames the tab on screen the way a double click does; no name opens the field on it,
+      // which is what a bare rename is asking for (see panelCommands for why the CLI's is not used).
+      if (name === 'rename') {
+        const title = argument.trim()
+        if (title) nameSession(active, title)
+        else setNamingTab(active)
+        return
+      }
+
+      // The panel's own screen of Claude Code's settings - the CLI prints a usage text here instead of
+      // the screen a terminal gets (see panelCommands). With `key=value` after it the command is not ours
+      // and never reaches this (see localCommand).
+      if (name === 'config') {
+        openCodexConfig()
+        return
+      }
+
       if (name === 'fork') fork()
     },
-    [fork, pickModel, pickEffort],
+    [fork, pickModel, pickEffort, nameSession, active, openCodexConfig, askAside, sideStep],
   )
 
   /** The Alt+B from the selection menu. The key is drawn in the menu, so it has to work. */
@@ -3882,20 +4624,51 @@ export const App = () => {
    * on every render would rebuild every card of the conversation on every chunk of a printing answer,
    * which is the very cost that memo is there to avoid.
    */
-  const reuseMessage = useCallback(
-    (item: UserItem) => {
-      const session = activeRef.current
-      const { tokens } = reusableMessage(item)
-
+  const intoField = useCallback(
+    (session: string, tokens: UserToken[], quotes: string[]) => {
       // The quotes travel beside the tokens rather than inside them (see the composer's own quotes
       // above the field), so they are put back the same way - as a draft of this tab's.
       editDraft(session, {
-        quotes: item.quotes.map((text, index) => ({ id: `r-${Date.now()}-${index}`, text })),
+        quotes: quotes.map((text, index) => ({ id: `r-${Date.now()}-${index}`, text })),
       })
-      applyTokens(session, tokens)
+      applyTokens(session, reusableMessage({ tokens }).tokens)
     },
     [applyTokens, editDraft],
   )
+
+  const reuseMessage = useCallback(
+    (item: UserItem) => {
+      send({ type: 'stat', kind: 'feature', id: 'message_reuse' })
+      intoField(activeRef.current, item.tokens, item.quotes)
+    },
+    [intoField],
+  )
+
+  /**
+   * A queued message the IDE took out at the pencil's press, into the field it was pressed in (see
+   * takeQueued in protocol.ts) - by the same road a sent message takes back (see reuseMessage), so it is
+   * one step of the undo history over whatever was being written.
+   *
+   * Its place is remembered alongside, and the send key and Queue put it back there. Without tokens - a
+   * message that came with none - the text is all there is, and it goes in as it stands.
+   */
+  const takeBackQueued = useCallback(
+    (session: string, before: string | null, text: string, tokens: unknown, quotes: string[]) => {
+      const pieces = Array.isArray(tokens) && tokens.length > 0 ? (tokens as UserToken[]) : [{ kind: 'text' as const, value: text }]
+
+      setQueueEdits((current) => ({ ...current, [session]: { before } }))
+      intoField(session, pieces, quotes)
+    },
+    [intoField],
+  )
+
+  /** The place of a message taken out to be edited is kept only while the field still holds something. */
+  useEffect(() => {
+    setQueueEdits((current) => {
+      const kept = Object.entries(current).filter(([session]) => !draftEmpty(drafts[session]))
+      return kept.length === Object.keys(current).length ? current : Object.fromEntries(kept)
+    })
+  }, [drafts])
 
   /**
    * The way back: what stands in the field is a rewrite nobody has touched, and this puts the person's own
@@ -4033,6 +4806,29 @@ export const App = () => {
     const images = isOverride ? [] : imageAttachments(draft.tokens)
     const attachCount = isOverride ? 0 : draft.tokens.filter((token) => token.kind === 'chip').length
 
+    // What the editor shows goes along - unless it is switched off, for good or for this one message (see
+    // editorSkips). The IDE reads it itself the moment the message arrives; the flag only asks for it. A
+    // text the panel puts in on the person's behalf (isOverride) is not something they wrote while looking
+    // at the editor, and a slash command is an order to the conversation rather than a question about code
+    // - the IDE leaves it out of one anyway (see ClaudeSessionHub.editorSeen), and the card must not claim
+    // otherwise.
+    const withEditor =
+      !isOverride &&
+      !written.trimStart().startsWith('/') &&
+      shareEditor &&
+      editorContext !== null &&
+      editorSkips[active] !== editorKey(editorContext)
+    // The chip's "not this one" was about this message, and this message is on its way.
+    if (editorSkips[active] !== undefined) {
+      setEditorSkips((current) => {
+        const { [active]: _gone, ...rest } = current
+        return rest
+      })
+    }
+
+    // A queued message that was taken out to be edited goes back to where it stood (see queueEdits).
+    const place = isOverride ? undefined : queueEdits[active]?.before ?? undefined
+
     // Into the queue while the agent is busy and someone explicitly asked to wait, or while compacting
     // runs: /compact swallows stdin and does not run these messages once it ends (see
     // deferFollowUpForCompact). A free agent has nothing to wait for.
@@ -4041,6 +4837,8 @@ export const App = () => {
         type: 'queuePrompt',
         sessionId: active,
         id: `q-${Date.now()}-${promptCounter.current++}`,
+        ...(place ? { before: place } : {}),
+        ...(withEditor ? { editor: true } : {}),
         text,
         attach: attachCount ? `${attachCount} refs` : '',
         // The pieces the card will be drawn from travel with it, exactly as they do with a message sent
@@ -4126,13 +4924,20 @@ export const App = () => {
     ownPrompts.current.add(promptId)
     dispatchPanel({
       session: active,
-      action: { kind: 'prompt', tokens, quotes: quotes.map((quote) => quote.text), steering: running },
+      action: {
+        kind: 'prompt',
+        tokens,
+        quotes: quotes.map((quote) => quote.text),
+        steering: running,
+        ...(withEditor && editorContext ? { editor: editorContext } : {}),
+      },
     })
 
     send({
       type: 'prompt',
       sessionId: active,
       id: promptId,
+      ...(withEditor ? { editor: true } : {}),
       // The pieces the card is drawn from travel with it: the shell keeps them for whoever was not here
       // (a second client, or this same page after a reload) - see promptEcho.
       tokens,
@@ -4159,6 +4964,10 @@ export const App = () => {
     shellRuns,
     commands,
     improveSources,
+    queueEdits,
+    shareEditor,
+    editorContext,
+    editorSkips,
   ])
 
   const sendNow = useCallback(() => submit(false), [submit])
@@ -4168,11 +4977,7 @@ export const App = () => {
    * Whether there is anything to send: text, an attachment or a quote. An empty field means both buttons
    * are dimmed, and Enter does nothing either.
    */
-  const draftReady = useMemo(() => {
-    if (draft.quotes.length > 0) return true
-    if (draft.tokens.some((token) => token.kind === 'chip')) return true
-    return plainText(draft.tokens).trim().length > 0
-  }, [draft])
+  const draftReady = useMemo(() => !draftEmpty(draft), [draft])
 
   // For the local harness page only (webview/src/harness) - it imitates a genuine send of a message from
   // the input field. Vite statically substitutes import.meta.env.DEV with false on a vite build, so this
@@ -4377,6 +5182,7 @@ export const App = () => {
    */
   const openMenu = () => {
     setMenu(null)
+    if (!sideMenuRef.current.open) send({ type: 'stat', kind: 'feature', id: 'screen:menu' })
     setSideMenu((current) => ({ open: !current.open, screen: 'menu' }))
   }
 
@@ -4421,6 +5227,7 @@ export const App = () => {
   const openScenarios = () => {
     setSideMenu((current) => ({ ...current, open: false }))
     setMenu(null)
+    send({ type: 'stat', kind: 'feature', id: 'scenarios_tab' })
     send({ type: 'scenarios' })
     openPanelTab(SCENARIOS_GROUP)
   }
@@ -4473,6 +5280,7 @@ export const App = () => {
   const openStatistics = () => {
     setSideMenu((current) => ({ ...current, open: false }))
     setMenu(null)
+    send({ type: 'stat', kind: 'feature', id: 'statistics_tab' })
     setStatsTab((current) => (current.open ? current : { ...current, open: true }))
     openPanelTab(STATISTICS_GROUP)
   }
@@ -4488,6 +5296,16 @@ export const App = () => {
 
   const openScreen = (screen: MenuScreen) => {
     setSideMenu({ open: true, screen })
+    // Which screens of the menu people open - the one feature count only this page can see (see
+    // UsageFeatures.isPanelFeature on the plugin's side, which is the list the IDE accepts).
+    send({ type: 'stat', kind: 'feature', id: `screen:${screen}` })
+
+    // Built afresh every time, like the feedback's report: yesterday's figures shown as today's would be
+    // exactly the thing this screen exists to rule out.
+    if (screen === 'usageStatsReport') {
+      setUsageStatsReport(null)
+      send({ type: 'usageStatsPreview' })
+    }
 
     if (screen === 'history') send({ type: 'history' })
 
@@ -4557,6 +5375,7 @@ export const App = () => {
         }
       : null,
     plugins: pluginsInstalled?.length ?? null,
+    appearance: appearanceSummary(t, theme?.choice ?? '', textSize),
     sounds: t.common.countOn(SOUND_IDS.filter((sound) => !isMuted(soundPrefs, sound)).length),
     // The three values behind "New chats", each named the way its own list names it. "As last chosen" is
     // an answer here rather than a blank: it IS what is set, and it is what most of these rows say.
@@ -4569,10 +5388,13 @@ export const App = () => {
       effort: prefs.newTabEffort || t.newChat.lastUsed,
       mode: modeMenuOptions(t, availableModes).find((option) => option.id === normalizeMode(prefs.mode))?.label ?? '',
     },
+    restoreTabs: restoreTabs ? t.restoreTabs.on : t.restoreTabs.off,
+    shareEditor: shareEditor ? t.shareEditor.on : t.shareEditor.off,
     composerLayout: composerLayoutOptions(t).find((option) => option.id === chosenLayout)?.label ?? '',
     pasteCollapse: pasteCollapseSummary(t, pasteCollapse),
     sendKey: sendKeySummary(sendKey),
     calmColors: calmColorsSummary(t, calmVivid),
+    indicators: indicatorsSummary(t, hiddenIndicators),
     improvePrompt: improveInstructions.instructions.trim()
       ? t.settings.improveSummary.custom
       : t.settings.improveSummary.builtIn,
@@ -4585,6 +5407,12 @@ export const App = () => {
     // Written in itself, as in the picker: the row is read by somebody who may be looking for a way out
     // of a language they cannot read.
     language: nativeName(locale),
+    usageStats:
+      usageStats?.consent === 'granted'
+        ? t.usageStats.on
+        : usageStats?.consent === 'declined'
+          ? t.usageStats.off
+          : t.usageStats.unasked,
     // The word alone, and its colour. The sentence that used to stand under it belongs to the screen
     // behind the row - see RemoteSummary.
     remote: {
@@ -4727,6 +5555,7 @@ export const App = () => {
           // Both the collected output and what is still running: without the second, a later answer from
           // the shell would start the record up again - for a conversation that no longer exists.
           forgetShellCommands(id)
+          forgetSide(id)
           setShellRuns((current) => {
             if (!(id in current)) return current
             const next = { ...current }
@@ -4757,10 +5586,15 @@ export const App = () => {
         onNewSession={() => startSession(`session-${Date.now()}`)}
         onReorderGroups={reorderGroups}
         onReorderTabs={reorderTabs}
+        onNameSession={nameSession}
+        naming={namingTab}
+        onNaming={setNamingTab}
+        onReturnToInput={() => setFocusToken((current) => current + 1)}
         onOpenMenu={openMenu}
         panelTabs={headerPanelTabs}
         onPickPanelTab={setActive}
         onClosePanelTab={closePanelTab}
+        calls={calls}
         watchers={watchers}
         gitBranch={panels[MAIN_SESSION]?.project?.gitBranch}
         pullRequest={panels[MAIN_SESSION]?.project?.pullRequest}
@@ -4776,7 +5610,9 @@ export const App = () => {
    * rail (both see Composer). Only one of those is on the screen at a time, so this node is drawn once
    * however many places are handed it.
    */
-  const metersNode = <UsageMeters todayTokens={usage.todayTokens ?? '…'} usage={usage} />
+  const metersNode = metersShown(indicators) ? (
+    <UsageMeters todayTokens={usage.todayTokens ?? '…'} usage={usage} shown={indicators} />
+  ) : null
 
   /**
    * A permission, a question, the task list with the branch and the PR, the queue, the quotes - the whole
@@ -4785,9 +5621,26 @@ export const App = () => {
    * (see railNode) - for the same reasons as Composer's MODEL/EFFORT/MODE: the field and the feed are left
    * as a clean pair of two blocks one above the other, with no cards wedged in between.
    */
+  /**
+   * The usage statistics' question is answered from the card or from the switch - one road for both, so
+   * the card goes the moment either is used. Shown as answered at once rather than after the IDE confirms:
+   * the answer is written in a second, and a card that lingers under the press reads as a press that did
+   * not take. A plain function rather than a hook: it stands below the sign-in screen's early return.
+   */
+  const answerUsageStats = (granted: boolean) => {
+    send({ type: 'setUsageStats', granted })
+    setUsageStatsState((current) => ({ consent: granted ? 'granted' : 'declined', lastSent: current?.lastSent ?? 0 }))
+  }
+
   const dockCards = (
     <>
       <PermissionPanel item={permission} composerEmpty={!draftReady} onDecide={decidePermission} />
+
+      {/* The usage question waits its turn: while the agent is asking something of the person, that is
+          the card they should be reading, and a request of ours on top of it would be in the way. */}
+      {usageStats?.consent === 'unknown' && !permission && !ask ? (
+        <UsageConsentCard onAnswer={answerUsageStats} onMore={() => openScreen('usageStats')} />
+      ) : null}
 
       <AskPanel
         key={ask?.id ?? 'none'}
@@ -4808,6 +5661,20 @@ export const App = () => {
 
       <TaskListPanel item={latestTodo(panel.items)} layout={composerLayout} />
 
+      {/* Nearest the field of everything that answers: it answers what was typed in it a moment ago. */}
+      <SideQuestionCard
+        thread={sideThreads[active] ?? NO_THREAD}
+        onCancel={(id) => send({ type: 'sideQuestionCancel', sessionId: active, id })}
+        onAskAgain={(exchange) => askAside(active, exchange.question, exchange.id)}
+        onAskInChat={(question) => {
+          // Through the composer, so it is one step of the undo history over whatever was being written.
+          applyTokens(active, [{ kind: 'text', value: question }])
+          setFocusToken((current) => current + 1)
+        }}
+        onClose={() => sideStep(active, { kind: 'hide' })}
+        onOpenLink={openLink}
+      />
+
       <Queue
         items={sessionQueue}
         onReorder={(from, to) => {
@@ -4817,6 +5684,11 @@ export const App = () => {
           send({ type: 'reorderQueue', sessionId: active, ids: next.map((item) => item.id) })
         }}
         onRemove={(id) => send({ type: 'unqueuePrompt', sessionId: active, id })}
+        onEdit={(id) => send({ type: 'takeQueued', sessionId: active, id })}
+        // Only while there is a turn to wait out: with none, the message in the field simply goes when sent,
+        // and a place in a queue that has nothing to wait for would promise an order that does not exist.
+        editing={running ? (queueEdits[active] ?? null) : null}
+        sendKey={sendKey}
       />
 
       <Quotes
@@ -4966,6 +5838,7 @@ export const App = () => {
           onSave={(scenario, scope) => send({ type: 'scenarioSave', scenario, scope })}
           onDelete={(id, scope) => send({ type: 'scenarioDelete', id, scope })}
           onDuplicate={(id, scope) => send({ type: 'scenarioDuplicate', id, scope })}
+          onPlace={(move) => send({ type: 'scenarioPlace', ...move })}
           onRun={(scenario, inputs) => startScenario(scenario, inputs)}
           onOpenRun={openRun}
           onDeleteRun={(runId) => send({ type: 'scenarioRunDelete', runId })}
@@ -5032,12 +5905,7 @@ export const App = () => {
           onOpenLink={openLink}
         />
       ) : sessions.length === 0 ? (
-        <div className={s.emptyState}>
-          <p className={s.gateTitle}>{t.chrome.noChats.title}</p>
-          <button type="button" className={s.gateButton} onClick={() => startSession(MAIN_SESSION)}>
-            {t.chrome.noChats.button}
-          </button>
-        </div>
+        <Welcome onStart={() => startSession(MAIN_SESSION)} />
       ) : (
         <div className={s.workArea} data-layout={composerLayout}>
         <div className={s.content}>
@@ -5101,6 +5969,7 @@ export const App = () => {
               onDismissError={dismissError}
               onOpenLink={openLink}
               signIn={signInOffer}
+              onCodexConfig={openCodexConfig}
               onReuse={reuseMessage}
               onLoadEarlier={loadEarlier}
               earlierPages={panel.earlierPages}
@@ -5169,6 +6038,7 @@ export const App = () => {
             models={models}
             customModels={customModels}
             meters={metersNode}
+            indicators={indicators}
             files={files}
             imageBaseCount={imageBaseCount}
             focusToken={focusToken}
@@ -5246,6 +6116,21 @@ export const App = () => {
             voiceError={voiceErrorText}
             onSubmit={sendNow}
             onQueue={queueNext}
+            keyQueues={queueEdits[active] !== undefined}
+            editor={
+              shareEditor && editorContext
+                ? { ref: editorContext, on: editorSkips[active] !== editorKey(editorContext) }
+                : null
+            }
+            onToggleEditor={() => {
+              if (!editorContext) return
+              const key = editorKey(editorContext)
+              setEditorSkips((current) => {
+                if (current[active] !== key) return { ...current, [active]: key }
+                const { [active]: _back, ...rest } = current
+                return rest
+              })
+            }}
             canSubmit={draftReady}
             stopStalled={stopStalled}
             onStop={() => {
@@ -5274,6 +6159,7 @@ export const App = () => {
               mode={mode}
               models={models}
               meters={metersNode}
+              indicators={indicators}
               onOpen={openSelector}
               onOpenThanks={openThanks}
               onOpenFeedback={openFeedback}
@@ -5537,8 +6423,35 @@ export const App = () => {
           <PasteCollapse t={t} lines={pasteCollapse} last={pasteCollapseLast} onPick={setPasteCollapse} />
         ) : null}
 
+        {sideMenu.open && sideMenu.screen === 'appearance' ? (
+          <Appearance
+            t={t}
+            size={textSize}
+            theme={theme?.choice ?? ''}
+            ideDark={theme?.ideDark ?? true}
+            onTextSize={setTextSize}
+            onTheme={setTheme}
+          />
+        ) : null}
+
+        {sideMenu.open && sideMenu.screen === 'restoreTabs' ? (
+          <RestoreTabs t={t} on={restoreTabs} onToggle={setRestoreTabs} />
+        ) : null}
+
+        {sideMenu.open && sideMenu.screen === 'shareEditor' ? (
+          <ShareEditor t={t} on={shareEditor} onToggle={setShareEditor} />
+        ) : null}
+
         {sideMenu.open && sideMenu.screen === 'calmColors' ? (
           <CalmColors vivid={calmVivid} onChange={setCalmColors} />
+        ) : null}
+
+        {sideMenu.open && sideMenu.screen === 'indicators' ? (
+          <Indicators
+            hidden={hiddenIndicators}
+            modelLabel={usage.models?.[0]?.label}
+            onToggle={toggleShownIndicator}
+          />
         ) : null}
 
         {sideMenu.open && sideMenu.screen === 'customModels' ? (
@@ -5551,6 +6464,16 @@ export const App = () => {
             selected={sendKey}
             note={t.sendKey.note}
             onPick={(id) => setSendKey(normalizeSendKey(id))}
+          />
+        ) : null}
+
+        {sideMenu.open && sideMenu.screen === 'codexConfig' ? (
+          <CodexConfig
+            state={codexConfig}
+            pending={codexConfigPending}
+            failures={codexConfigFailures}
+            onSet={setCodexConfigValue}
+            onTrust={setProjectTrust}
           />
         ) : null}
 
@@ -5595,6 +6518,18 @@ export const App = () => {
             }}
           />
         ) : null}
+
+        {sideMenu.open && sideMenu.screen === 'usageStats' ? (
+          <UsageScreen
+            consent={usageStats?.consent ?? 'unknown'}
+            lastSent={usageStats?.lastSent ?? 0}
+            onToggle={answerUsageStats}
+            onPreview={() => openScreen('usageStatsReport')}
+            onOpenLink={openLink}
+          />
+        ) : null}
+
+        {sideMenu.open && sideMenu.screen === 'usageStatsReport' ? <UsageReportScreen text={usageStatsReport} /> : null}
 
         {sideMenu.open && sideMenu.screen === 'feedbackLog' ? (
           <FeedbackLog
@@ -5643,9 +6578,9 @@ export const App = () => {
               const url = thanksUrl(id)
               if (url) send({ type: 'openExternal', url })
               if (id === SHARE) void copyToClipboard(shareText(t)).then((ok) => setShared(ok))
-              // Which way was taken, not that the menu was opened: there are three ways to say thanks and
-              // the achievement counts the different ones (see Achievements.kt, "thanks").
-              if (url || id === SHARE) send({ type: 'stat', kind: 'thanks', way: id })
+              // Which way was taken, not that the menu was opened: the achievement counts the different
+              // free ways (see Achievements.kt, "thanks"), and the tip is not one of them - see countsAsThanks.
+              if (countsAsThanks(id)) send({ type: 'stat', kind: 'thanks', way: id })
             }
           }}
         />

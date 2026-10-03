@@ -29,17 +29,22 @@ export const fr: Dict = {
       mcp: { title: 'SERVEURS MCP', hint: 'état · connexion · reconnexion' },
       plugins: { title: 'PLUGINS', hint: 'installés · parcourir · marketplaces' },
       settings: { title: 'RÉGLAGES', hint: 'comment le panneau se comporte et comment il sonne' },
+      appearance: { title: 'APPARENCE', hint: 'thème et taille du texte' },
       sounds: { title: 'ALERTES SONORES', hint: 'quand le panneau t’appelle' },
       calmColors: { title: 'COULEURS APAISÉES', hint: 'comment les jauges sont peintes' },
+      indicators: { title: 'INDICATEURS', hint: 'ce qui reste autour du champ' },
       remote: { title: 'ACCÈS À DISTANCE', hint: 'état · relais · appareils appairés' },
       remoteAbout: { title: 'CE QUI SORT D’ICI', hint: 'à lire avant de l’activer' },
       newChat: { title: 'NOUVEAUX CHATS', hint: 'ce avec quoi démarre un nouvel onglet' },
+      restoreTabs: { title: 'ONGLETS AU DÉMARRAGE', hint: 'ce qui revient après un redémarrage' },
+      shareEditor: { title: 'L’ÉDITEUR DANS LES MESSAGES', hint: 'ce qui part avec un message' },
       newChatModel: { title: 'MODÈLE PAR DÉFAUT', hint: 'le modèle sur lequel démarre un nouvel onglet' },
       newChatEffort: { title: 'EFFORT PAR DÉFAUT', hint: 'à quel point un nouvel onglet réfléchit' },
       newChatMode: { title: 'MODE PAR DÉFAUT', hint: 'ce avec quoi démarrent les nouveaux onglets' },
       composerLayout: { title: 'DISPOSITION DU CHAMP', hint: 'où se place le champ de saisie' },
       pasteCollapse: { title: 'TEXTE COLLÉ', hint: 'quand un collage se replie en pastille' },
       sendKey: { title: 'ENVOYER UN MESSAGE', hint: 'quelle touche envoie' },
+      codexConfig: { title: 'RÉGLAGES DE CODEX', hint: 'son config.toml - ce que /config change' },
       improvePrompt: { title: 'AMÉLIORER LE PROMPT', hint: 'ce que demande le bouton étoile' },
       voice: { title: 'SAISIE VOCALE', hint: 'dicter au lieu de taper' },
       voiceLanguage: { title: 'LANGUE PARLÉE', hint: 'ce que la dictée écoute' },
@@ -49,6 +54,8 @@ export const fr: Dict = {
       accounts: { title: 'COMPTES CODEX', hint: 'quel abonnement paie le travail' },
       feedback: { title: 'RETOURS', hint: 'un bug, une idée ou juste un bonjour' },
       feedbackLog: { title: 'CE QUI EST JOINT', hint: 'le rapport entier, avant l’envoi' },
+      usageStats: { title: 'STATISTIQUES D’UTILISATION', hint: 'des compteurs anonymes, seulement si vous le permettez' },
+      usageStatsReport: { title: 'CE QUI EST ENVOYÉ', hint: 'le rapport entier, tel qu’il partirait' },
     },
 
     rows: {
@@ -58,7 +65,7 @@ export const fr: Dict = {
       plugins: { label: 'Plugins', sub: 'Installés, parcourir, marketplaces' },
       remote: { label: 'Accès à distance', sub: 'État, relais, appareils appairés' },
       accounts: { label: 'Comptes Codex', sub: 'Changer sans se déconnecter' },
-      settings: { label: 'Réglages', sub: 'Sons, nouveaux chats, disposition, langue' },
+      settings: { label: 'Réglages', sub: 'Thème, sons, nouveaux chats, langue' },
       feedback: { label: 'Envoyer un retour', sub: 'Un bug, une idée ou juste un bonjour' },
     },
 
@@ -73,16 +80,22 @@ export const fr: Dict = {
 
   settings: {
     rows: {
+      appearance: { label: 'Apparence', sub: 'Thème et taille du texte' },
       sounds: { label: 'Alertes sonores', sub: 'Quand le panneau t’appelle' },
       calmColors: { label: 'Couleurs apaisées', sub: 'Combien de couleur gardent les jauges' },
+      indicators: { label: 'Indicateurs', sub: 'Quelles mesures restent près du champ' },
       newChat: { label: 'Nouveaux chats', sub: 'Modèle, effort et mode de permission' },
+      restoreTabs: { label: 'Onglets au démarrage', sub: 'Rouvrir ce qui était ouvert, brouillons compris' },
+      shareEditor: { label: 'Fichier ouvert et sélection', sub: 'Ce qui part avec chaque message' },
       composerLayout: { label: 'Disposition du champ', sub: 'Où se place le champ de saisie' },
       pasteCollapse: { label: 'Texte collé', sub: 'Quand un collage se replie en pastille' },
       sendKey: { label: 'Envoyer un message', sub: 'Quelle touche envoie' },
+      codexConfig: { label: 'Réglages de Codex', sub: 'Son propre config.toml et la confiance accordée à ce projet' },
       improvePrompt: { label: 'Améliorer le prompt', sub: 'Ce que demande le bouton étoile' },
       voice: { label: 'Saisie vocale', sub: 'Dicter avec votre propre clé Deepgram' },
       customModels: { label: 'Modèles personnalisés', sub: 'Ceux que Codex ne propose pas' },
       language: { label: 'Langue', sub: 'La langue que parle le panneau' },
+      usageStats: { label: 'Statistiques d’utilisation', sub: 'Des compteurs anonymes qui aident le plugin' },
     },
 
     improveSummary: { builtIn: 'Intégré', custom: 'Personnalisé' },
@@ -132,6 +145,81 @@ export const fr: Dict = {
     volumeOf: (sound) => `Volume : ${sound}`,
   },
 
+  appearance: {
+    size: 'TAILLE DU TEXTE',
+    theme: 'THÈME',
+    followConsole: 'Comme la police de la console',
+    followConsoleSub: (size) => `Suivre la police de console de l’IDE - actuellement ${size}`,
+    own: 'Une taille à part',
+    ownSub: 'Le panneau seul - l’éditeur, le terminal et la console restent tels quels',
+    smaller: 'Plus petit',
+    larger: 'Plus grand',
+    followIde: 'Comme l’IDE',
+    followIdeSub: (theme) => `Suivre l’IDE - actuellement ${theme}`,
+    dark: 'Sombre',
+    darkSub: 'Toujours sombre, même dans un IDE clair',
+    light: 'Clair',
+    lightSub: 'Toujours clair, même dans un IDE sombre',
+    darkWord: 'sombre',
+    lightWord: 'clair',
+    auto: 'Auto',
+  },
+
+  restoreTabs: {
+    label: 'Restaurer les onglets',
+    hint: 'Les onglets, leurs conversations et le texte en cours reviennent quand le projet est rouvert - même après un plantage de l’IDE',
+    note: 'Rien n’est relancé : un agent ne démarre que lorsque son onglet est ouvert ou qu’on y écrit. Les brouillons restent sur cette machine, dans le dossier de l’IDE, et nulle part ailleurs.',
+    on: 'Activé',
+    off: 'Désactivé',
+  },
+
+  shareEditor: {
+    label: 'Joindre l’éditeur',
+    hint: 'Chaque message emporte le fichier ouvert dans l’éditeur et les lignes qui y sont sélectionnées - comme le fait /ide de Codex dans un terminal',
+    note: 'Depuis ce panneau seulement : un message écrit sur un téléphone n’emporte rien de l’éditeur. Un message peut partir sans - cliquez sur la puce du fichier dans le champ de saisie.',
+    on: 'Activé',
+    off: 'Désactivé',
+  },
+
+  usageStats: {
+    label: 'Envoyer des statistiques d’utilisation anonymes',
+    hint: 'Pendant que vous utilisez le panneau, quelques fois par jour : quelles fonctions servent, à quelle fréquence et combien de temps durent les sessions',
+    lastSent: (when: string) => `Dernier envoi : ${when}`,
+    notYet: 'Rien n’est encore parti - le premier rapport partira la prochaine fois que vous enverrez un message.',
+    sentTitle: 'CE QUI EST ENVOYÉ',
+    sent: [
+      'Des compteurs pour chaque jour : minutes dans le panneau, messages, réponses, conversations, modifications',
+      'La durée de chaque séance de travail - jamais l’heure à laquelle elle a commencé',
+      'Quelles fonctions ont servi, et à quelle fréquence',
+      'Les outils intégrés, les noms de modèles propres à Codex et les commandes intégrées, par leur nom',
+      'Les versions du plugin, de l’IDE et de Codex, le système d’exploitation, la langue du panneau et le réglage des paramètres',
+      'Un identifiant aléatoire créé sur cette machine, pour distinguer les jours d’une machine de ceux d’une autre',
+    ],
+    neverTitle: 'JAMAIS ENVOYÉ',
+    never: [
+      'Vos messages, les réponses, le code, les noms de fichiers ou les chemins',
+      'Les noms des projets, ni ceux de vos propres commandes, serveurs MCP et modèles',
+      'Votre compte Codex ou ChatGPT, votre e-mail ni votre clé API - et votre adresse IP n’est pas conservée',
+      'Les jetons, les coûts, ni les heures de la journée où vous travaillez',
+    ],
+    offNote: 'Le désactiver arrête les rapports et demande au service d’effacer tout ce qui a déjà été envoyé sous l’identifiant de cette machine.',
+    seeReport: 'Voir exactement ce qui est envoyé',
+    privacy: 'Politique de confidentialité',
+    reportNote: 'Le rapport entier, tel qu’il partirait la prochaine fois. Rien d’autre ne l’accompagne.',
+    building: 'Préparation du rapport…',
+    on: 'Activé',
+    off: 'Désactivé',
+    unasked: 'Pas encore demandé',
+    card: {
+      label: 'ANONYME',
+      title: 'Aider à améliorer le plugin ?',
+      body: 'Envoyer des compteurs anonymes sur l’utilisation du panneau : quelles fonctions, à quelle fréquence, combien de temps. Jamais votre code, vos messages, des noms de fichiers ni rien qui dise qui vous êtes. Vous pouvez le désactiver à tout moment dans les Paramètres.',
+      allow: 'Autoriser',
+      decline: 'Non merci',
+      more: 'Ce qui est envoyé',
+    },
+  },
+
   calmColors: {
     sample: 'UNE JAUGE À CHAQUE PALIER',
     label: 'Couleur des jauges',
@@ -139,6 +227,28 @@ export const fr: Dict = {
     keeps: 'Rien d’autre ne change : une erreur reste rouge, une permission reste ce qu’elle est. Ce sont des choses qui sont arrivées, pas une humeur.',
     full: 'Couleur pleine',
     none: 'Un seul ton',
+  },
+
+  indicators: {
+    contextBar: { label: 'Barre de contexte', hint: 'La bande au-dessus du champ qui se remplit au fil de la conversation' },
+    contextFigure: {
+      label: 'Chiffre du contexte',
+      hint: '« ctx 42% » au bout de la barre - seulement dans la disposition normale ; dans les étroites, le chiffre est dans l’infobulle de la barre',
+    },
+    fiveHour: { label: 'Limite de 5 heures', hint: 'L’anneau de la fenêtre de cinq heures du forfait' },
+    week: { label: 'Limite hebdomadaire', hint: 'L’anneau de la fenêtre hebdomadaire du forfait' },
+    modelWeek: {
+      label: 'Limite supplémentaire',
+      named: (limit) => `Limite ${limit}`,
+      hint: 'Une limite que Codex signale en plus des deux du forfait - affichée seulement tant que le forfait en a une',
+    },
+    spending: {
+      label: 'Plafond de dépenses',
+      hint: 'L’anneau du plafond mensuel de dépenses d’un siège Business - affiché seulement sur un siège qui en a un',
+    },
+    tokens: { label: 'Tokens du jour', hint: 'Dépensés aujourd’hui, tous projets confondus' },
+    feedback: { label: 'Bouton de retour', hint: 'La bulle qui ouvre le formulaire - le menu garde son propre accès' },
+    thanks: { label: 'Cœur', hint: 'Une étoile, un avis, un mot à un ami ou un pourboire' },
   },
 
   history: {
@@ -273,11 +383,6 @@ export const fr: Dict = {
       save: "Fixer l'heure",
       nothing: 'Rien n\'attend son heure dans ce projet.',
     },
-    duplicate: 'Dupliquer',
-    delete: 'Supprimer',
-    deleteTitle: 'Supprimer ce scénario ?',
-    deleteRun: 'Supprimer cette exécution',
-    deleteRunTitle: 'Supprimer cette exécution ?',
     queue: {
       add: 'Mettre dans la file',
       oneAtATime: 'un par un, dans l’ordre',
@@ -312,6 +417,12 @@ export const fr: Dict = {
       emptyNote: 'Mettez ici une série de travaux : elle démarrera dès que la précédente aura libéré la copie de travail.',
       unread: 'La file n’a pas pu être lue - le fichier sur cette machine est peut-être abîmé. Rien n’est perdu : une liste illisible n’est jamais écrasée.',
     },
+    duplicate: 'Dupliquer',
+    moveRow: 'Glisser vers une autre place ou sur l’autre étagère',
+    delete: 'Supprimer',
+    deleteTitle: 'Supprimer ce scénario ?',
+    deleteRun: 'Supprimer cette exécution',
+    deleteRunTitle: 'Supprimer cette exécution ?',
     running: 'EN COURS MAINTENANT',
     runningNote: 'toutes sur la même copie de travail',
     runningHere: (n: number): string => (n === 1 ? '1 en cours' : `${n} en cours`),
@@ -341,6 +452,7 @@ export const fr: Dict = {
       state: 'ÉTAT',
     },
     moreRuns: (count: number): string => `Afficher ${count} de plus`,
+    fewerRuns: 'Afficher moins',
     shelves: {
       project: 'DANS CE DÉPÔT',
       projectNote: 'voyage avec le dépôt · tous ceux qui travaillent ici l\'ont',
@@ -383,6 +495,7 @@ export const fr: Dict = {
       retries: 'Plus d\'essais',
       stopped: 'Interrompu par vous',
       undone: 'Pas terminé',
+      headGaveUp: 'Le fil principal n’a pas pu la terminer non plus',
     },
     outcomes: {
       scenarioBroken: 'Ce scénario ne peut pas être lancé tel quel - ouvrez-le et voyez ce qui cloche.',
@@ -396,6 +509,9 @@ export const fr: Dict = {
       runGone: 'Cette exécution n\'existe plus.',
       runNotResumable: 'Cette exécution ne peut pas être reprise : son fil principal n\'a jamais démarré.',
       queueNotWritten: 'La file n’a pas pu être écrite sur le disque.',
+      scenarioNotMoved: 'Le scénario n’a pas pu être déplacé sur l’autre étagère.',
+      scenarioOnBothShelves: 'L’autre étagère contient déjà un scénario avec le même identifiant, celui-ci est donc resté à sa place.',
+      orderNotWritten: 'Le nouvel ordre de l’étagère n’a pas pu être écrit sur le disque.',
       unknown: 'Quelque chose a mal tourné.',
     },
     run: {
@@ -431,6 +547,8 @@ export const fr: Dict = {
       passOfUpTo: (pass, passes) => `passe ${pass} sur ${passes} au plus`,
       headSaid: 'FIL PRINCIPAL',
       sentBack: (n) => (n === 1 ? 'renvoyée une fois' : `renvoyée ${n} fois`),
+      takenOver: (why) => `Le fil principal a pris le relais : ${why}`,
+      takingOver: 'le fil principal la termine',
       allow: 'Autoriser',
       deny: 'Refuser',
       send: 'Envoyer',
@@ -481,6 +599,9 @@ export const fr: Dict = {
       onQuestion: 'FACE À UNE QUESTION',
       questionHead: 'Il y répond',
       questionStop: 'S\'arrêter et attendre',
+      onGiveUp: 'SI UNE CARTE NE FINIT PAS',
+      giveUpStop: 'Arrêter l’exécution',
+      giveUpHead: 'Il la termine lui-même',
       retries: 'RENVOYER',
       noRetries: 'Jamais',
       retriesCount: (n: number): string => (n === 1 ? 'Une fois' : n === 2 ? 'Deux fois' : `${n} fois`),
@@ -678,7 +799,7 @@ export const fr: Dict = {
   effort: {
     auto: { sub: 'Revient à l’effort par défaut du modèle pour cette session.' },
     ultracode: {
-      sub: 'Raisonnement xhigh, plus des flux automatiques à plusieurs agents quand la tâche l’exige.',
+      sub: 'Raisonnement au maximum, et Codex confie de lui-même des parties de la tâche à des agents en parallèle.',
     },
     max: { sub: 'Tout ce qu’il a. Architecture et bugs coriaces.' },
     xhigh: { sub: 'Encore plus, pour des changements répartis sur beaucoup de fichiers.' },
@@ -716,11 +837,17 @@ export const fr: Dict = {
     send: 'Envoyer',
     run: 'Exécuter',
     runHint: 'S’exécute dans ton shell - Codex verra la sortie avec ton prochain message',
+    askAside: 'Demander à part',
+    askAsideHint: 'Codex répond d’après la conversation et continue de travailler',
     improveEmpty: 'Codex n’a rien renvoyé à mettre dans le champ.',
     improveChanged: 'Le brouillon a changé pendant la réécriture, il a donc été laissé tel quel.',
     improveTerminal: 'Une commande de terminal n’est pas réécrite',
     voice: 'Dicter',
     voiceStop: 'Arrêter la dictée',
+    editor: {
+      on: (place) => `Codex voit ${place} avec ce message · cliquez pour le retirer`,
+      off: (place) => `${place} ne part pas avec ce message · cliquez pour le joindre`,
+    },
   },
 
   header: {
@@ -736,8 +863,28 @@ export const fr: Dict = {
     closeRun: 'Fermer cette exécution',
     conversations: 'Conversations',
     newSession: 'Nouvelle conversation',
+    renameTab: 'Renommer la conversation',
     menu: 'Menu',
     watchers: (n) => `${n} ${n === 1 ? 'autre client suit' : 'autres clients suivent'} ce projet`,
+  },
+
+  side: {
+    title: 'QUESTION À PART',
+    unseen: 'L’agent ne voit pas ceci',
+    thinking: 'Réfléchit à part',
+    retrying: (attempt: number, max: number, seconds: number): string =>
+      `Erreur de l’API, essai ${attempt} sur ${max} dans ${seconds} s`,
+    cancel: 'Annuler',
+    cancelled: 'Annulée',
+    askAgain: 'Redemander',
+    empty: 'Aucune réponse n’est arrivée',
+    failed: { ended: 'La conversation s’est arrêtée avant de répondre', timeout: 'Pas de réponse en dix minutes', refused: 'Codex n’a pas pu y répondre' },
+    copy: 'Copier la réponse',
+    close: 'Fermer (Échap)',
+    notSaved: 'Pas enregistré dans le chat',
+    askInChat: 'Demander dans le chat',
+    askInChatHint: 'Mettre la question dans le champ comme un message normal - là, Codex peut modifier des fichiers et lancer des commandes',
+    hint: 'Tape /btw ou /side et une question. Codex répond d’après cette conversation sans arrêter son travail - il peut lire des fichiers, mais ne change rien - et la réponse ne va pas dans le chat.',
   },
 
   thanks: {
@@ -750,6 +897,8 @@ export const fr: Dict = {
     share: 'Partager avec des amis',
     shareSub: 'Copie une phrase à son sujet et le lien',
     shareCopied: 'Copié - colle-le où tu veux',
+    tip: 'Laisser un pourboire',
+    tipSub: 'Sur Ko-fi, une fois ou chaque mois',
     shareText:
       'Jette un œil à Amazing Codex GUI - Codex en vrai panneau dans les IDE JetBrains : https://github.com/crmapache/amazing-codex',
   },
@@ -758,7 +907,7 @@ export const fr: Dict = {
     checking: 'Recherche de Codex…',
     notFound: 'Codex introuvable',
     notFoundText:
-      'Le panneau passe par le CLI claude. S’il est installé, indique-lui où - l’IDE ne voit pas toujours le même PATH que ton terminal.',
+      'Le panneau passe par le CLI codex. S’il est installé, indique-lui où - l’IDE ne voit pas toujours le même PATH que ton terminal.',
     useThis: 'Prendre celui-ci',
     whereLooked: 'Où le panneau a cherché',
     checkAgain: 'Vérifier à nouveau',
@@ -768,6 +917,8 @@ export const fr: Dict = {
     signInAs: (account: string): string => `Connecte-toi en tant que ${account}`,
     signInText:
       'La connexion se fait une fois, dans le terminal de l’IDE : Codex ouvre un navigateur et attend que tu reviennes. Le panneau s’en aperçoit tout seul.',
+    heldBack: (names: string): string =>
+      `Ce compte est connecté, mais les réglages Codex de ce projet (.codex/config.toml) demandent un autre type de connexion : ${names}. Te reconnecter n’y changera rien - choisis un autre compte ou modifie les réglages du projet.`,
     logIn: 'Se connecter',
     openTerminalAgain: 'Rouvrir le terminal',
     finishInTerminal: 'Termine la connexion dans le terminal - cet écran se ferme tout seul.',
@@ -807,6 +958,11 @@ export const fr: Dict = {
     copyReply: 'Copier toute la réponse',
     moreActions: 'Plus',
     copyMessage: 'Copier ce message, avec les chemins des pièces jointes',
+    editor: {
+      selected: (n, name) => (n === 1 ? `1 ligne de ${name}` : `${n} lignes de ${name}`),
+      opened: (name) => `Dans ${name}`,
+      open: (place) => `${place} · ouvrir dans l’éditeur`,
+    },
     reuse: {
       label: 'Corriger et renvoyer',
       hint: 'Remettre ce message dans le champ de saisie, pour le corriger et le renvoyer',
@@ -894,9 +1050,9 @@ export const fr: Dict = {
     checkpoint: {
       cleared: 'conversation effacée - plus rien au-dessus n’est retenu',
       earlier: 'messages précédents',
+      loadEarlier: 'charger les messages précédents',
       notKept: 'les messages précédents ne sont plus conservés',
       notOnPhone: 'les messages précédents ne sont pas envoyés au téléphone',
-      loadEarlier: 'charger les messages précédents',
     },
 
     compact: {
@@ -944,6 +1100,22 @@ export const fr: Dict = {
       textWithCode: (code) => `Codex s’est arrêté de façon inattendue (code ${code}).`,
     },
 
+    outranked: {
+      account: {
+        label: 'CONNEXION',
+        text: 'Les réglages Codex de ce projet demandent une autre connexion que le compte choisi ici :',
+      },
+      untrusted: {
+        label: 'RÉGLAGES',
+        text: 'Codex ne lit pas les réglages propres à ce projet - il ne lui fait pas encore confiance :',
+      },
+      open: 'Réglages de Codex',
+    },
+
+    sampling: {
+      note: 'Les modèles les plus récents n’acceptent plus de paramètre d’échantillonnage, et cette requête en contenait un. Codex n’en ajoute aucun : il vient donc de ce par quoi passent les requêtes - le plus souvent une passerelle ou un proxy déclaré comme fournisseur de modèles dans config.toml.',
+    },
+
     limit: {
       label: 'LIMITE',
       extraLabel: 'USAGE SUPPLÉMENTAIRE',
@@ -964,12 +1136,14 @@ export const fr: Dict = {
     ask: {
       label: 'CODEX DEMANDE',
       blocks: (n) => `${n} ${n === 1 ? 'question' : 'questions'} · bloque l’exécution`,
+      leftOver: (n) => `${n} ${n === 1 ? 'question' : 'questions'} · sans réponse`,
       pickAny: 'plusieurs possibles',
       other: 'Autre',
       ownAnswer: 'écrivez votre propre réponse…',
       send: 'Envoyer les réponses',
       pickToContinue: 'Choisis pour continuer',
       note: 'l’exécution reprend exactement là où elle a demandé',
+      leftOverNote: 'cette exécution est terminée depuis longtemps - ta réponse partira comme un nouveau message',
       expand: 'Déplier la question',
       collapse: 'Replier la question',
       dismiss: 'Fermer la question',
@@ -998,6 +1172,8 @@ export const fr: Dict = {
     queue: {
       label: 'EN ATTENTE',
       hint: (n) => `${n} partiront dans l’ordre à la fin du tour · glissez pour réordonner`,
+      edit: 'Modifier dans le champ',
+      editing: (key, button) => `En cours de modification dans le champ · ${key} ou « ${button} » le remet ici`,
     },
     selection: { quote: 'Citer', fork: 'Bifurquer d’ici' },
     streams: {
@@ -1077,6 +1253,7 @@ export const fr: Dict = {
       'no-executable': 'Codex est introuvable sur cette machine.',
       'no-store': 'Impossible de créer un dossier pour le nouveau compte.',
       'not-supported': "Ce Codex ne sait pas séparer deux connexions, donc rien n'a été ajouté.",
+      'already-here': 'Ce compte est déjà là : c’est la connexion de Codex lui-même (codex login), donc rien n’a été ajouté.',
       'logout-failed': 'La déconnexion a échoué. Essayez dans un terminal.',
       'already-running': 'Une connexion est déjà en cours.',
       unknown: 'Ça n’a pas marché.',
@@ -1314,7 +1491,6 @@ export const fr: Dict = {
 
     scenarios: {
       running: 'EN COURS',
-      repository: 'Dépôt',
       inRepository: (name: string): string => `Dans ${name}`,
       opensProject: 'Pas ouvert dans l’IDE - le choisir l’ouvre là-bas',
       nothingRunning: 'Rien ne tourne dans ce projet en ce moment.',
@@ -1474,13 +1650,20 @@ export const fr: Dict = {
       projectFiles: 'Fichiers du projet',
       ofTotal: (shown, total) => `${shown} sur ${total}`,
       photosDropped: (n) => `${n} de plus ne tiennent pas dans un message - envoie d’abord celles-ci.`,
-      photoTooBig: 'Cela ne tient pas dans un message. Essaie une photo à la fois.',
+      photoTooBig: 'Cette photo est trop lourde, même réduite.',
+      photoTooBigOldIde: 'Le plugin sur ton ordinateur n’accepte que de petites photos. Mets-le à jour pour envoyer celle-ci.',
+      photoUnreadable: 'Ce fichier ne s’ouvre pas comme une image.',
+      sending: 'Envoi…',
+      notDelivered: 'Non distribué',
+      retry: 'Réessayer',
+      discardUnsent: 'Abandonner ce message',
     },
 
     limits: {
       title: 'Limites et contexte',
       fiveHourWindow: 'Fenêtre de cinq heures',
       weeklyWindow: 'Fenêtre hebdomadaire',
+      modelWindow: (model) => `Fenêtre hebdomadaire ${model}`,
       paceNote: (percent) =>
         `L’arc pâle est le rythme régulier : ${percent}% de la semaine sont déjà « dus » à ce jour. Tant que l’arc vif est plus court, la semaine tient le plan.`,
       context: 'Le contexte de cette conversation',
@@ -1507,6 +1690,7 @@ export const fr: Dict = {
     modeHint: (mode) => `Mode d’autorisation : ${mode}`,
     sessionLimit: 'Limite de 5 heures',
     weekLimit: 'Limite hebdomadaire',
+    modelWeekLimit: (limit) => `Limite ${limit}`,
     /** The ring of a Codex business seat's spending cap - see ExtraUsage.resets. */
     spendLimit: 'Plafond de dépenses',
     windowUsed: (title, percent) => `${title} : ${percent}% utilisé`,
@@ -1524,7 +1708,7 @@ export const fr: Dict = {
     weeklyOpus: 'hebdomadaire Opus',
     weeklySonnet: 'hebdomadaire Sonnet',
     weeklyApps: 'hebdomadaire des applications',
-    weeklyWithExtra: 'hebdomadaire, usage supplémentaire compris',
+    weeklyFable: 'hebdomadaire Fable',
     extra: 'd’usage supplémentaire',
   },
 
@@ -1541,11 +1725,61 @@ export const fr: Dict = {
     modeHint: 'shift+tab',
   },
 
+  codexConfig: {
+    intro: 'Les réglages propres à Codex - son config.toml, le fichier même que lit un terminal, donc un changement ici vaut aussi là-bas.',
+    loading: 'Je demande ses réglages à Codex…',
+    noCli: 'Codex est introuvable sur cette machine.',
+    unreadable: 'Codex n’a pas répondu avec ses réglages. Réessayez dans un instant.',
+    groups: { work: 'Comment Codex travaille', terminal: 'Terminal et onglets sur Par défaut', other: 'Expérimental' },
+    on: 'Oui',
+    off: 'Non',
+    saving: 'Enregistrement…',
+    notSet: 'Non défini - Codex décide',
+    lockedPolicy: 'Fixé par la politique de votre organisation - impossible à changer ici.',
+    lockedProject: 'Défini dans le .codex/config.toml du projet - un changement ici ne l’emporterait pas.',
+    chips: 'Dans le panneau, ce sont les puces MODÈLE, EFFORT et MODE qui en décident, onglet par onglet. C’est sur cette valeur que se règlent un terminal et un onglet laissé sur Par défaut.',
+    failed: 'Codex n’a pas accepté ce changement.',
+    overridden: 'Enregistré, mais les réglages du projet ou une politique le fixent au-dessus des vôtres, donc il ne s’applique pas ici.',
+    save: 'Enregistrer',
+    project: {
+      title: 'CE PROJET',
+      none: 'Aucun réglage Codex propre',
+      noneHint: 'Un .codex/config.toml, des hooks ou des politiques exec dans le projet apparaîtraient ici.',
+      trusted: 'De confiance - Codex lit les réglages propres au projet',
+      untrusted: 'Pas de confiance - Codex ignore les réglages propres au projet',
+      sets: (names: string): string => `Il définit : ${names}`,
+      trust: 'Faire confiance à ce projet',
+      untrust: 'Ne plus faire confiance',
+    },
+    labels: {
+      model_reasoning_summary: 'Résumé du raisonnement',
+      model_verbosity: 'Longueur des réponses',
+      personality: 'Personnalité',
+      web_search: 'Recherche web',
+      'sandbox_workspace_write.network_access': 'Accès réseau dans le bac à sable du projet',
+      approvals_reviewer: 'Qui examine les demandes d’approbation',
+      service_tier: 'Niveau de service',
+      model_auto_compact_token_limit: 'Compactage auto après (jetons)',
+      review_model: 'Modèle pour /review',
+      model: 'Modèle',
+      model_reasoning_effort: 'Effort de raisonnement',
+      approval_policy: 'Quand demander l’approbation',
+      sandbox_mode: 'Bac à sable',
+      'features.network_proxy': 'Proxy réseau',
+      'features.prevent_idle_sleep': 'Empêcher la mise en veille pendant le travail',
+    },
+  },
+
   commands: {
     resume: 'ouvrir une conversation passée de ce projet',
     fork: 'continuer cette conversation dans un nouvel onglet',
     login: 'se connecter à Codex depuis le terminal de l’IDE',
     logout: 'se déconnecter - ouvre le terminal de l’IDE',
+    rename: 'renommer cet onglet ; sans nom, ouvre le champ dessus',
+    renameArgument: '[nouveau nom]',
+    config: 'réglages de Codex - les ouvre dans le menu',
+    btw: 'une petite question à part - le travail continue',
+    btwArgument: '<ta question>',
     model: 'changer le modèle de cette session',
     effort: 'régler combien de temps Codex réfléchit avant d’agir',
     codeReview: 'relire les changements avec le relecteur propre à Codex',

@@ -1,5 +1,9 @@
 package io.github.crmapache.amazingcodex.codex
 
+import io.github.crmapache.amazingcodex.codex.accounts.CodexAccounts
+
+import io.github.crmapache.amazingcodex.codex.accounts.AccountIdentity
+
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
@@ -12,6 +16,7 @@ import com.intellij.util.concurrency.AppExecutorUtil
 import io.github.crmapache.amazingcodex.codex.accounts.AccountDesk
 import io.github.crmapache.amazingcodex.codex.accounts.AccountsWatch
 import io.github.crmapache.amazingcodex.editor.DiskRefresh
+import io.github.crmapache.amazingcodex.editor.EditorContext
 import io.github.crmapache.amazingcodex.editor.UnsavedEdits
 import io.github.crmapache.amazingcodex.feedback.DiagnosticsLog
 import io.github.crmapache.amazingcodex.remote.LocalBridgeServer
@@ -22,11 +27,13 @@ import io.github.crmapache.amazingcodex.scenario.ScenarioDesk
 import io.github.crmapache.amazingcodex.remote.RemoteKeys
 import io.github.crmapache.amazingcodex.remote.RemoteState
 import io.github.crmapache.amazingcodex.stats.StatsCollector
+import io.github.crmapache.amazingcodex.usage.UsageReporter
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.TimeUnit
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.add
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -78,9 +85,14 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
             onTitle = { sessionId, title -> sendSessionTitle(sessionId, title) },
             // A tab already carrying a name the model picked is left alone - a name outlives the
             // process that asked for it, and asking again would spend a model call to arrive at the
-            // same words. A stand-in or a guess off the first line is another matter: those are exactly
-            // what the question exists to replace.
-            titleWanted = { sessionId -> tabs.titleSource(sessionId) != SessionSnapshot.TITLE_LLM },
+            // same words. One the person typed is left alone all the more: the answer would be thrown
+            // away (see SessionRegistry.rename). A stand-in or a guess off the first line is another
+            // matter: those are exactly what the question exists to replace.
+            titleWanted = { sessionId ->
+                tabs.titleSource(sessionId) !in setOf(SessionSnapshot.TITLE_LLM, SessionSnapshot.TITLE_USER)
+            },
+            ownTitle = { sessionId -> tabs.ownTitle(sessionId) },
+            onRenamed = { sessionId, title -> adoptOwnTitle(sessionId, title) },
             onTurnEnded = { sessionId ->
                 // Before the status goes out, and the order is load-bearing twice over. The status is
                 // what drains this tab's queue (see runQueued), and a message queued while the turn ran
@@ -142,13 +154,17 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
             usage.refreshLimits(urgent = true)
             usage.refreshTodayTokens()
             usage.refreshModels(CodexSessions.MAIN_SESSION)
-            // Who that sign-in belongs to is what the accounts row is drawn from, and this is the moment
-            // it becomes known (see ProjectAuth.lastStatus). The list as it stands: re-checking here
-            // would start the very process that has this moment finished.
+            // The accounts screen already has this sign-in's row - the answer reached it a moment ago (see
+            // AccountDesk.heard). What the row still lacks is its figures, and those come with the list.
             accounts.sendList()
         },
         // The figures on the rings belong to the account they were asked about - see ProjectUsage.forget.
-        onAccountChanged = { account -> usage.forget(account) },
+        onAccountChanged = { account, identity -> usage.forget(account, identity) },
+        onAnswered = { account, status, askedAt -> accounts.heard(account, status, askedAt) },
+        // The other projects put the question again themselves rather than being handed this answer: it
+        // was asked from this project's directory, and each of them lifts its own gate and draws its own
+        // screen.
+        onSettled = { everyHub { if (it !== this@CodexSessionHub) it.auth.check() } },
     )
 
     val catalog: ProjectCatalog = ProjectCatalog(project, this)
@@ -173,6 +189,9 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
 
     /** The single entrance every request about a conversation comes through. */
     val commands: SessionCommands = SessionCommands(this)
+
+    /** Codex's own settings - the screen `/config` opens in the panel (see CodexConfigDesk). */
+    val codexConfig: CodexConfigDesk = CodexConfigDesk(project, this)
 
     /** The search over this project's conversations - the three tabs behind the magnifier (see SearchDesk). */
     val search: SearchDesk = SearchDesk(project, this)
@@ -207,6 +226,8 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         workingDirectory = project.basePath,
         parentDisposable = this,
         accountOf = { sessionId -> conversations.accountOf(sessionId) },
+        // A message sent, an answer finished: the plugin is in use, and a usage report that is due may go.
+        onUse = { UsageReporter.getInstance().nudge() },
     )
 
     private val clients = ConcurrentHashMap<String, SessionClient>()
@@ -217,6 +238,9 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
 
     /** What each conversation is waiting to say once the turn in progress ends - see [SessionQueue]. */
     private val queued = SessionQueue()
+
+    /** Which messages each conversation has already taken, so a phone's resend is not said twice - see [ArrivedMessages]. */
+    internal val arrived = ArrivedMessages()
 
     /**
      * One lock per conversation rather than one for the hub. Numbering under a shared lock would make
@@ -256,6 +280,39 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
     /** Who is told that the list a phone draws has changed - see [onInventoryChanged]. */
     @Volatile
     private var inventoryListener: (() -> Unit)? = null
+
+    /** The tabs as they stood when the project last closed, and as they stand now - see [TabMemory]. */
+    private val memory = TabMemory(TabMemory.fileFor(project.basePath), this)
+
+    /**
+     * What each tab was last seen holding - its conversation, model, effort and mode.
+     *
+     * Asked of the conversations every time rather than kept here, EXCEPT when they no longer know: a
+     * project closing takes its conversations down before this hub, and the status those dying processes
+     * report would otherwise write a list of empty tabs over the real one a moment before the close.
+     */
+    private val remembered = ConcurrentHashMap<String, TabMemory.Tab>()
+
+    /**
+     * What is being written in each tab's input field, as the panel last sent it (see draftMemory.ts).
+     *
+     * Kept here rather than only on disk because the page is not the only thing that forgets: a reload
+     * of the page alone - the crash screen's button, an update of the plugin - used to take every draft
+     * with it, and this is where it comes back from (see CodexPanel.sendDrafts).
+     */
+    private val drafts = ConcurrentHashMap<String, JsonObject>()
+
+    /** The tab the panel has on screen - remembered, and handed back to a panel that joins (see [attach]). */
+    @Volatile
+    private var activeTab: String? = null
+
+    /**
+     * Restored tabs whose conversation has not been brought up yet. A process per conversation is several
+     * processes and hundreds of megabytes once its MCP servers are counted (see IdleSleep), and a project
+     * reopened with ten tabs must not raise ten of them before anybody has looked at one: each comes up
+     * when it is first put on screen, or when somebody writes into it.
+     */
+    private val asleepUntilSeen = ConcurrentHashMap.newKeySet<String>()
 
     init {
         // Where the CLI keeps its files for this project is a process to find out on a WSL project, and
@@ -307,6 +364,10 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
              */
             if (!replay && line.contains(INIT_MARKER)) usage.refreshContext(sessionId)
 
+            // And whether the project's own Codex settings are being read at all, and whether they ask for
+            // another sign-in than this conversation's - once per conversation (see [checkProjectSettings]).
+            if (!replay && line.contains(INIT_MARKER)) checkProjectSettings(sessionId)
+
             // The end of a turn is the only moment the taken context window has genuinely changed: we
             // ask the very process that has just finished for a fresh figure.
             if (line.contains(RESULT_MARKER)) {
@@ -328,6 +389,10 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
                 }
             }
         }
+
+        // Last, once everything the conversations report to is standing: the tabs the project had open
+        // come back before any client joins, so the first list a panel is handed is already the right one.
+        restoreTabs()
     }
 
     /**
@@ -378,6 +443,10 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         val batch = ArrayList<String>()
         batch += projectMessages()
         batch += sessionsMessage()
+        // Which tab to put on screen: the one that was there when the panel was last closed or reloaded.
+        // Said to the panel alone - a phone chooses its own conversation - and said even when there is
+        // none to name, because the panel waits for this word before reporting its own (see App).
+        if (client.isLocal) batch += activeTabMessage()
 
         // The registry's tabs, plus any conversation that has a journal without being in it. The second
         // part should never happen - a tab is opened before anything is said in it - but a feed that
@@ -388,11 +457,11 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
 
             val seen = since[sessionId] ?: 0
             val journal = journal(sessionId)
-            val entries = journal.since(seen, catchUp.maxEntries, catchUp.maxChars)
+            val tail = journal.tail(seen, catchUp.budget())
 
-            batch += restoreStarted(sessionId, from = seen, truncated = journal.truncatedFrom(seen, entries))
+            batch += restoreStarted(sessionId, from = seen, truncated = tail.truncated)
 
-            entries.forEach { entry -> batch += SessionMessages.stamp(entry.json, entry.seq, entry.at) }
+            tail.entries.forEach { entry -> batch += SessionMessages.stamp(entry.json, entry.seq, entry.at) }
 
             // The answer being printed at this very moment: it is not in the journal (see SessionStream)
             // and without it a conversation joined mid-turn looks frozen.
@@ -470,8 +539,12 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         val sessions: Set<String>? = null,
         val maxEntries: Int = Int.MAX_VALUE,
         val maxChars: Long = Long.MAX_VALUE,
+        /** How the traffic beside the conversation is thinned, if at all - see SessionJournal.Thinning. */
+        val thinning: SessionJournal.Thinning? = null,
     ) {
         fun wants(sessionId: String): Boolean = sessions?.contains(sessionId) ?: true
+
+        fun budget(): SessionJournal.Budget = SessionJournal.Budget(maxEntries, maxChars, thinning)
 
         companion object {
             val EVERYTHING = CatchUp()
@@ -480,13 +553,29 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
              * One conversation, and its end rather than its whole. Three hundred entries is a long
              * evening of work in one tab, and a megabyte is what a phone can take without the screen
              * standing empty while it arrives.
+             *
+             * Counted in the conversation's own entries, with the subagents' calls and the tasks'
+             * progress thinned on a budget of their own: counted together, a subagent at work for an hour
+             * spent the whole of it on its own steps, and the phone opened on a card's log with no
+             * conversation around it - or on nothing at all, the card itself having fallen off the front.
              */
             fun tailOf(sessionId: String): CatchUp =
-                CatchUp(sessions = setOf(sessionId), maxEntries = REMOTE_MAX_ENTRIES, maxChars = REMOTE_MAX_CHARS)
+                CatchUp(
+                    sessions = setOf(sessionId),
+                    maxEntries = REMOTE_MAX_ENTRIES,
+                    maxChars = REMOTE_MAX_CHARS,
+                    thinning = REMOTE_THINNING,
+                )
 
             const val REMOTE_MAX_ENTRIES = 300
 
             const val REMOTE_MAX_CHARS = 1024L * 1024
+
+            /**
+             * Thirty steps of each subagent is the end of its log as a card on a phone shows it; a hundred
+             * and fifty and half a megabyte together is five of them at work at once.
+             */
+            val REMOTE_THINNING = SessionJournal.Thinning(perStrand = 30, maxEntries = 150, maxChars = 512L * 1024)
         }
     }
 
@@ -671,12 +760,12 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
      * Everything a client would need to rebuild the feed comes this way. What does not: the deltas of
      * the answer being printed (see [emitLive]) and answers addressed to whoever asked (see [emitTo]).
      */
-    fun broadcast(sessionId: String, json: String) {
+    fun broadcast(sessionId: String, json: String, strand: SessionJournal.Strand? = null) {
         val trimmed = JournalTrim.trim(json)
         val at = System.currentTimeMillis()
 
         val stamped = synchronized(lock(sessionId)) {
-            val entry = journal(sessionId).append(trimmed, at)
+            val entry = journal(sessionId).append(trimmed, at, strand)
             SessionMessages.stamp(trimmed, entry.seq, entry.at)
         }
 
@@ -787,7 +876,10 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
             return
         }
 
-        broadcast(sessionId, envelope)
+        // A subagent's step or a task's progress is kept as such, so that the journal can let go of a
+        // report the next one repeats and a phone can be handed the conversation rather than the traffic
+        // beside it (see SessionJournal.Strand).
+        broadcast(sessionId, envelope, JournalStrands.of(line))
     }
 
     fun sendStatus(sessionId: String, state: String) {
@@ -806,6 +898,10 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         // out rather than before it: what a client sees is the conversation coming free and the queued
         // message starting the next turn, in that order.
         if (state != SessionSnapshot.STATUS_RUNNING) runQueued(sessionId)
+
+        // A turn is what names a new tab's conversation, and a /clear replaces it: this is the moment the
+        // remembered list learns which conversation the tab now holds.
+        rememberTabs()
     }
 
     fun sendError(sessionId: String, text: String) {
@@ -821,6 +917,61 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
                 put("message", text)
             }.toString(),
         )
+    }
+
+    /**
+     * A conversation came up on an account the repository's settings overrule - see AccountOverride.
+     *
+     * Names only, never values: what stands in that `env` block is a key, and this message is written to
+     * the panel's log, kept in a journal and replayed to a phone.
+     */
+    fun sendAccountOutranked(sessionId: String, names: List<String>, reason: String = OUTRANKED_ACCOUNT) {
+        if (names.isEmpty() && reason == OUTRANKED_ACCOUNT) return
+
+        broadcast(
+            sessionId,
+            buildJsonObject {
+                put("type", "accountOutranked")
+                put("sessionId", sessionId)
+                put("reason", reason)
+                putJsonArray("names") { names.forEach { add(it) } }
+            }.toString(),
+        )
+    }
+
+    /** The conversations whose project settings have been looked at - see [checkProjectSettings]. */
+    private val projectSettingsChecked: MutableSet<String> = ConcurrentHashMap.newKeySet()
+
+    /**
+     * The project's own Codex settings, looked at once a conversation is up - off the interface thread, a
+     * question to the shared Codex process (see CodexConfigDesk.projectLayer).
+     *
+     * Two things are said about them, in the conversation's feed, once per conversation:
+     * - the project has settings of its own (`.codex/config.toml`, hooks, exec policies) and Codex reads
+     *   none of them, because the project is not trusted. Codex's terminal asks "do you trust this folder?"
+     *   at its first start in one; the panel never did, so a project opened only here kept its settings
+     *   unread without a word. The row leads to the screen where it is trusted;
+     * - a trusted project demands another sign-in than the one this conversation runs on - a method
+     *   (`forced_login_method`) or a ChatGPT workspace. Codex obeys it, and the account then reads as
+     *   signed out in this project and signed in everywhere else, with nothing saying why.
+     */
+    private fun checkProjectSettings(sessionId: String) {
+        val key = conversations.conversationIdOf(sessionId) ?: sessionId
+        if (!projectSettingsChecked.add(key)) return
+
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val layer = runCatching { codexConfig.projectLayer() }.getOrNull() ?: return@executeOnPooledThread
+            if (layer.present && !layer.trusted) {
+                sendAccountOutranked(sessionId, layer.sets, reason = OUTRANKED_UNTRUSTED)
+                return@executeOnPooledThread
+            }
+
+            val accountId = conversations.accountOf(sessionId)
+            val storeDir = if (accountId.isEmpty()) null else CodexAccounts.getInstance().account(accountId)?.storeDir
+            val who = AccountIdentity.probeDrawer(storeDir)?.who ?: return@executeOnPooledThread
+            val demands = CodexConfig.demands(layer, who.method, who.orgUuid)
+            if (demands.isNotEmpty()) sendAccountOutranked(sessionId, demands, reason = OUTRANKED_ACCOUNT)
+        }
     }
 
     /**
@@ -902,8 +1053,13 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
     fun closeSession(id: String) {
         conversations.close(id)
         stats.noteSessionClosed(id)
+        // A tab closed is a tab forgotten: its draft goes with it, and the next start does not bring it back.
+        remembered.remove(id)
+        drafts.remove(id)
+        asleepUntilSeen.remove(id)
         // What this conversation was waiting to say goes with it: there is nothing left to say it to.
         queued.clear(id)
+        arrived.forget(id)
         journals.remove(id)
         snapshots.remove(id)
         streams.remove(id)
@@ -921,6 +1077,35 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         if (tabs.rename(id, title, SessionSnapshot.TITLE_HEURISTIC)) broadcastSessions()
     }
 
+    /**
+     * The name the person typed into the tab. It outranks every other (see SessionRegistry.rename) and
+     * goes into the conversation's transcript as well (see CodexSession.rename) - the history list, the
+     * search and `claude --resume` in a terminal all read names from there, and a name kept only on the
+     * strip would be gone the moment the tab is closed.
+     *
+     * A tab with no conversation behind it yet keeps the name here alone; its conversation takes it with
+     * the first message (see CodexSession.ownTitle).
+     */
+    fun nameSession(id: String, title: String) {
+        val name = SessionTitle.own(title) ?: return
+        if (!tabs.rename(id, name, SessionSnapshot.TITLE_USER)) return
+
+        conversations.rename(id, name)
+        broadcastSessions()
+    }
+
+    /**
+     * The CLI renamed the conversation itself - a `/rename` that reached it, which today means one typed
+     * on a phone (the panel runs its own, see panelCommands in catalog.ts). It is the person's name as
+     * surely as one typed into the tab, and the tab takes it. As the CLI wrote it rather than through
+     * [SessionTitle.own]: cut here, the shorter name would be handed back to the transcript over the whole
+     * one with the next process (see CodexSession.nameAfterPerson).
+     */
+    private fun adoptOwnTitle(id: String, title: String) {
+        val name = title.trim().takeIf { it.isNotEmpty() } ?: return
+        if (tabs.rename(id, name, SessionSnapshot.TITLE_USER)) broadcastSessions()
+    }
+
     fun reorderGroups(groupId: String, beforeGroupId: String?) {
         if (tabs.moveGroup(groupId, beforeGroupId)) broadcastSessions()
     }
@@ -935,14 +1120,212 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         // The tabs themselves are half of what a phone's list shows: one opened, closed or renamed
         // changes it as surely as a status does.
         inventoryChanged()
+        rememberTabs()
+    }
+
+    // --- Tabs that outlive the IDE -------------------------------------------------
+
+    /**
+     * Put the tabs the project had open back on the strip - see [TabMemory].
+     *
+     * Each comes back the way a conversation picked from the history comes back: its transcript played
+     * into the feed, its process left down until it is needed. Two things differ, both on purpose. The
+     * tab's own model, effort and mode are put back as they stood rather than re-read from the transcript
+     * - the chip is what the person last chose, and the transcript only knows what last answered. And no
+     * process is raised at all until the tab is looked at (see [asleepUntilSeen]).
+     *
+     * Nothing here counts as a statistic: a project opened again is not a conversation reopened from the
+     * history, and ten tabs coming back are not ten tabs opened today.
+     */
+    private fun restoreTabs() {
+        if (!CodexPreferences.restoreTabs) return
+
+        val saved = memory.load() ?: return
+        val state = TabMemory.restorable(saved)
+        if (state.tabs.isEmpty()) return
+
+        for (tab in state.tabs) {
+            if (tab.id == CodexSessions.MAIN_SESSION) {
+                if (tab.titleSource != SessionSnapshot.TITLE_DEFAULT) tabs.rename(tab.id, tab.title, tab.titleSource)
+            } else {
+                tabs.open(id = tab.id, parentId = tab.parentId, title = tab.title, titleSource = tab.titleSource)
+            }
+
+            remembered[tab.id] = tab.copy(draft = null)
+            tab.draft?.let { drafts[tab.id] = it }
+
+            // Written down before the conversation is made, which is when it is read (see
+            // CodexSessions.newSession) - and read again by the first message of a tab that holds only a
+            // draft, which has no conversation to make yet.
+            val launch = SessionLaunch(model = tab.model, effort = tab.effort, mode = tab.mode)
+            if (!launch.isEmpty) conversations.rememberLaunch(tab.id, launch)
+
+            val conversation = tab.conversationId
+            when {
+                conversation != null -> {
+                    conversations.resume(tab.id, conversation)
+                    replayTranscript(
+                        tab.id,
+                        conversation,
+                        adoptTranscriptModel = tab.model.isEmpty(),
+                        wakeAfter = false,
+                        whenMissing = { lostTranscript(tab.id) },
+                    )
+                }
+
+                // A fork that had not said anything yet, kept for its draft: it is still a fork, and its
+                // first message still forks its parent's conversation rather than starting a blank one.
+                tab.parentId != null -> conversations.branchFrom(tab.parentId, tab.id)
+            }
+        }
+
+        tabs.arrange(state.tabs.map { it.id })
+        activeTab = state.active
+        thisLogger().info("Restored ${state.tabs.size} tabs of ${saved.tabs.size} remembered")
+        broadcastSessions()
+    }
+
+    /**
+     * A restored tab's conversation is not on disk any more - deleted by hand, or cleaned up by the CLI.
+     *
+     * Asked here, on the thread that reads the transcript anyway, rather than while the tabs are put back
+     * (see TabMemory.restorable). A tab that has nothing else goes; one with a draft or a name the person
+     * gave it stays for them, as the empty tab it now is - without the conversation, because a first
+     * message into it would ask the CLI to continue a transcript that is gone, and the CLI refuses to
+     * start at all.
+     */
+    private fun lostTranscript(sessionId: String) {
+        val tab = remembered[sessionId] ?: return
+        thisLogger().info("A restored tab's conversation is gone from disk")
+
+        val named = tabs.titleSource(sessionId) == SessionSnapshot.TITLE_USER
+
+        // The opening tab is never closed - a message naming no conversation belongs to it (see
+        // CodexSessions.MAIN_SESSION) - so without a draft it is emptied instead, name and all.
+        if (!drafts.containsKey(sessionId) && !named && sessionId != CodexSessions.MAIN_SESSION) {
+            closeSession(sessionId)
+            return
+        }
+
+        remembered[sessionId] = tab.copy(conversationId = null)
+        conversations.close(sessionId)
+        val launch = SessionLaunch(model = tab.model, effort = tab.effort, mode = tab.mode)
+        if (!launch.isEmpty) conversations.rememberLaunch(sessionId, launch)
+        if (!drafts.containsKey(sessionId) && !named) tabs.resetTitle(sessionId)
+        resetJournal(sessionId)
+        broadcastSessions()
+    }
+
+    /**
+     * The tabs as they stand now, handed to the memory. Called on every change that could matter - a tab
+     * opened, closed, renamed or moved, a turn over (that is when a conversation is named), a model,
+     * effort or mode applied, a draft, the tab on screen - and cheap when nothing changed, because the
+     * memory writes only a list it has not written yet.
+     */
+    private fun rememberTabs() {
+        if (!CodexPreferences.restoreTabs) return
+
+        // One at a time: a list read on one thread and handed over after a newer one read on another
+        // would be written last, and stand on disk until the next change.
+        synchronized(memory) { rememberTabsNow() }
+    }
+
+    private fun rememberTabsNow() {
+        val list = tabs.tabs().map { tab ->
+            val before = remembered[tab.id]
+            TabMemory.Tab(
+                id = tab.id,
+                parentId = tab.parentId,
+                title = tab.title,
+                titleSource = tab.titleSource,
+                // Only a thread that has said something: an empty tab's thread has no file to come back to.
+                conversationId = conversations.savedConversationIdOf(tab.id, otherwise = before?.conversationId),
+                model = conversations.model(tab.id) ?: before?.model.orEmpty(),
+                effort = conversations.effort(tab.id) ?: before?.effort.orEmpty(),
+                mode = conversations.permissionMode(tab.id) ?: before?.mode.orEmpty(),
+                draft = drafts[tab.id],
+            ).also { remembered[tab.id] = it.copy(draft = null) }
+        }
+
+        memory.remember(TabMemory.State(active = activeTab?.takeIf { tabs.contains(it) }, tabs = list))
+    }
+
+    /**
+     * The panel's draft for one tab - what is in its input field, attachments and quotes included. Null
+     * or empty means the field is empty: the message went, or the words were deleted.
+     */
+    fun saveDraft(sessionId: String, draft: JsonObject?) {
+        if (!tabs.contains(sessionId)) return
+
+        if (draft == null || !TabMemory.hasDraft(draft)) drafts.remove(sessionId) else drafts[sessionId] = draft
+        rememberTabs()
+    }
+
+    /** The drafts held for the panel, to hand to one that has just loaded (see CodexPanel.sendDrafts). */
+    fun heldDrafts(): Map<String, JsonObject> = drafts.filterKeys { tabs.contains(it) }
+
+    /**
+     * The panel put this tab on screen. Remembered, so that it is the tab on screen after a restart, and
+     * the moment a restored tab's conversation comes up (see [asleepUntilSeen]).
+     */
+    fun showTab(sessionId: String) {
+        if (!tabs.contains(sessionId)) return
+
+        activeTab = sessionId
+        wakeRestored(sessionId)
+        rememberTabs()
+    }
+
+    /**
+     * A restored tab's transcript has been played in. Its process waits for a look - unless the tab is
+     * already the one on screen, which is exactly what the panel shows first after a restart.
+     */
+    private fun settleRestored(sessionId: String) {
+        asleepUntilSeen.add(sessionId)
+        if (activeTab == sessionId) wakeRestored(sessionId)
+    }
+
+    /**
+     * Brought up for the same reason a conversation opened from the history is brought up at once: the
+     * context bar has no figure until the process names it, and the transcript does not hold one.
+     */
+    private fun wakeRestored(sessionId: String) {
+        if (!asleepUntilSeen.remove(sessionId)) return
+
+        conversations.wake(sessionId)
+        usage.refreshContext(sessionId)
+    }
+
+    /**
+     * The setting was switched. Off, what is on disk goes (see TabMemory.forget); on, the tabs as they
+     * stand now are written at once rather than at the next change.
+     */
+    fun restoreTabsChanged() {
+        if (CodexPreferences.restoreTabs) rememberTabs() else memory.forget()
+    }
+
+    private fun activeTabMessage(): String = buildJsonObject {
+        put("type", "activeTab")
+        put("sessionId", activeTab?.takeIf { tabs.contains(it) }.orEmpty())
+    }.toString()
+
+    /**
+     * What a new tab starts on here has changed - see [announceNewTabDefaults], which tells every hub.
+     *
+     * Both readers at once: the panel draws the chip over an untouched tab by it, and a phone names it
+     * in the request that opens a conversation there (see StartingChoice).
+     */
+    fun newTabDefaultsChanged() {
+        catalog.sendNewTabDefaults()
+        inventoryChanged()
     }
 
     /**
      * The list a phone draws is out of date - see [onInventoryChanged].
      *
      * Not private, because a phone's inventory carries more than the tabs: it also carries what a new
-     * conversation there starts with, and that is changed from a screen the hub knows nothing about (see
-     * announceNewTabDefaults in SessionCommands).
+     * conversation there starts with, and that is changed from places the hub knows nothing about (see
+     * [newTabDefaultsChanged]).
      */
     fun inventoryChanged() {
         runCatching { inventoryListener?.invoke() }
@@ -1005,20 +1388,64 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         echo: JsonObject? = null,
         /** The message came from a paired phone rather than from the desk - the statistics tell the two apart. */
         remote: Boolean = false,
+        /** Carry what the editor beside the panel shows - see [editorSeen]. */
+        withEditor: Boolean = false,
     ) {
         if (text.isBlank()) return
 
+        val seen = editorSeen(withEditor, text)
         val running = snapshot(sessionId).get().status == SessionSnapshot.STATUS_RUNNING
         if (PromptDelivery.waitsForTheTurn(text, running)) {
             // An identifier of our own: the message came as a send rather than as a queued one, so
             // nobody has named it. What it does not get is the "3 refs" beside the row - that is worked
             // out of the chips in the field, and a second answer to what counts as an attachment would
             // drift from the first (see SessionQueue.Entry).
-            queuePrompt(sessionId, UUID.randomUUID().toString(), text, images = images, echo = echo, remote = remote)
+            enqueue(
+                sessionId,
+                SessionQueue.Entry(
+                    id = UUID.randomUUID().toString(),
+                    text = text,
+                    attach = "",
+                    images = images,
+                    echo = echoWith(echo, seen),
+                    remote = remote,
+                    context = seen?.let(EditorContext::reminder),
+                ),
+                before = null,
+            )
             return
         }
 
-        deliverPrompt(sessionId, text, images, echo, remote)
+        deliverPrompt(sessionId, text, images, echoWith(echo, seen), remote, seen?.let(EditorContext::reminder))
+    }
+
+    /**
+     * What the editor beside the panel shows, when the message asked for it and the setting allows it - the
+     * open file and the lines selected in it (see EditorContext). Read the moment the message arrives, which
+     * is the moment Send was pressed: what the person was looking at while they wrote.
+     *
+     * The setting is asked here as well as by the panel, which already leaves the flag off when it is off:
+     * a panel page a version behind would not know the setting exists.
+     *
+     * Never with a slash command. It is not a question about code but an order to the conversation, the
+     * terminal attaches nothing to one either, and the CLI tells a command by the text it was sent - a
+     * second block beside "/compact" is not something to find out the hard way that it reads past.
+     */
+    private fun editorSeen(withEditor: Boolean, text: String): EditorContext.Snapshot? =
+        if (withEditor && CodexPreferences.shareEditor && !PromptDelivery.isCommand(text)) {
+            EditorContext.getInstance(project).now()
+        } else {
+            null
+        }
+
+    /**
+     * The echo, with what the editor showed beside the rest - the line under the message in the feed, for
+     * every window, a reload of this one included. Left alone when there is no echo at all: a message nobody
+     * drew a card for is not given one made of nothing but a file name.
+     */
+    private fun echoWith(echo: JsonObject?, seen: EditorContext.Snapshot?): JsonObject? {
+        if (echo == null || seen == null) return echo
+        return JsonObject(echo + ("editor" to EditorContext.descriptor(seen)))
     }
 
     /**
@@ -1034,6 +1461,8 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         images: List<ImageAttachment>,
         echo: JsonObject?,
         remote: Boolean,
+        /** What the editor showed, as the agent reads it - a block of its own beside the text (see CodexSession.userMessage). */
+        context: String?,
     ) {
         stats.notePrompt(sessionId, text, images = images.size, remote = remote)
 
@@ -1070,7 +1499,7 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         // panel, a phone, a queued message and an answer to a question all arrive here, so saving in
         // this one place covers the lot.
         UnsavedEdits.flush(project)
-        conversations.prompt(sessionId, text, images)
+        conversations.prompt(sessionId, text, images, context)
     }
 
     /**
@@ -1092,16 +1521,71 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         images: List<ImageAttachment> = emptyList(),
         echo: JsonObject? = null,
         remote: Boolean = false,
+        /** Where a message taken out for editing goes back to - see [SessionQueue.add]. */
+        before: String? = null,
+        /** Carry what the editor shows, taken now rather than when the message fires - see SessionQueue.Entry.context. */
+        withEditor: Boolean = false,
     ) {
         if (text.isBlank()) return
 
-        sendQueue(sessionId, queued.add(sessionId, SessionQueue.Entry(id, text, attach, images, echo, remote)))
+        val seen = editorSeen(withEditor, text)
+        enqueue(
+            sessionId,
+            SessionQueue.Entry(
+                id = id,
+                text = text,
+                attach = attach,
+                images = images,
+                echo = echoWith(echo, seen),
+                remote = remote,
+                context = seen?.let(EditorContext::reminder),
+            ),
+            before,
+        )
+    }
+
+    private fun enqueue(sessionId: String, entry: SessionQueue.Entry, before: String?) {
+        sendQueue(sessionId, queued.add(sessionId, entry, before))
         runQueued(sessionId)
     }
 
     /** The cross on a queued message: it is not going to be said after all. */
     fun unqueuePrompt(sessionId: String, id: String) {
         sendQueue(sessionId, queued.remove(sessionId, id))
+    }
+
+    /**
+     * The pencil on a queued message: it goes back into the field of whoever pressed it, to be corrected
+     * and queued again.
+     *
+     * The answer carries the message as it was typed - the chips, the quotes and the bytes of a pasted
+     * image inside them, the same pieces an echo is drawn from - because the field takes a message back
+     * in pieces rather than as the text the agent would have read (see feed/reuse.ts). Only to the asker:
+     * it is going into one window's field, and another window's field has nothing to do with it. Everyone
+     * sees the list without it.
+     *
+     * Nothing is answered when the message has already gone: it fired while the press was on its way, the
+     * list every window is sent says so, and its card is in the feed by now.
+     */
+    fun takeQueued(clientId: String, sessionId: String, id: String, asker: String = clientId) {
+        val taken = queued.takeOut(sessionId, id) ?: return
+        sendQueue(sessionId, taken.rest)
+
+        emitTo(
+            clientId,
+            buildJsonObject {
+                put("type", "queuedTaken")
+                put("sessionId", sessionId)
+                put("id", id)
+                taken.before?.let { put("before", it) }
+                put("text", taken.entry.text)
+                // Not what the editor showed when it was queued: queued again, it is sent with what the
+                // editor shows then, like any other message leaving the field.
+                taken.entry.echo?.get("tokens")?.let { put("tokens", it) }
+                taken.entry.echo?.get("quotes")?.let { put("quotes", it) }
+            }.toString(),
+            asker,
+        )
     }
 
     /** The queue dragged into another order - see [SessionQueue.reorder]. */
@@ -1127,7 +1611,7 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
 
         val (entry, rest) = queued.take(sessionId) ?: return
         sendQueue(sessionId, rest)
-        deliverPrompt(sessionId, entry.text, entry.images, entry.echo, entry.remote)
+        deliverPrompt(sessionId, entry.text, entry.images, entry.echo, entry.remote, entry.context)
     }
 
     private fun sendQueue(sessionId: String, items: List<SessionQueue.Entry>) {
@@ -1184,6 +1668,49 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
     }
 
     /**
+     * A question beside the conversation, asked from one client - the panel's `/btw` (see SideQuestion).
+     *
+     * Answered to whoever asked and to nobody else, like a shell command's output (see
+     * ProjectCatalog.runShellCommand): the thread lives in the screen it was asked from, the agent never
+     * sees it, and a second window or a phone watching the same tab has no question there to put an answer
+     * under. Behind the relay [asker] is the one phone among the paired ones (see emitTo).
+     */
+    fun askAside(
+        clientId: String,
+        asker: String,
+        sessionId: String,
+        id: String,
+        question: String,
+        history: List<SideQuestion.Exchange>,
+    ) {
+        // Without a name there is nobody to answer: the card finds its question by exactly that.
+        if (id.isBlank()) return
+
+        val reply = { json: String -> runCatching { emitTo(clientId, json, asker) } }
+        val asked = question.trim().take(SideQuestion.TEXT_LIMIT)
+        // An empty one still gets an answer rather than silence: the card is already standing on screen as
+        // "thinking", and nothing but an answer takes that away.
+        if (asked.isEmpty()) {
+            reply(SideQuestion.answerJson(sessionId, id, SideQuestion.Answer.Empty(null)))
+            return
+        }
+
+        conversations.askAside(
+            sessionId,
+            id,
+            asked,
+            history,
+            onProgress = { progress -> reply(SideQuestion.progressJson(sessionId, id, progress)) },
+            onEnd = { answer -> reply(SideQuestion.answerJson(sessionId, id, answer)) },
+        )
+    }
+
+    fun cancelAside(sessionId: String, id: String) {
+        if (id.isBlank()) return
+        conversations.cancelAside(sessionId, id)
+    }
+
+    /**
      * The mode of one conversation, and of no other: neither the MODE selector nor Shift+Tab nor an
      * approved plan touches what new tabs start in. That is chosen separately.
      *
@@ -1204,6 +1731,7 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
                     if (change.error.isNotEmpty()) put("error", change.error)
                 }.toString(),
             )
+            rememberTabs()
         }
     }
 
@@ -1242,6 +1770,7 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
             )
 
             if (change.applied) usage.refreshContext(sessionId)
+            rememberTabs()
         }
     }
 
@@ -1258,6 +1787,7 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
     fun changeEffort(sessionId: String, effort: String, remember: Boolean = true) {
         conversations.setEffort(sessionId, effort, remember)
         sendEffort(sessionId, effort)
+        rememberTabs()
     }
 
     /**
@@ -1407,7 +1937,34 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         resetJournal(sessionId)
         broadcastSessions()
 
+        replayTranscript(sessionId, conversationId, adoptTranscriptModel = true, wakeAfter = true)
+    }
+
+    /**
+     * A conversation's transcript played into its tab's feed - the tail of it, page by page above that
+     * on request - and the process brought up after it, or left for later.
+     *
+     * Shared by the two ways a past conversation comes into a tab: picked from the history, and brought
+     * back with the tabs of a project opened again (see [restoreTabs]). They differ in two answers only.
+     * Whether the transcript's model is taken: from the history yes, since nothing else names it; from
+     * the remembered tabs no, since the tab's own chip was remembered with it. And whether the process
+     * comes up at once: from the history yes, it is the tab on screen and its window has to be measured;
+     * a restored tab waits until somebody looks at it (see [settleRestored]).
+     */
+    private fun replayTranscript(
+        sessionId: String,
+        conversationId: String,
+        adoptTranscriptModel: Boolean,
+        wakeAfter: Boolean,
+        /** What to do instead when the transcript is not on disk at all - see [lostTranscript]. */
+        whenMissing: (() -> Unit)? = null,
+    ) {
         ApplicationManager.getApplication().executeOnPooledThread {
+            if (whenMissing != null && CodexHistory.transcriptFile(project.basePath, conversationId) == null) {
+                whenMissing()
+                return@executeOnPooledThread
+            }
+
             // The end of the conversation rather than the whole of it: what comes before is asked for by
             // whoever is looking, page by page (see CodexHistory.opening for why the whole of it never
             // arrived at all on Windows).
@@ -1423,7 +1980,7 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
              * resumed without a model flag, carries on at the session's model - this does the same and
              * tells the panel which one it is, before the replay names it.
              */
-            if (page.model.isNotEmpty()) {
+            if (adoptTranscriptModel && page.model.isNotEmpty()) {
                 // What was adopted rather than what was written in the transcript: the account paying
                 // today may have no access to that model, and then the conversation comes up on another
                 // one (see CodexSessions.adoptModel). Saying the transcript's would leave the chip
@@ -1466,8 +2023,12 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
             // without waiting for the first message. The replay does not know this figure at all: the
             // transcript holds neither the system prompt with its tools nor the model's window size, and
             // a conversation on a "1M" model looked overflowing by it from the very first second.
-            conversations.wake(sessionId)
-            usage.refreshContext(sessionId)
+            if (wakeAfter) {
+                conversations.wake(sessionId)
+                usage.refreshContext(sessionId)
+            } else {
+                settleRestored(sessionId)
+            }
         }
     }
 
@@ -1751,8 +2312,16 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
      * and puts a usage question to every account, which is right when the change was made here and
      * pointless when it was read out of a file: nothing about this machine's sign-in has moved, and the
      * cost would be a process per account per project per open IDE on every press of Select next door.
+     *
+     * And what a new tab starts on, which that file holds half of: the account chosen and what each
+     * account was last left on (see StartingChoice). A pick made in the other IDE is exactly what the
+     * sandbox caught - the chip over an empty tab named this IDE's last pick while the launch took the
+     * account's.
      */
-    fun accountsChangedElsewhere() = accounts.sendList(withHealth = false)
+    fun accountsChangedElsewhere() {
+        accounts.sendList(withHealth = false)
+        newTabDefaultsChanged()
+    }
 
     override fun dispose() {
         clients.clear()
@@ -1776,6 +2345,19 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
          * opened the panel in would start its schedules, its warm-up and its bridge for a conversation
          * that does not exist.
          */
+        /**
+         * What a new tab starts on has changed, told to every window of every project - see
+         * [newTabDefaultsChanged].
+         *
+         * To all of them rather than to whoever asked, exactly like the colour mode and the hand-added
+         * models: every input to that answer belongs to the machine (the pins, the last pick, the account
+         * chosen and what it remembers), and a second window still drawing an empty tab with yesterday's
+         * model is a window showing something that is no longer true. Called from wherever one of those
+         * inputs is written, and cheap enough to be called when it turns out nothing moved: one small
+         * message per window.
+         */
+        fun announceNewTabDefaults() = everyHub { it.newTabDefaultsChanged() }
+
         fun everyHub(tell: (CodexSessionHub) -> Unit) {
             for (project in ProjectManager.getInstance().openProjects) {
                 if (project.isDisposed) continue
@@ -1792,6 +2374,10 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
 
         /** A conversation's process has come up with its transcript loaded - see the context above. */
         private const val INIT_MARKER = "\"subtype\":\"init\""
+
+        /** Why a conversation's feed says the project's settings stand in its way - see [sendAccountOutranked]. */
+        const val OUTRANKED_ACCOUNT = "account"
+        const val OUTRANKED_UNTRUSTED = "untrusted"
 
         private const val TYPE_FIELD = "\"type\":\""
 
@@ -1816,6 +2402,10 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
             // red its owner had damped, and stayed there until somebody at the desk moved it again.
             "calmColors",
             "init",
+            // Right after `init`, which carries the same setting as it stood when the hub warmed up: the
+            // cached `init` is what a joining window is given, so without the later fact a panel reopened
+            // after the switch was flipped would come back with the indicator its owner had hidden.
+            "indicators",
             "auth",
             // Right after the sign-in it qualifies: a client that joins without it cannot draw the menu
             // row, and a fact not listed here never reaches one at all. Deliberately NOT in

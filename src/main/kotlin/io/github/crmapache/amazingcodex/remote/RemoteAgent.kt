@@ -15,9 +15,12 @@ import com.intellij.util.concurrency.AppExecutorUtil
 import io.github.crmapache.amazingcodex.codex.CodexHistory
 import io.github.crmapache.amazingcodex.codex.CodexPreferences
 import io.github.crmapache.amazingcodex.codex.CodexSessionHub
+import io.github.crmapache.amazingcodex.codex.JournalTrim
 import io.github.crmapache.amazingcodex.codex.SessionClient
 import io.github.crmapache.amazingcodex.codex.SessionLaunch
 import io.github.crmapache.amazingcodex.codex.SessionSnapshot
+import io.github.crmapache.amazingcodex.codex.StartingChoice
+import io.github.crmapache.amazingcodex.feedback.DiagnosticsLog
 import io.github.crmapache.amazingcodex.stats.StatsLedger
 import io.github.crmapache.amazingcodex.net.IdeHttp
 import java.net.http.HttpClient
@@ -96,6 +99,9 @@ internal class RemoteAgent : Disposable {
      * has open: a budget handed out again per window is not a budget.
      */
     private val volume = RemoteLimits()
+
+    /** Messages too big for one frame, half-way through arriving - see [part]. */
+    private val parts = RemoteParts()
 
     /** When a frame from an address this agent does not know was last written down - see [mayLog]. */
     private val strangers = ConcurrentHashMap<String, Long>()
@@ -236,9 +242,7 @@ internal class RemoteAgent : Disposable {
         CodexPreferences.remoteEnabled || System.getProperty(RELAY_PROPERTY).orEmpty().isNotEmpty()
 
     fun relayUrl(): String =
-        System.getProperty(RELAY_PROPERTY).orEmpty()
-            .ifEmpty { CodexPreferences.remoteRelayUrl }
-            .ifEmpty { DEFAULT_RELAY }
+        chooseRelay(System.getProperty(RELAY_PROPERTY).orEmpty(), CodexPreferences.remoteRelayUrl)
 
     /**
      * Raise the connection if it is wanted and not already up.
@@ -338,10 +342,18 @@ internal class RemoteAgent : Disposable {
                     // "when we last heard from it" would be a note anybody could write (see [lastHeard]).
                     lastHeard[deviceId] = System.currentTimeMillis()
 
+                    // Ahead of handling it: the first word on new keys is the inventory, and the greeting
+                    // that answers it has to find the memory already empty.
+                    if (opened.first) startedAgain(deviceId)
+
                     // Weight as well as count. The rate limit further in answers "how often"; a device
                     // sending few enormous frames is the other half of the same question.
                     if (!volume.allowBytes(deviceId, opened.bytes.size)) {
                         thisLogger().info("A device is sending more than its share - dropped")
+                        DiagnosticsLog.note(
+                            DiagnosticsLog.PHONE,
+                            "a frame of ${opened.bytes.size / 1024} KB was over the allowance and dropped",
+                        )
                         return
                     }
 
@@ -399,6 +411,7 @@ internal class RemoteAgent : Disposable {
         when (payload["k"]?.jsonPrimitive?.contentOrNull) {
             "subscribe" -> subscribe(address, payload)
             "cmd" -> command(address, payload)
+            "part" -> part(address, deviceId, payload)
             "inventory" -> sendInventory(address)
             "openProject" -> openProject(address, payload)
             // Read off that machine's disk without opening anything - see [recentHistory]. Rate limited
@@ -764,6 +777,7 @@ internal class RemoteAgent : Disposable {
         handshakes.remove(deviceId)
         resyncAsked.remove(deviceId)
         volume.forget(deviceId)
+        parts.forget(deviceId)
         outbox.forget(deviceId)
         countWatchers()
         announceRemoteState()
@@ -859,6 +873,29 @@ internal class RemoteAgent : Disposable {
         link?.flush(::resyncFrame)
     }
 
+    /**
+     * Nothing this device was sent can be counted as received any more: forget all of it, in every project.
+     *
+     * The facts a device is told without asking travel only when they CHANGE (see RelayClient.newFacts), and
+     * the memory of what it was told outlives whatever happened at its end. Three things there empty the
+     * screen while that memory stays full, and each is the ordinary day of a phone rather than a failure:
+     *
+     * - The page loads again. iOS throws a page away behind the person's back, and the reload comes back
+     *   well inside the [AWAKE_MS] in which the address still counts as on the line - so nothing was pruned,
+     *   and the greeting that answered its first knock found every fact "already sent".
+     * - The line is dialled again after a sleep. Every connection runs on keys of its own, and what was
+     *   sealed in between - or held by the relay while the socket was down - is sealed to keys the phone
+     *   has let go.
+     * - Its queue out collapsed (see [resyncFrame]), which throws those frames away on purpose.
+     *
+     * The price was the project card: a scenario run going for an hour showed on it or not depending on
+     * when the phone had last been reloaded, because its summary only changes when a card does. Forgetting
+     * costs a few hundred bytes a project, said once more.
+     */
+    private fun startedAgain(address: String) {
+        for (attached in projects.values) attached.client.forgetFacts(address)
+    }
+
     private fun subscribe(device: ByteArray, payload: JsonObject) {
         val projectKey = payload["pj"]?.jsonPrimitive?.contentOrNull.orEmpty()
         val sessionId = payload["s"]?.jsonPrimitive?.contentOrNull.orEmpty()
@@ -872,7 +909,7 @@ internal class RemoteAgent : Disposable {
 
         // The page that said this has nothing yet, whatever its predecessor under the same address was
         // sent (see RelayClient.forgetFacts).
-        for (attached in projects.values) attached.client.forgetFacts(address)
+        startedAgain(address)
         // And with that memory gone, the overview facts of every OTHER project have to be said again -
         // they are not sent by the delivery below, which is about this project alone, and nothing else
         // would say them until one of them next changed.
@@ -918,11 +955,46 @@ internal class RemoteAgent : Disposable {
     private fun command(device: ByteArray, payload: JsonObject) {
         val projectKey = payload["pj"]?.jsonPrimitive?.contentOrNull.orEmpty()
         val message = payload["b"] as? JsonObject ?: return
-        val attachment = projects[projectKey] ?: return
+        val attachment = projects[projectKey] ?: run {
+            // A phone holding a list from before a window closed. Silent until now, and the one way a
+            // message could vanish with nothing anywhere saying where.
+            DiagnosticsLog.note(DiagnosticsLog.PHONE, "a request named a project this IDE does not have open - dropped")
+            return
+        }
 
         // Named as the device rather than as this client: how fast anyone may ask is a question about
         // one phone, and every phone paired with this IDE arrives through the same client.
         attachment.hub.commands.handle(attachment.client.id, message, asker = Frame.encodeAddress(device))
+    }
+
+    /**
+     * One slice of a message too big for a frame - a phone's photos, almost always (see RemoteParts).
+     *
+     * Put together, it goes through [command] exactly as a message that arrived whole does, list and rate
+     * limits included. Only a message may arrive this way: everything else a phone says fits in a frame
+     * many times over.
+     */
+    private fun part(address: ByteArray, deviceId: String, payload: JsonObject) {
+        when (val outcome = parts.take(deviceId, payload)) {
+            RemoteParts.Outcome.Waiting -> Unit
+
+            is RemoteParts.Outcome.Refused -> {
+                thisLogger().info("A part of a message was refused: ${outcome.why}")
+                DiagnosticsLog.note(DiagnosticsLog.PHONE, "a part of a message was refused: ${outcome.why}")
+            }
+
+            is RemoteParts.Outcome.Whole -> {
+                val whole = runCatching { Json.parseToJsonElement(outcome.text).jsonObject }.getOrNull()
+                if (whole == null || !RemoteParts.mayArriveInParts(whole)) {
+                    thisLogger().info("A message put together from parts was not one that may arrive that way")
+                    DiagnosticsLog.note(DiagnosticsLog.PHONE, "turned away something other than a message sent in parts")
+                    return
+                }
+
+                DiagnosticsLog.note(DiagnosticsLog.PHONE, "a message arrived in parts (${outcome.text.length / 1024} KB)")
+                command(address, whole)
+            }
+        }
     }
 
     /**
@@ -986,10 +1058,7 @@ internal class RemoteAgent : Disposable {
                             put("title", entry.title)
                             put("updatedAt", entry.updatedAt)
                             put("messages", entry.messages)
-                            put(
-                                "titleSource",
-                                if (entry.named) SessionSnapshot.TITLE_LLM else SessionSnapshot.TITLE_HEURISTIC,
-                            )
+                            put("titleSource", entry.titleSource)
                         }
                     }
                 }
@@ -1041,11 +1110,7 @@ internal class RemoteAgent : Disposable {
         val launch = payload["launch"] as? JsonObject
         // Empty means "start a fresh one" - the request this used to be, and still the usual one.
         val conversationId = payload["c"]?.jsonPrimitive?.contentOrNull.orEmpty()
-        val titleSource = if (payload["titleSource"]?.jsonPrimitive?.contentOrNull == SessionSnapshot.TITLE_LLM) {
-            SessionSnapshot.TITLE_LLM
-        } else {
-            SessionSnapshot.TITLE_HEURISTIC
-        }
+        val titleSource = SessionSnapshot.titleSourceOf(payload["titleSource"]?.jsonPrimitive?.contentOrNull)
 
         // Off the frame-reading thread: opening a project loads a whole IDE window, and the socket has
         // frames to carry in the meantime.
@@ -1258,6 +1323,9 @@ internal class RemoteAgent : Disposable {
                 // the phone's scenarios screen asks for when a closed repository is picked for a shelf.
                 // Older machines answer that request with a refusal, so the row is greyed out instead.
                 add(CAP_OPEN_BARE)
+                // A message too big for one frame may come in several (see RemoteParts). An older machine
+                // knows nothing of parts, and a phone talking to one still squeezes its photos into a frame.
+                add(CAP_PARTS)
             }
             // The catalogue of models, so a conversation started from a phone can be started on a
             // chosen one. It belongs to the machine rather than to a project - it is what this
@@ -1270,10 +1338,10 @@ internal class RemoteAgent : Disposable {
             putJsonObject("prefs") {
                 // What a new tab genuinely starts on rather than what was last picked in one: a phone
                 // opening a conversation names the model in the request itself, and a request naming
-                // the last pick would walk straight past a model pinned at the desk (see
-                // CodexPreferences.startingModel).
-                put("model", CodexPreferences.startingModel())
-                put("effort", CodexPreferences.startingEffort())
+                // the last pick would walk straight past a model pinned at the desk, or past the one the
+                // chosen account was last left on (see StartingChoice).
+                put("model", StartingChoice.model())
+                put("effort", StartingChoice.effort())
                 put("mode", CodexPreferences.mode)
             }
             putJsonArray("projects") {
@@ -1472,8 +1540,14 @@ internal class RemoteAgent : Disposable {
      *
      * Sealed like anything else: a device whose session keys are not open gets nothing here - it has a
      * handshake to finish first, and that ends in a fresh subscription anyway.
+     *
+     * Asked for exactly when that queue collapsed, so this is also where the memory of what the device was
+     * sent is let go (see [startedAgain]): the facts among the frames thrown away were counted as sent, and
+     * the knock the device answers this marker with would otherwise be greeted with none of them.
      */
     private fun resyncFrame(deviceId: String): ByteArray? {
+        startedAgain(deviceId)
+
         val address = runCatching { Frame.decodeAddress(deviceId) }.getOrNull() ?: return null
 
         return sessions.seal(
@@ -1727,17 +1801,38 @@ internal class RemoteAgent : Disposable {
             val device = runCatching { Frame.decodeAddress(deviceId) }.getOrNull() ?: return
 
             for (message in messages) {
-                val sealed = sessions.seal(
-                    deviceId,
-                    to = device,
-                    from = state.address(),
-                    body = """{"p":$PROTOCOL_VERSION,"k":"event","pj":"$projectKey","b":$message}"""
-                        .toByteArray(StandardCharsets.UTF_8),
-                ) ?: continue
+                val body = fitted(message) ?: continue
+                val sealed = sessions.seal(deviceId, to = device, from = state.address(), body = body) ?: continue
 
                 outbox.offer(deviceId, sealed)
             }
         }
+
+        /**
+         * One message as the body of a frame, shortened if it would not fit one.
+         *
+         * A frame over the relay's ceiling is not sent at all (see RelayLink.flush), and on a phone that is
+         * a message simply missing from the conversation, with nothing anywhere saying so. The journal cuts
+         * its monsters down already (see JournalTrim), but by characters and generously: a Russian answer
+         * or a fleet's report with Russian previews weighs twice its characters on the wire. So what would
+         * not fit is shortened the way the journal shortens - long text inside it cut and the cut said in
+         * the text - rather than lost. Only what still does not fit after that is dropped.
+         */
+        private fun fitted(message: String): ByteArray? {
+            val whole = envelope(message)
+            if (whole.size <= FRAME_BODY_BYTES) return whole
+
+            for (limit in PHONE_STRING_LIMITS) {
+                val shorter = envelope(JournalTrim.trim(message, maxChars = 0, maxStringChars = limit))
+                if (shorter.size <= FRAME_BODY_BYTES) return shorter
+            }
+
+            thisLogger().info("A message of ${whole.size} bytes does not fit a frame even shortened - dropped")
+            return null
+        }
+
+        private fun envelope(message: String): ByteArray =
+            """{"p":$PROTOCOL_VERSION,"k":"event","pj":"$projectKey","b":$message}""".toByteArray(StandardCharsets.UTF_8)
 
         /**
          * Hand a device the end of one conversation, as the journal has it.
@@ -1852,12 +1947,28 @@ internal class RemoteAgent : Disposable {
         const val PROTOCOL_VERSION = 1
 
         /**
+         * How much of a frame a sealed body may take: the relay's ceiling less the envelope's header and
+         * the seal's tag (see Frame.HEADER_BYTES and Sealing).
+         */
+        private const val FRAME_BODY_BYTES = RelayLink.MAX_FRAME_BYTES - Frame.HEADER_BYTES - 16
+
+        /**
+         * How short the long text inside an oversized message is cut, tried in turn - see
+         * RelayClient.fitted. The first keeps a readable page of a long answer; the second is for a message
+         * made of a great many texts at once, a fleet's report of sixty agents among them.
+         */
+        private val PHONE_STRING_LIMITS = listOf(8 * 1024, 1024)
+
+        /**
          * Opening a project without starting a conversation in it - see the caps list in [inventoryBody].
          *
          * One string in two places rather than a literal on each side: the phone spells it too (see
          * mobile/projects.ts), and a typo here is a feature that quietly stays off for everyone.
          */
         const val CAP_OPEN_BARE = "openBare"
+
+        /** A message too big for one frame may arrive in parts - see [part]. Spelled in mobile/projects.ts too. */
+        const val CAP_PARTS = "parts"
 
         /**
          * "This machine no longer knows you." One word for both ways of saying it - sealed at the moment
@@ -1866,11 +1977,39 @@ internal class RemoteAgent : Disposable {
          */
         const val REVOKED = "revoked"
 
-        /** Where the relay lives unless someone points this at their own. */
-        const val DEFAULT_RELAY = "wss://relay.mzpizote.com"
+        /**
+         * Where the relay lives unless someone points this at their own. This fork's own, not the Claude
+         * project's: the relay is also what serves the phone its client, so the host decides which
+         * client a paired phone runs - and only this fork's one speaks this IDE's protocol and wears its
+         * name.
+         */
+        const val DEFAULT_RELAY = "wss://relay-codex.mzpizote.com"
 
-        /** -Dacx.remote.relay=ws://localhost:8080 on a sandbox run - see [enabled]. */
+        /**
+         * The Claude project's relay, which was this fork's default until it had one of its own. See
+         * [chooseRelay] for why a saved copy of it is not honoured.
+         */
+        const val RETIRED_RELAY = "wss://relay.mzpizote.com"
+
+        /** -Dacx.remote.relay=ws://localhost:4450 on a sandbox run - see [enabled]. */
         const val RELAY_PROPERTY = "acx.remote.relay"
+
+        /**
+         * The address to dial, from the most deliberate choice to the least: a sandbox run's property,
+         * then the address saved from the panel, then [DEFAULT_RELAY].
+         *
+         * A saved [RETIRED_RELAY] counts as no choice at all. The panel writes its field back whenever
+         * Enter is pressed in it, so a machine that once confirmed the old default has that default
+         * saved as if somebody had picked it - and honouring it would keep this IDE on a relay that hands
+         * the phone the other plugin's client, which does not speak this one's protocol.
+         */
+        fun chooseRelay(property: String, saved: String): String =
+            property.trim()
+                .ifEmpty { saved.trim().takeUnless { sameRelay(it, RETIRED_RELAY) }.orEmpty() }
+                .ifEmpty { DEFAULT_RELAY }
+
+        private fun sameRelay(a: String, b: String): Boolean =
+            a.trimEnd('/').equals(b.trimEnd('/'), ignoreCase = true)
 
         private const val BEAT_SECONDS = 20L
 

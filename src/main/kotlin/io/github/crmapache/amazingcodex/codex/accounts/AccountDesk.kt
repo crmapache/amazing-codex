@@ -9,6 +9,7 @@ import io.github.crmapache.amazingcodex.codex.CodexAuth
 import io.github.crmapache.amazingcodex.codex.CodexCli
 import io.github.crmapache.amazingcodex.codex.CodexSessionHub
 import io.github.crmapache.amazingcodex.codex.CodexSessions
+import io.github.crmapache.amazingcodex.feedback.DiagnosticsLog
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.serialization.json.addJsonObject
@@ -63,23 +64,27 @@ internal class AccountDesk(
     private var capability: CodexAccounts.Capability? = null
 
     /**
-     * Who the CLI's own sign-in belongs to, as it last answered.
+     * Who the CLI's own sign-in belongs to, and whether there is one, as last heard.
      *
      * Cached so the first paint of the screen is not empty while a process is asked. Learning it costs a
-     * process, and the answer changes only when somebody signs in or out.
+     * process, and the answer changes only when somebody signs in or out. Three askers feed it - the
+     * round, the sign-in round while this sign-in is in force ([heard]), and the logout ([signedOut]) -
+     * and [LatestAnswer] decides between them.
      */
-    @Volatile
-    private var defaultWho: CodexAuth.Status? = null
+    private val knownDefault = LatestAnswer<CodexAuth.Status>()
 
     /**
-     * What each account's health last came back as, and when the round that asked finished.
+     * What each account's health last came back as.
      *
      * Kept because the list goes out twice - at once, then again with the answers - and the first of the
      * two would otherwise UNSAY what is already on screen: a card that knows it has no stored credential
      * would lose that line and get it back a second later, which is a flicker every time the screen is
-     * opened. The clock stops a fresh round starting on every open: each answer costs a process.
+     * opened. [checkedAt] stops a fresh round starting on every open: each answer costs a process.
+     *
+     * The round is not its only source - the sign-in round answers the same question about the account
+     * in force (see [heard]), and [LatestAnswer] decides between the two.
      */
-    private val knownHealth = ConcurrentHashMap<String, CodexAccounts.Health>()
+    private val knownHealth = ConcurrentHashMap<String, LatestAnswer<CodexAccounts.Health>>()
 
     /**
      * Who each row really is, as the CLI wrote it down while answering about that account alone (see
@@ -88,7 +93,17 @@ internal class AccountDesk(
      * Kept beside the health and refreshed in the same round, for the same reason: reading it costs a
      * file per row, and the list goes out on every open.
      */
-    private val knownIdentity = ConcurrentHashMap<String, AccountIdentity.Who>()
+    private val knownIdentity = ConcurrentHashMap<String, AccountIdentity.Probed>()
+
+    /**
+     * When the last round of usage questions went out.
+     *
+     * The names above are answers to those questions, and the only ones worth merging two rows on are
+     * the ones written down since we asked: a drawer's file keeps whoever was last in it for ever, and
+     * acting on a stale name deletes a live account (see [AccountTwin]).
+     */
+    @Volatile
+    private var askedAt = 0L
 
     @Volatile
     private var checkedAt = 0L
@@ -102,7 +117,7 @@ internal class AccountDesk(
      * the answers.
      */
     fun sendList(withHealth: Boolean = true) {
-        broadcast(knownHealth)
+        broadcast()
 
         if (!withHealth) return
 
@@ -143,15 +158,73 @@ internal class AccountDesk(
         // Who the ordinary sign-in is. Without this the screen tells a person who is plainly signed in
         // - the chat beside it is running on that very account - that they have no accounts at all.
         //
-        // Taken from the sign-in round when it has an answer: that round asks at start-up anyway, so
-        // asking again here would be a second process for a fact already in memory.
-        defaultWho = hub.auth.lastStatus
-            ?: runCatching { CodexAuth.status(workingDirectory = project.basePath) }.getOrNull()
+        // Left alone when something has answered it within the window: the sign-in round asks at start-up
+        // anyway, and asking again would be a second process for a fact already in memory. But only
+        // within the window. That round asks about the account IN FORCE, so once an added account is in
+        // force it never asks about this one again - and the answer it left behind used to be drawn for
+        // the rest of the session, which after "Log out" meant a row for a sign-in that no longer exists.
+        val heardAt = knownDefault.askedAt
+        if (heardAt == null || System.currentTimeMillis() - heardAt >= FRESH_MS) {
+            // Timed before the process rather than after it: what decides between two answers is which
+            // question was put later (see LatestAnswer).
+            val askedAt = System.currentTimeMillis()
+            // In the same environment the sign-in round asks it in, so the two answer the same question.
+            accounts.variablesFor("", project.basePath)
+                ?.let { runCatching { CodexAuth.status(it, project.basePath) }.getOrNull() }
+                ?.let { knownDefault.record(it, askedAt) }
+        }
 
         knownHealth.keys.retainAll(accounts.list().map { it.id }.toSet())
-        accounts.list().forEach { knownHealth[it.id] = accounts.health(it.id, project.basePath) }
+        accounts.list().forEach { account ->
+            val askedAt = System.currentTimeMillis()
+            hearHealth(account.id, accounts.health(account.id, project.basePath), askedAt)
+        }
 
         figures()
+    }
+
+    private fun hearHealth(id: String, health: CodexAccounts.Health, askedAt: Long): Boolean =
+        knownHealth.computeIfAbsent(id) { LatestAnswer() }.record(health, askedAt)
+
+    private fun healthOf(id: String): CodexAccounts.Health? = knownHealth[id]?.current
+
+    /**
+     * What the sign-in round has just learned about the account in force, taken as that row's health.
+     *
+     * It is the very same question - `auth status` inside that account's drawer, from this project - so
+     * the screen has no business waiting for its own round to put it again. It used to: the round runs at
+     * most once a minute, and a person who signed in again from the gate came straight back to a card
+     * saying "No stored credential" beside a chat that was plainly running on that account.
+     *
+     * Redrawn only when the row changes: the sign-in round comes by every few minutes, and while somebody
+     * is signing in, every few seconds.
+     */
+    fun heard(accountId: String, status: CodexAuth.Status, askedAt: Long) {
+        // The CLI's own sign-in has no health line of its own: it is a row while it is signed in and no
+        // row when it is not, so what the round would have learned about it is the whole answer.
+        val changed = if (accountId.isEmpty()) {
+            knownDefault.record(status, askedAt)
+        } else {
+            hearHealth(accountId, CodexAccounts.Health.of(status), askedAt)
+        }
+
+        if (changed) broadcast()
+    }
+
+    /**
+     * An account was signed out on this machine: its drawer is empty as of [at].
+     *
+     * Told rather than asked - the CLI has just answered the logout, and that is the newest word there is
+     * about the drawer. Every project is told, not only the one whose button was pressed: each keeps its
+     * own answers, and the one they held was "signed in". The redraw is the caller's, which moves or
+     * redraws every hub straight after.
+     */
+    fun signedOut(id: String, at: Long) {
+        if (id.isEmpty()) {
+            knownDefault.record(CodexAuth.Status(installed = true, loggedIn = false), at)
+        } else {
+            hearHealth(id, CodexAccounts.Health.ABSENT, at)
+        }
     }
 
     /**
@@ -175,8 +248,19 @@ internal class AccountDesk(
         knownIdentity.keys.retainAll(asked.toSet())
         asked.forEach { id -> accounts.probedIdentity(id)?.let { knownIdentity[id] = it } }
 
-        broadcast(knownHealth)
+        // A row is the account its drawer holds, whatever it was filed under. First, so that a pair the
+        // re-filing makes - the corrected row and a row already filed under that account - is seen as one
+        // by the merge below in this same round.
+        refileMislabelled()
 
+        // One account cannot be two rows. Before the list goes out rather than after: a list drawn with
+        // the duplicate in it would be redrawn without it a moment later, and the row a person was
+        // reaching for would move under their hand.
+        if (mergeTwin()) return
+
+        broadcast()
+
+        askedAt = System.currentTimeMillis()
         asked.forEach { hub.usage.refreshLimits(urgent = true, viaPing = true, account = it) }
 
         // And which models each of them can run. Not for this screen - it shows no models - but for the
@@ -188,7 +272,108 @@ internal class AccountDesk(
         asked.forEach { hub.usage.refreshModels(CodexSessions.MAIN_SESSION, account = it) }
     }
 
-    private fun broadcast(health: Map<String, CodexAccounts.Health>) {
+    /**
+     * Two rows holding one account become one row, silently.
+     *
+     * Against the sign-in Codex itself has, it is the added row that goes: that one owns no drawer
+     * to delete, and the only way to remove it is to sign the person out of Codex altogether. Between
+     * two added rows - which a row filed again under its true name can leave behind (see
+     * [refileMislabelled]) - the one in use stays, and otherwise the newer (see AccountTwin.duplicate).
+     * Nothing is lost either way: the credential for that account is in the drawer that stays as well,
+     * and that is the drawer every conversation moves onto.
+     *
+     * The person's own word for the account travels with it. A name was given to a row on purpose, and
+     * the row it was given to is the one being merged away; leaving the old one would keep a name that
+     * was chosen for a different account on screen - which is how the duplicate got noticed in the first
+     * place.
+     *
+     * What makes it safe to do without asking is in [AccountTwin]: two straight answers, both fetched
+     * since this screen last asked, from two drawers that are both signed in now. Without that much it
+     * does nothing at all and the rows simply stay as they are.
+     */
+    private fun mergeTwin(): Boolean {
+        val found = AccountTwin.duplicate(
+            default = AccountTwin.Drawer(
+                id = "",
+                probe = knownIdentity[""],
+                live = knownDefault.current?.loggedIn == true,
+            ),
+            added = addedDrawers(),
+            answeredAfter = askedAt,
+            inUse = accounts.currentId,
+        ) ?: return false
+
+        val twin = found.extra
+        val keeper = found.keeper
+
+        // Codex's own condition on top: the row that stays must hold a credential that WORKS. Both drawers
+        // name the account in their `auth.json` whether or not the token there was revoked since, and the
+        // drawer merged away is deleted - keeping the dead one would leave the person with no working
+        // credential for an account they had two of a minute ago. So the pair waits, and nothing moves,
+        // until the keeper has answered a usage question lately (see CodexAccounts.credentialWorks).
+        if (!accounts.credentialWorks(keeper)) return false
+
+        // Onto the row that stays. Over the CLI's own sign-in's name always - that one may have been given
+        // while it held another account - but not over a name given to an added row that stays: that one
+        // was chosen for this very account.
+        accounts.account(twin)?.alias?.takeIf { it.isNotEmpty() }?.let { alias ->
+            if (keeper.isEmpty() || accounts.account(keeper)?.alias.isNullOrEmpty()) accounts.rename(keeper, alias)
+        }
+
+        // The conversations are on that account either way - the drawer changes, the subscription does
+        // not - but they have to be raised again over the drawer that is staying, because the one they
+        // are holding is about to be deleted. The setter does that by itself, which is why it is written
+        // before the record goes (see CodexAccounts.currentId). A turn running on the twin is let finish
+        // rather than stopped: the move sees one account on both sides (see CodexAccounts.sameAccount),
+        // and it can only see it while the answer this merge has just acted on is still fresh - which it
+        // is, a second old. The drawer still goes at once, and on macOS the turn does not notice: the CLI
+        // serves the credential it has read even after the keychain item is gone (checked on 2.1.280).
+        // A credential kept in a file reads as absent once deleted - the same exposure a renewal has
+        // always lived with (see CodexSessions.relaunchOn).
+        if (accounts.currentId == twin) accounts.currentId = keeper
+
+        accounts.forget(twin)
+        knownHealth.remove(twin)
+        knownIdentity.remove(twin)
+        // Its figures were this account's all along, filed under a row that no longer exists: the surviving
+        // row has its own, and a ring drawn for a row nobody can see is memory kept for nothing.
+        hub.usage.forget(twin)
+        invalidate()
+        DiagnosticsLog.note(DiagnosticsLog.ACCOUNTS, "two rows holding one account were merged")
+
+        CodexSessionHub.everyHub { it.accountsChanged() }
+        return true
+    }
+
+    /**
+     * Rows whose drawer holds another account than they are filed under are filed again, in place - see
+     * AccountTwin.mislabelled. Nothing moves and nothing is deleted: the id, the drawer and every
+     * conversation on it stay exactly where they are, and only the name on the record becomes the truth.
+     */
+    private fun refileMislabelled() {
+        val wrong = AccountTwin.mislabelled(addedDrawers(), answeredAfter = askedAt)
+        if (wrong.isEmpty()) return
+
+        wrong.forEach { (id, who) -> accounts.refile(id, who, project.basePath) }
+
+        // Every window draws the record's name, and the round in each of them would get there in its own
+        // time; the person looking at this one is looking now.
+        CodexSessionHub.everyHub { it.accountsChanged() }
+    }
+
+    /** The added rows as the twin and re-filing rules see them - drafts are nobody yet. */
+    private fun addedDrawers(): List<AccountTwin.Drawer> =
+        accounts.list().filterNot { it.isPending }.map { account ->
+            AccountTwin.Drawer(
+                id = account.id,
+                probe = knownIdentity[account.id],
+                live = healthOf(account.id) == CodexAccounts.Health.PRESENT,
+                filedAs = account.key,
+                addedAt = account.addedAt,
+            )
+        }
+
+    private fun broadcast() {
         // A sign-in that was begun and never finished leaves a draft in the book, and the book is shared
         // by every IDE on this machine now - so an IDE that was closed halfway through one would leave
         // "Signing in…" sitting on every screen for ever. Nothing waits longer than the sign-in itself is
@@ -220,14 +405,14 @@ internal class AccountDesk(
                      * anything. Left out, the screen would deny the existence of the account paying for the
                      * conversation open next to it.
                      */
-                    defaultWho?.takeIf { it.loggedIn }?.let { who ->
+                    knownDefault.current?.takeIf { it.loggedIn }?.let { who ->
                         // The address and the organisation come out of a file every drawer shares, so
                         // after an account is added they may belong to the newcomer rather than to this
                         // row. What this row itself wrote down while being asked about its own usage is
                         // the straight answer; the guess by elimination stays as the fallback until such
                         // an answer exists (see CodexAccounts.probedIdentity and defaultIdentity). The
                         // plan needs neither: that one the CLI reads from the credential itself.
-                        val email = knownIdentity[""]?.email ?: accounts.defaultIdentity(who.email)
+                        val email = knownIdentity[""]?.who?.email ?: accounts.defaultIdentity(who.email)
 
                         addJsonObject {
                             put("id", "")
@@ -251,10 +436,10 @@ internal class AccountDesk(
                             // the alias when there is one and falls back to the address - never the other
                             // way round: a name given on purpose beats one Anthropic assigned.
                             put("alias", account.alias)
-                            put("email", identity?.email ?: account.email)
+                            put("email", identity?.who?.email ?: account.email)
                             put("plan", account.plan)
                             put("pending", account.isPending)
-                            health[account.id]?.let { put("health", it.name.lowercase()) }
+                            healthOf(account.id)?.let { put("health", it.name.lowercase()) }
                         }
                     }
                 }
@@ -269,7 +454,7 @@ internal class AccountDesk(
      * window above exists to stop repeated opens starting processes, and an account that has just
      * appeared has no answer for it to reuse.
      */
-    private fun invalidate() {
+    fun invalidate() {
         checkedAt = 0
     }
 
@@ -354,8 +539,26 @@ internal class AccountDesk(
                         // utilisation - for EVERY account, not only the new one. So everybody's figures
                         // are re-asked, not just the newcomer's.
                         accounts.list().forEach { hub.usage.forget(it.id) }
+                        // Every project's screen asks again, not only this one. Signing in again as an
+                        // account already on the list gives it a new drawer under the same id, and the
+                        // other screens hold that row's health from the drawer just deleted - "No stored
+                        // credential" on a card that has just been signed in, for as long as their
+                        // freshness window lasts.
+                        CodexSessionHub.everyHub {
+                            it.accounts.invalidate()
+                            it.accountsChanged()
+                        }
+                    }
+
+                    // Nothing was added, and the reason is worth a sentence: the person went through a
+                    // browser sign-in and the list came back looking exactly as it did before. Their
+                    // figures are re-asked all the same - the sign-in rewrote the shared parts of the
+                    // CLI's configuration for every account, newcomer or not.
+                    AccountSignIn.Outcome.Twin -> {
+                        accounts.list().forEach { hub.usage.forget(it.id) }
                         invalidate()
                         CodexSessionHub.everyHub { it.accountsChanged() }
+                        sendOutcome("already-here")
                     }
 
                     is AccountSignIn.Outcome.Failed -> {
@@ -412,11 +615,16 @@ internal class AccountDesk(
             accountId = id,
             onError = { sendOutcome("logout-failed") },
             onResult = {
+                // What the logout answered, filed in every project before anything is redrawn. Left to
+                // their rounds, the row came straight back: a round leaves an answer younger than its
+                // window alone, and the answer every screen held was "signed in".
+                val at = System.currentTimeMillis()
+                CodexSessionHub.everyHub { it.accounts.signedOut(id, at) }
+
                 val moved = id == accounts.currentId
                 if (moved) accounts.currentId = next
                 // Its figures belonged to a subscription this machine no longer reaches.
                 hub.usage.forget(id)
-                defaultWho = null
                 invalidate()
                 // Conversations still open on the account just signed out of are moved along with the
                 // choice: their credential has been revoked, so the next turn in them would not start at

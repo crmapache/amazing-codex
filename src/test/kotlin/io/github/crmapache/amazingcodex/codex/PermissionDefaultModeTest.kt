@@ -46,8 +46,12 @@ class PermissionDefaultModeTest {
      * the one layer above it - an administrator's config - has to be silent about the keys for the answer
      * to be the project's.
      */
+    /**
+     * Only once the project is trusted: Codex reads nothing of an untrusted project's own config, and a
+     * panel that did would start a new tab in a mode no Codex process here comes up in (see CodexSettings).
+     */
     @Test
-    fun `a project's own config is the default in that project`() {
+    fun `an untrusted project's own config is not the default`() {
         val policy = File(HostOs.managedSettingsDirectory(), "config.toml")
         if (CodexSettings.value(policy, "approval_policy").isNotEmpty() || CodexSettings.value(policy, "sandbox_mode").isNotEmpty()) return
 
@@ -65,7 +69,10 @@ class PermissionDefaultModeTest {
         )
 
         try {
-            assertEquals(PermissionModes.ASK, PermissionDefaultMode.of(project.absolutePath))
+            // The machine's own config may be trusting nothing at that temporary path - and must not be
+            // what decides: the default is the one the project would not have set.
+            val withoutProject = PermissionDefaultMode.of(null)
+            assertEquals(withoutProject, PermissionDefaultMode.of(project.absolutePath))
         } finally {
             project.deleteRecursively()
         }

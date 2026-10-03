@@ -58,8 +58,15 @@ internal object PermissionModes {
         /** Whether the turn runs in Codex's plan collaboration mode. */
         val plan: Boolean,
     ) {
-        /** `sandboxPolicy` of turn/start: the same sandbox, spelled as the object that field takes. */
-        fun sandboxPolicy(): JsonObject = when (sandboxMode) {
+        /**
+         * `sandboxPolicy` of turn/start: the same sandbox, spelled as the object that field takes.
+         *
+         * [workspace] is the person's own `[sandbox_workspace_write]` as Codex reads it (see
+         * CodexConfigDesk.workspaceWrite). The turn names the sandbox outright, so whatever is left out
+         * here is "no": without it a person who let the network through, or gave the agent a second folder
+         * to write in, would find neither in the panel while both work in a terminal.
+         */
+        fun sandboxPolicy(workspace: JsonObject? = null): JsonObject = when (sandboxMode) {
             SANDBOX_FULL -> buildJsonObject { put("type", "dangerFullAccess") }
             SANDBOX_READ_ONLY -> buildJsonObject {
                 put("type", "readOnly")
@@ -67,12 +74,19 @@ internal object PermissionModes {
             }
             else -> buildJsonObject {
                 put("type", "workspaceWrite")
-                putJsonArray("writableRoots") {}
-                put("networkAccess", false)
-                put("excludeTmpdirEnvVar", false)
-                put("excludeSlashTmp", false)
+                putJsonArray("writableRoots") {
+                    (workspace?.get("writable_roots") as? kotlinx.serialization.json.JsonArray)?.forEach { root ->
+                        (root as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { it.isString && it.content.isNotBlank() }?.let { add(it) }
+                    }
+                }
+                put("networkAccess", flag(workspace, "network_access"))
+                put("excludeTmpdirEnvVar", flag(workspace, "exclude_tmpdir_env_var"))
+                put("excludeSlashTmp", flag(workspace, "exclude_slash_tmp"))
             }
         }
+
+        private fun flag(workspace: JsonObject?, name: String): Boolean =
+            (workspace?.get(name) as? kotlinx.serialization.json.JsonPrimitive)?.content == "true"
     }
 
     fun policyOf(mode: String?): Policy = when (normalize(mode.orEmpty())) {

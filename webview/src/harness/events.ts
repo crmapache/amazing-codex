@@ -28,6 +28,21 @@ export const bash = (
   options: { stderr?: string; exitCode?: number; runMs?: number } = {},
 ): ScenarioStep => ({ kind: 'bash', command, stdout, ...options })
 export const agent = (event: AgentEvent): ScenarioStep => ({ kind: 'agent', event })
+
+/** The CLI retrying the API call of the last side question - see ScenarioStep. */
+export const sideRetry = (attempt: number, maxRetries: number, delayMs: number, errorStatus = 529): ScenarioStep => ({
+  kind: 'sideRetry',
+  attempt,
+  maxRetries,
+  delayMs,
+  errorStatus,
+})
+
+/** How the last side question ended - see ScenarioStep. */
+export const sideAnswer = (answer: Omit<Extract<ScenarioStep, { kind: 'sideAnswer' }>, 'kind'>): ScenarioStep => ({
+  kind: 'sideAnswer',
+  ...answer,
+})
 export const user = (text: string): ScenarioStep => ({ kind: 'user', text })
 export const wait = (ms: number): ScenarioStep => ({ kind: 'wait', ms })
 export const openSearch = (): ScenarioStep => ({ kind: 'openSearch' })
@@ -45,6 +60,15 @@ export const inHours = (count: number): string => new Date(Date.now() + count * 
 
 /** The language asked for in the address bar, if any - see the note in `bootstrap` below. */
 const harnessLanguage = (): string => new URLSearchParams(window.location.search).get('lang') ?? ''
+
+/**
+ * Whether the IDE the harness plays is a light one - `?theme=light` in the address, the same word the
+ * plugin writes into the real panel's address (see WebviewHost.startUrl). The page reads the address
+ * before its first frame (harness.tsx, as main.tsx does), and the `theme` message below says it again
+ * the way the plugin does once the page is ready - with nothing chosen in the settings, so the panel
+ * follows the IDE, which is what almost everybody's panel does.
+ */
+const harnessIdeDark = (): boolean => new URLSearchParams(window.location.search).get('theme') !== 'light'
 
 /** Signing in and opening the project - the shared start for every scenario. */
 export const bootstrap: ScenarioStep[] = [
@@ -93,13 +117,21 @@ export const bootstrap: ScenarioStep[] = [
       ].join('\n'),
     },
   }),
+  shell({ type: 'theme', theme: '', ideDark: harnessIdeDark() }),
   // Without any usage the input field's bottom row is empty and the rings in it cannot be looked at. The
   // week stands on the window's third day: the pale pace arc then runs ahead of the bright one, that is,
   // exactly the case it is drawn for is visible.
+  //
+  // Addressed to the ordinary sign-in (`account: ''`), as the plugin addresses every window: the panel
+  // keeps the rings per account and reads the tab's own, and a message naming no account belongs to the
+  // day's tokens alone - sent that way, the rings never showed in the harness at all.
   shell({
     type: 'usage',
+    account: '',
     session: { percent: 22, resets: inHours(2 + 41 / 60) },
     week: { percent: 31, resets: inHours(4.5 * 24) },
+    // The model's own week beside the shared one - the third ring, in the shape `get_usage` reports it.
+    models: [{ label: 'Fable', percent: 44, resets: inHours(1.5 * 24) }],
     todayTokens: '445.5M',
   }),
 ]

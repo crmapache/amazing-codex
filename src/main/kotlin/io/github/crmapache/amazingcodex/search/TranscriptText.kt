@@ -112,6 +112,7 @@ internal object TranscriptText {
     internal fun personWords(raw: String): String? {
         val words = raw
             .replace(CONTEXT_BLOCK, "")
+            .replace(IDE_CONTEXT, "")
             .replace(BLANK_LINES, "\n\n")
             .trim()
 
@@ -132,6 +133,12 @@ internal object TranscriptText {
     internal const val MAX_TEXT_CHARS = 20_000
 
     /** The blocks clients put around a message for the model's eyes: `<environment_context>` and its kin. */
+    /**
+     * The editor note that goes with a message from the panel (see IdeContextPrompt) - the IDE's words, not
+     * the person's, and always the last part of a message, so everything from its heading on.
+     */
+    private val IDE_CONTEXT = Regex("# Context from my IDE setup:[\\s\\S]*$")
+
     private val CONTEXT_BLOCK = Regex("<(environment_context|user_instructions|system-reminder|ide_context)>[\\s\\S]*?</\\1>")
     private val BLANK_LINES = Regex("\\n[ \\t]*\\n(?:[ \\t]*\\n)+")
 }

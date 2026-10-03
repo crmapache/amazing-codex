@@ -1,9 +1,13 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { isSideComposerLayout, type ComposerLayout } from '../composerLayout'
-import { BranchChip } from './StatusBar'
+import { BranchChip, SPARK_PATH } from './StatusBar'
 import s from './shell.module.css'
 import { useT } from '../i18n'
 import type { Dict } from '../i18n/en'
+import { useFieldHistory } from '../hooks/useFieldHistory'
+import { useResting } from '../hooks/useResting'
+import type { TitleSource } from '../protocol'
+import type { TabCall } from '../sounds'
 
 /**
  * What is happening in a tab: nothing, work under way, work finished, or someone being waited for. The
@@ -11,15 +15,6 @@ import type { Dict } from '../i18n/en'
  * the corner of the eye, without reading a caption.
  */
 export type SessionState = 'idle' | 'running' | 'done' | 'attention' | 'crashed'
-
-/**
- * Where a tab's name came from - it decides whether it may be overwritten. 'default' means not a word
- * has been said yet and a stand-in is in place ('main session' / 'new session'). 'heuristic' is an
- * instant guess from the first message, which the LLM's answer arriving after it may replace. 'llm' is
- * what the generation sent (see sessionTitle in protocol.ts): the next answer no longer overwrites it,
- * only a reset on /clear does.
- */
-export type TitleSource = 'default' | 'heuristic' | 'llm'
 
 export interface Session {
   id: string
@@ -109,6 +104,26 @@ interface HeaderProps {
    */
   onReorderTabs: (sessionId: string, beforeSessionId: string | null) => void
   /**
+   * The name the person typed into a conversation's tab - a double click on it opens the field (see
+   * TabNameField). Only when it changed: a name confirmed as it stood is not a new one, and it would
+   * otherwise pin whatever the model had called the conversation as the person's own.
+   */
+  onNameSession: (id: string, title: string) => void
+  /**
+   * The tab whose name is being typed right now, if any. Held above the strip because a double click is
+   * not the only door: `/rename` with no name opens the same field on the tab on screen (see runLocal).
+   * One at a time: opening another closes this one through its blur, which keeps what was typed.
+   */
+  naming: string | null
+  onNaming: (id: string | null) => void
+  /**
+   * Enter or Escape has ended a naming, and the keyboard goes back to the input field. Left to itself the
+   * focus went nowhere - the field it was in is gone - and the next word typed after naming a tab needed a
+   * click first. Only a key does this: a naming put down by a click elsewhere leaves the focus where the
+   * hand sent it.
+   */
+  onReturnToInput: () => void
+  /**
    * The history, MCP, plugins, sounds, remote access and the preferences are gathered into one menu
    * behind the burger button on the right of the header - there was no longer room in the header for a
    * button per entry. It opens down the panel's right-hand edge and is drawn by App.tsx (see SideMenu):
@@ -149,6 +164,12 @@ interface HeaderProps {
   panelTabs?: PanelTab[]
   onPickPanelTab?: (id: string) => void
   onClosePanelTab?: (id: string) => void
+  /**
+   * The conversations that called the person with a sound and have not been opened since, by tab. Each
+   * glows in the colour of what it called about until it is opened (see TabGlow): the sound says that
+   * something happened, and with a dozen tabs open only this says where.
+   */
+  calls?: Record<string, TabCall>
 }
 
 /** One of those tabs, as the strip needs it - see [HeaderProps.panelTabs]. */
@@ -173,8 +194,175 @@ export interface PanelTab {
   hint?: string
 }
 
+/**
+ * The longest name the field takes. The IDE holds the same line (SessionTitle.OWN_MAX_LENGTH): the strip
+ * cuts a name long before this, and a pasted paragraph has no business in every list of tabs.
+ */
+const TAB_NAME_MAX = 100
+
+/**
+ * The field a conversation's name is typed into, standing where the name stood (see naming in Header).
+ *
+ * A component of its own rather than a piece of sessionTab, for the reason OwnAnswer is one: the keys
+ * the embedded browser does not give a plain field come from a hook (see useFieldHistory), and a hook
+ * cannot be called inside the strip's loop.
+ *
+ * Enter keeps the name, Escape keeps the old one, and the focus leaving keeps what was typed - the way
+ * a rename field behaves in the IDE around it and everywhere else.
+ */
+const TabNameField = ({
+  title,
+  label,
+  onDone,
+}: {
+  title: string
+  label: string
+  /**
+   * The name typed, or null when the naming was called off, and whether a key ended it (Enter or Escape)
+   * rather than the focus leaving - see onReturnToInput in Header.
+   */
+  onDone: (name: string | null, byKey: boolean) => void
+}) => {
+  const [value, setValue] = useState(title)
+  const field = useFieldHistory(value, setValue)
+  const input = useRef<HTMLInputElement>(null)
+  /** Enter unmounts the field, and the blur that follows must not count as a second answer. */
+  const done = useRef(false)
+
+  const finish = (name: string | null, byKey: boolean) => {
+    if (done.current) return
+    done.current = true
+    onDone(name, byKey)
+  }
+
+  // The whole name selected, as every rename field opens: typing replaces it, an arrow keeps it.
+  useLayoutEffect(() => {
+    input.current?.focus()
+    input.current?.select()
+  }, [])
+
+  return (
+    <input
+      ref={input}
+      className={s.tabNameField}
+      value={value}
+      maxLength={TAB_NAME_MAX}
+      aria-label={label}
+      spellCheck={false}
+      onChange={field.onChange}
+      onKeyDown={(event) => {
+        // Every key here is the field's own. The tab around it opens on Enter and Space - Space would
+        // never reach the name at all - and the panel stops the agent on Escape and changes the mode on
+        // Shift+Tab (see App).
+        event.stopPropagation()
+        // Enter confirms an input method's candidate and Escape throws its half-typed character away:
+        // neither is an answer to the naming (see composer-field in the rules).
+        if (event.nativeEvent.isComposing) return
+
+        if (event.key === 'Enter') {
+          event.preventDefault()
+          finish(value, true)
+          return
+        }
+
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          finish(null, true)
+          return
+        }
+
+        field.onKeyDown(event)
+      }}
+      onBlur={() => finish(value, false)}
+      // A press inside the field places the caret rather than starting a drag of the tab, a click does not
+      // pick the tab again, and a double click selects a word rather than opening the field anew.
+      onMouseDown={(event) => event.stopPropagation()}
+      onClick={(event) => event.stopPropagation()}
+      onDoubleClick={(event) => event.stopPropagation()}
+    />
+  )
+}
+
+/**
+ * The sparks over a calling tab: where each twinkles, how big, on what rhythm.
+ *
+ * Along the top and bottom edges, clear of the name in the middle: a spark over a letter reads as a smudge
+ * on it. The periods differ and the delays run negative for the reason the ring's sparks have them (see
+ * SPARKS in StatusBar) - in step they would blink like a signal rather than shimmer.
+ */
+const CALL_SPARKS = [
+  { left: '16%', top: 2, size: 8, seconds: 2.7, delay: 0.4 },
+  { left: '64%', top: 3, size: 6, seconds: 3.3, delay: 1.9 },
+  { left: '40%', bottom: 3, size: 7, seconds: 2.4, delay: 1.1 },
+  { left: '82%', bottom: 4, size: 6, seconds: 3.6, delay: 2.6 },
+]
+
+/** How long the calling tabs keep moving with nobody's hand in the panel - see useResting. */
+const CALLS_REST_AFTER_MS = 30_000
+
+/**
+ * How far into its rhythm a tab's light starts, out of the moment it was called. Two tabs lit at once
+ * would otherwise pass their sheens and open their sparks in step - and they do light up at once, every
+ * time the strip wakes from rest (see useResting) - which reads as one signal blinking rather than as
+ * light on each.
+ */
+const CALL_PHASE_SPAN_MS = 5000
+
+/**
+ * The light over a tab that called (see [HeaderProps.calls]): an aura rising off its bottom edge, a sheen
+ * passing over it now and then, a few sparks - painted in what it called about.
+ *
+ * It comes and goes by fading rather than at once: always in the tab, invisible while there is nothing to
+ * say. The call outlives itself by the length of the fade - taken away together with it, the colour would
+ * drain to grey on the way out - and is let go only once the fade is over.
+ */
+const TabGlow = ({ call }: { call?: TabCall }) => {
+  const [paint, setPaint] = useState(call)
+  if (call && (call.tone !== paint?.tone || call.at !== paint.at)) setPaint(call)
+
+  const phase = paint ? -(paint.at % CALL_PHASE_SPAN_MS) / 1000 : 0
+
+  return (
+    <span
+      className={s.tabGlow}
+      data-call={paint?.tone}
+      data-lit={call ? '' : undefined}
+      aria-hidden="true"
+      style={{ ['--acc-call-phase' as string]: `${phase}s` }}
+      onTransitionEnd={(event) => {
+        if (event.target !== event.currentTarget || event.propertyName !== 'opacity') return
+        if (!call) setPaint(undefined)
+      }}
+    >
+      {paint
+        ? CALL_SPARKS.map((spark) => (
+            <svg
+              key={spark.left}
+              className={s.tabSpark}
+              viewBox="0 0 12 12"
+              style={{
+                left: spark.left,
+                top: spark.top,
+                bottom: spark.bottom,
+                width: spark.size,
+                height: spark.size,
+                animationDuration: `${spark.seconds}s`,
+                animationDelay: `${phase - spark.delay}s`,
+              }}
+            >
+              <path d={SPARK_PATH} />
+            </svg>
+          ))
+        : null}
+    </span>
+  )
+}
+
 /** A stable empty default, so a header without such tabs does not rebuild its list on every draw. */
 const EMPTY_PANEL_TABS: PanelTab[] = []
+
+/** The same for a header nobody has called from. */
+const NO_CALLS: Record<string, TabCall> = {}
 
 /** Past this offset a press stops being a click and becomes a drag. */
 const DRAG_THRESHOLD_PX = 4
@@ -264,6 +452,10 @@ export const Header = ({
   onNewSession,
   onReorderGroups,
   onReorderTabs,
+  onNameSession,
+  naming,
+  onNaming,
+  onReturnToInput,
   onOpenMenu,
   layout,
   gitBranch,
@@ -273,11 +465,24 @@ export const Header = ({
   panelTabs = EMPTY_PANEL_TABS,
   onPickPanelTab,
   onClosePanelTab,
+  calls = NO_CALLS,
 }: HeaderProps) => {
   const t = useT()
   const compact = layout === 'compact' || isSideComposerLayout(layout)
   const header = useRef<HTMLElement>(null)
   const tabs = useRef<HTMLDivElement>(null)
+
+  /**
+   * The calling tabs hold still once nobody has been around for a while, and a fresh call sets them going
+   * again - see useResting. What stays is the aura: the colour is what answers "which tab was that", the
+   * movement only draws the eye to it.
+   */
+  const callValues = Object.values(calls)
+  const resting = useResting(
+    CALLS_REST_AFTER_MS,
+    callValues.reduce((latest, call) => Math.max(latest, call.at), 0),
+    callValues.length > 0,
+  )
 
   /** The tab has just been dragged - the next click on it is the gesture's tail rather than a choice. */
   const dragged = useRef(false)
@@ -301,6 +506,22 @@ export const Header = ({
    * about.
    */
   const [shifts, setShifts] = useState<Record<string, number>>({})
+
+  /**
+   * The two reorder callbacks as they stand when the tab is dropped rather than when it was pressed. A
+   * gesture outlives the render it began in, and the callbacks close over the strip they were made with:
+   * a name typed into a tab is put down by the very press that starts a drag (see startDrag), and the
+   * strip as it stood a render earlier would come back from the drop without it.
+   */
+  const reorder = useRef({ onReorderGroups, onReorderTabs })
+  reorder.current = { onReorderGroups, onReorderTabs }
+
+  const finishNaming = (session: Session, name: string | null, byKey: boolean) => {
+    onNaming(null)
+    const next = name?.trim()
+    if (next && next !== session.title) onNameSession(session.id, next)
+    if (byKey) onReturnToInput()
+  }
 
   /**
    * Where the groups stood on screen at the moment the tab was released.
@@ -445,6 +666,12 @@ export const Header = ({
     if (event.button !== 0) return
     if ((event.target as HTMLElement).closest('button')) return
 
+    // The preventDefault below keeps the focus where it was, and a name being typed into a tab would
+    // stay open under a press that picks or drags another. So the field is put down first, keeping what
+    // was typed - the way a press anywhere else in the panel puts it down (see TabNameField).
+    const focused = document.activeElement
+    if (focused instanceof HTMLInputElement && tabs.current?.contains(focused)) focused.blur()
+
     event.preventDefault()
 
     const row = unitRow(drag)
@@ -521,8 +748,8 @@ export const Header = ({
         // that came after the last one to step aside.
         const before = place > from ? (row[place + 1]?.id ?? null) : row[place]?.id ?? null
         if (place !== from) {
-          if (drag.kind === 'tab') onReorderTabs(drag.id, before)
-          else onReorderGroups(drag.id, before)
+          if (drag.kind === 'tab') reorder.current.onReorderTabs(drag.id, before)
+          else reorder.current.onReorderGroups(drag.id, before)
         }
 
         // A click after a drag does not switch the tab: the hand was moving it rather than choosing it.
@@ -670,6 +897,12 @@ export const Header = ({
           if (dragged.current) return
           onPickSession(session.id)
         }}
+        onDoubleClick={(event) => {
+          // The cross is a button of its own, and two quick presses on it are two closes rather than a
+          // rename. Nor is the tail of a drag a double click on anything.
+          if ((event.target as HTMLElement).closest('button') || dragged.current) return
+          onNaming(session.id)
+        }}
         onKeyDown={(event) => {
           if (event.key !== 'Enter' && event.key !== ' ') return
           // Space scrolls the strip otherwise, and the tab under the finger never opens.
@@ -677,6 +910,7 @@ export const Header = ({
           onPickSession(session.id)
         }}
       >
+        <TabGlow call={calls[session.id]} />
         <span className={s.tabGroupBar} style={{ background: color }} />
         <span className={`${s.dot} ${DOT_CLASS[session.state]}`} data-tooltip={dotTitle(t)[session.state]} />
         {session.depth > 0 ? (
@@ -684,7 +918,15 @@ export const Header = ({
             ⑂
           </span>
         ) : null}
-        <span className={s.tabTitle}>{session.title}</span>
+        {naming === session.id ? (
+          <TabNameField
+            title={session.title}
+            label={t.header.renameTab}
+            onDone={(name, byKey) => finishNaming(session, name, byKey)}
+          />
+        ) : (
+          <span className={s.tabTitle}>{session.title}</span>
+        )}
         <button
           type="button"
           className={s.tabClose}
@@ -755,11 +997,19 @@ export const Header = ({
   )
 
   return (
-    <header className={`${s.header} ${compact ? s.headerCompact : ''}`} ref={header}>
+    // Marked for the open tab's call, which anything done in the panel answers except what is done up here
+    // (see the effect over `activeCalling` in App).
+    <header className={`${s.header} ${compact ? s.headerCompact : ''}`} ref={header} data-tab-strip>
       {/* A strip of tabs, and said to be one: without it a screen reader announces a row of nameless
           boxes, and nothing in here could be reached by keyboard at all - neither a conversation nor the
           panel's own tabs beside them. */}
-      <div className={s.tabs} ref={tabs} role="tablist" aria-label={t.header.conversations}>
+      <div
+        className={s.tabs}
+        ref={tabs}
+        role="tablist"
+        aria-label={t.header.conversations}
+        data-resting={resting || undefined}
+      >
         {groups.map((group, index) => (
           <Fragment key={group.groupId}>
             {panels.filter((tab) => tab.at === index).map(panelTab)}

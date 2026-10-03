@@ -3,8 +3,10 @@ package io.github.crmapache.amazingcodex.codex
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.thisLogger
 import io.github.crmapache.amazingcodex.codex.CodexSessions.Companion.MAIN_SESSION
+import io.github.crmapache.amazingcodex.feedback.DiagnosticsLog
 import io.github.crmapache.amazingcodex.remote.RemoteAgent
 import io.github.crmapache.amazingcodex.remote.RemoteCommands
+import io.github.crmapache.amazingcodex.usage.UsageFeatures
 import io.github.crmapache.amazingcodex.voice.VoiceGrant
 import io.github.crmapache.amazingcodex.remote.RemoteLimits
 import kotlinx.serialization.json.JsonElement
@@ -12,11 +14,13 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.put
 
 /**
  * The one door a request from a client goes through.
@@ -62,6 +66,7 @@ internal class SessionCommands(private val hub: CodexSessionHub) {
          */
         if (!local && !RemoteCommands.allows(type)) {
             thisLogger().warn("A client that is not this IDE asked for something it may not: $type ($clientId)")
+            DiagnosticsLog.note(DiagnosticsLog.PHONE, "turned away a request it may not make: ${kindOf(type)}")
             return true
         }
 
@@ -70,8 +75,17 @@ internal class SessionCommands(private val hub: CodexSessionHub) {
         // minute (see RemoteLimits).
         if (!local && !limits.allow(asker, type)) {
             thisLogger().warn("A client is going too fast: $type ($asker)")
+            DiagnosticsLog.note(DiagnosticsLog.PHONE, "turned away for going too fast: ${kindOf(type)}")
             return true
         }
+
+        // A feature used from a phone counts like one used at the desk - it is the same person using the
+        // plugin. The desk's own panel is counted at its window's door (see CodexPanel), and every one of
+        // its messages passes there first, so counting it here too would count it twice.
+        if (!local) UsageFeatures.ofMessage(type, payload)?.let { hub.stats.noteFeature(it) }
+        // And a phone's press counts once more as a phone's - how many people really use remote access is the
+        // question, and a feature count cannot answer it: it does not say where the press came from.
+        if (!local && UsageFeatures.isPhoneAction(type)) hub.stats.notePhoneAction()
 
         when (type) {
             /**
@@ -81,24 +95,43 @@ internal class SessionCommands(private val hub: CodexSessionHub) {
              */
             "ready" -> hub.attach(clientId, seen(payload))
 
-            "prompt" -> hub.prompt(sessionId, field("text"), images(payload), echo = echo(payload), remote = !local)
+            // `editor` asks for what the editor beside the panel shows (see EditorContext) - honoured for this
+            // IDE's own panel only: a phone has no editor beside it, and what the desk's editor happens to show
+            // is not something to hand to whoever is on the other end of the relay.
+            "prompt" -> takeOnce(clientId, asker, sessionId, payload, local) {
+                hub.prompt(
+                    sessionId,
+                    field("text"),
+                    images(payload),
+                    echo = echo(payload),
+                    remote = !local,
+                    withEditor = local && flag(payload, "editor"),
+                )
+            }
 
             /**
              * A message written while the agent was busy. It waits beside the conversation rather than
              * in the window that typed it, so a phone put back in a pocket does not take it along (see
              * SessionQueue).
              */
-            "queuePrompt" -> hub.queuePrompt(
-                sessionId,
-                id = field("id"),
-                text = field("text"),
-                attach = field("attach"),
-                images = images(payload),
-                echo = echo(payload),
-                remote = !local,
-            )
+            "queuePrompt" -> takeOnce(clientId, asker, sessionId, payload, local) {
+                hub.queuePrompt(
+                    sessionId,
+                    id = field("id"),
+                    text = field("text"),
+                    attach = field("attach"),
+                    images = images(payload),
+                    echo = echo(payload),
+                    remote = !local,
+                    before = field("before").ifEmpty { null },
+                    withEditor = local && flag(payload, "editor"),
+                )
+            }
 
             "unqueuePrompt" -> hub.unqueuePrompt(sessionId, field("id"))
+
+            // The pencil on a queued message - the whole message back to the asker, to be edited in the field.
+            "takeQueued" -> hub.takeQueued(clientId, sessionId, field("id"), asker)
 
             "reorderQueue" -> hub.reorderQueue(
                 sessionId,
@@ -147,6 +180,18 @@ internal class SessionCommands(private val hub: CodexSessionHub) {
             // A command through "!" - the panel's bash mode.
             "bash" -> hub.catalog.runShellCommand(clientId, sessionId, field("id"), field("command"))
 
+            // A question beside the conversation - the panel's /btw (see SideQuestion), and taking one back.
+            "sideQuestion" -> hub.askAside(
+                clientId,
+                asker,
+                sessionId,
+                field("id"),
+                field("question"),
+                SideQuestion.historyOf(payload["history"]),
+            )
+
+            "sideQuestionCancel" -> hub.cancelAside(sessionId, field("id"))
+
             "stop" -> hub.interrupt(sessionId)
 
             "kill" -> hub.kill(sessionId)
@@ -156,21 +201,25 @@ internal class SessionCommands(private val hub: CodexSessionHub) {
             // with an ordinary notification.
             "stopTask" -> hub.stopTask(sessionId, field("taskId"))
 
-            "newSession" -> hub.openSession(
-                id = sessionId,
-                // A branch inherits the transcript of the conversation it was opened from.
-                parentId = if (field("kind") == "branch") field("parentId").ifEmpty { MAIN_SESSION } else null,
-                title = field("title"),
-                quote = field("quote"),
-                // Chosen in the request rather than taken from the settings - which is what a client
-                // with no selectors of its own has to do (see SessionLaunch). The panel sends none of
-                // these and behaves exactly as it did.
-                launch = SessionLaunch(
-                    model = field("model"),
-                    effort = field("effort"),
-                    mode = PermissionModes.normalize(field("mode")).takeIf { it in PermissionModes.KNOWN }.orEmpty(),
-                ),
-            )
+            "newSession" -> {
+                if (!local) DiagnosticsLog.note(DiagnosticsLog.PHONE, "opened a conversation (${kindOf(field("kind").ifEmpty { "main" })})")
+
+                hub.openSession(
+                    id = sessionId,
+                    // A branch inherits the transcript of the conversation it was opened from.
+                    parentId = if (field("kind") == "branch") field("parentId").ifEmpty { MAIN_SESSION } else null,
+                    title = field("title"),
+                    quote = field("quote"),
+                    // Chosen in the request rather than taken from the settings - which is what a client
+                    // with no selectors of its own has to do (see SessionLaunch). The panel sends none of
+                    // these and behaves exactly as it did.
+                    launch = SessionLaunch(
+                        model = field("model"),
+                        effort = field("effort"),
+                        mode = PermissionModes.normalize(field("mode")).takeIf { it in PermissionModes.KNOWN }.orEmpty(),
+                    ),
+                )
+            }
 
             "closeSession" -> hub.closeSession(sessionId)
 
@@ -180,6 +229,9 @@ internal class SessionCommands(private val hub: CodexSessionHub) {
              * same one, and a copy of it in another language would drift.
              */
             "renameSession" -> hub.renameSession(sessionId, field("title"))
+
+            // The name the person typed into the tab themselves - see CodexSessionHub.nameSession.
+            "nameSession" -> hub.nameSession(sessionId, field("title"))
 
             "reorderGroups" -> hub.reorderGroups(field("groupId"), field("beforeGroupId").ifEmpty { null })
 
@@ -221,7 +273,7 @@ internal class SessionCommands(private val hub: CodexSessionHub) {
              */
             "setDefaultMode" -> {
                 CodexPreferences.mode = PermissionModes.normalize(field("mode"))
-                announceNewTabDefaults()
+                CodexSessionHub.announceNewTabDefaults()
             }
 
             /*
@@ -236,12 +288,12 @@ internal class SessionCommands(private val hub: CodexSessionHub) {
              */
             "setDefaultModel" -> {
                 CodexPreferences.newTabModel = field("model")
-                announceNewTabDefaults()
+                CodexSessionHub.announceNewTabDefaults()
             }
 
             "setDefaultEffort" -> {
                 CodexPreferences.newTabEffort = field("effort")
-                announceNewTabDefaults()
+                CodexSessionHub.announceNewTabDefaults()
             }
 
             /*
@@ -374,6 +426,9 @@ internal class SessionCommands(private val hub: CodexSessionHub) {
 
             "scenarioDuplicate" -> hub.scenarios.duplicate(clientId, field("id"), field("scope"))
 
+            // A row dragged to a new place, named by the row it now stands before - empty for last.
+            "scenarioPlace" -> hub.scenarios.place(clientId, field("id"), field("from"), field("to"), field("before"))
+
             // A model writes one out of a sentence, and the answer goes to whoever asked rather than to
             // the project: nothing has been saved yet (see ScenarioDesk.draft).
             "scenarioDraft" -> hub.scenarios.draft(clientId, field("id"), field("description"))
@@ -491,11 +546,7 @@ internal class SessionCommands(private val hub: CodexSessionHub) {
                 sessionId = sessionId,
                 conversationId = field("conversationId"),
                 title = field("title"),
-                titleSource = if (field("titleSource") == SessionSnapshot.TITLE_LLM) {
-                    SessionSnapshot.TITLE_LLM
-                } else {
-                    SessionSnapshot.TITLE_HEURISTIC
-                },
+                titleSource = SessionSnapshot.titleSourceOf(field("titleSource")),
                 // Which conversation this is cannot be worked out from the identifier - see the note on
                 // the parameter itself.
                 wasScenarioHead = payload["wasScenarioHead"]?.jsonPrimitive?.booleanOrNull == true,
@@ -554,30 +605,12 @@ internal class SessionCommands(private val hub: CodexSessionHub) {
     }
 
     /**
-     * What a new tab starts with, told to every window of every project.
-     *
-     * To all of them rather than to whoever asked, exactly like the colour mode and the hand-added
-     * models (see setCustomModels in CodexPanel): the setting belongs to the machine, and a second
-     * window still drawing an empty tab with yesterday's model is a window showing something that is no
-     * longer true. The permission mode goes along with the other two because it is answered per project
-     * - Claude Code's own default is read from the settings that apply in that directory (see
-     * PermissionDefaultMode) - so each catalogue has to say it for itself.
-     */
-    private fun announceNewTabDefaults() {
-        CodexSessionHub.everyHub {
-            it.catalog.sendNewTabDefaults()
-            // And the phone, which learns this from its inventory rather than from a project fact: it
-            // names the model in the request that opens a conversation, so a stale one there would walk
-            // straight past a model just pinned here.
-            it.inventoryChanged()
-        }
-    }
-
-    /**
      * The parts of the message the feed draws it from, taken out of the request as they are. We do not
      * look inside: it is the interface that knows what a chip or a quote is, and a copy of that
      * knowledge here would be a second thing to keep in step with it.
      */
+    private fun flag(payload: JsonObject, name: String): Boolean = payload[name]?.jsonPrimitive?.booleanOrNull == true
+
     private fun echo(payload: JsonObject): JsonObject? {
         val fields = ECHOED.mapNotNull { name -> payload[name]?.let { name to it } }
         return if (fields.isEmpty()) null else JsonObject(fields.toMap())
@@ -608,6 +641,62 @@ internal class SessionCommands(private val hub: CodexSessionHub) {
     private fun strings(payload: JsonObject, name: String): List<String> =
         payload[name]?.jsonArray.orEmpty().mapNotNull { it.jsonPrimitive.contentOrNull }
 
+    /**
+     * A message from a phone, said once however many times it arrives - and the phone told it has arrived.
+     *
+     * A phone keeps what it sent until it hears this, and sends it again when its line comes back or the
+     * person presses Retry (see mobile/outbox.ts): that is how a message lost between a pocket and the
+     * relay stops being lost in silence. The other half of the bargain is here - a copy of a message that
+     * did arrive is recognised by its identifier and dropped (see [ArrivedMessages]), so a resend can never
+     * say anything twice.
+     *
+     * The answer goes to the phone that sent it and to no other, and it goes for a copy too: the copy is
+     * usually the phone asking again because the first answer was lost on the way back.
+     *
+     * The panel and a message with no identifier pass straight through, exactly as before. The panel is
+     * the IDE itself and has nothing in between to lose a message on; an older phone sends no identifier
+     * and has nothing to wait for.
+     */
+    private fun takeOnce(clientId: String, asker: String, sessionId: String, payload: JsonObject, local: Boolean, say: () -> Unit) {
+        val id = payload["id"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        if (local || id.isEmpty()) {
+            say()
+            return
+        }
+
+        if (hub.arrived.first(sessionId, id)) {
+            val text = payload["text"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            DiagnosticsLog.note(
+                DiagnosticsLog.PHONE,
+                "a message arrived (${text.length} chars, ${images(payload).size} images)",
+            )
+            // Not said is not arrived: forgotten again, so the copy the phone sends next is taken.
+            runCatching(say).onFailure { failure ->
+                hub.arrived.undo(sessionId, id)
+                throw failure
+            }
+        } else {
+            DiagnosticsLog.note(DiagnosticsLog.PHONE, "a message arrived again and was not said twice")
+        }
+
+        hub.emitTo(
+            clientId,
+            buildJsonObject {
+                put("type", "promptReceived")
+                put("sessionId", sessionId)
+                put("id", id)
+            }.toString(),
+            asker,
+        )
+    }
+
+    /**
+     * A request's kind, fit for the diagnostic buffer. The kind is a word of the protocol - unless the
+     * sender made it up, and a made-up one is whatever the sender typed, which is exactly what may not go
+     * into a report (see DiagnosticsLog).
+     */
+    private fun kindOf(type: String): String = if (KIND.matches(type)) type else "a kind it made up"
+
     private fun images(payload: JsonObject): List<ImageAttachment> =
         payload["images"]?.jsonArray.orEmpty().mapNotNull { element ->
             val image = element as? JsonObject ?: return@mapNotNull null
@@ -619,5 +708,8 @@ internal class SessionCommands(private val hub: CodexSessionHub) {
     private companion object {
         /** What a message's echo carries besides its text - see [echo]. */
         val ECHOED = listOf("id", "tokens", "quotes", "steering")
+
+        /** What a word of the protocol looks like - see [kindOf]. */
+        val KIND = Regex("[A-Za-z]{1,40}")
     }
 }

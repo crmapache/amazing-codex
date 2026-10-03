@@ -132,7 +132,7 @@ internal object CodexOneShot {
                     "account/rateLimits/read",
                     onResult = { result ->
                         done()
-                        onResult(CodexShapes.usage((result as? JsonObject)?.get("rateLimits") as? JsonObject))
+                        onResult(CodexShapes.usageAnswer(result as? JsonObject))
                     },
                     onError = { fail(it.message) },
                 )
@@ -142,7 +142,7 @@ internal object CodexOneShot {
                     buildJsonObject { put("includeHidden", false) },
                     onResult = { result ->
                         done()
-                        onResult(CodexShapes.models(result))
+                        onResult(CodexShapes.models(result, CodexSettings.effective(workingDirectory, "model"), CodexSettings.effective(workingDirectory, "model_reasoning_effort")))
                     },
                     onError = { fail(it.message) },
                 )

@@ -1,5 +1,6 @@
 package io.github.crmapache.amazingcodex.search
 
+import io.github.crmapache.amazingcodex.codex.SessionSnapshot
 import java.io.File
 import java.nio.file.Files
 import kotlin.test.Test
@@ -197,8 +198,52 @@ class SearchIndexTest {
         assertEquals("untitled", index.titleOf(b))
         assertEquals(80, index.titleOf(long).length)
         assertEquals("untitled", index.titleOf("never-seen"))
-        assertTrue(!index.isNamed(a))
+        assertEquals(SessionSnapshot.TITLE_HEURISTIC, index.titleSourceOf(a))
         assertEquals(1, index.messagesIn(a))
+    }
+
+    /**
+     * Codex keeps one name per thread, and both kinds land in it: the panel's model's (see AutoTitles) and
+     * a person's. The one the model gave is the model's; anything else is a person's and outranks it.
+     */
+    @Test
+    fun `a name the model did not give is the person's`() {
+        transcript(a, meta(a), said("user", "u3", "hi"))
+        transcript(b, meta(b), said("user", "u4", "hello"))
+        val names = mapOf(a to "Named by me", b to "Named by the model")
+        val index = SearchIndex(
+            store,
+            transcripts = { transcripts.listFiles { f -> f.extension == "jsonl" }!!.toList() },
+            names = { names },
+            givenByModel = { mapOf(b to "Named by the model") },
+        )
+        index.refresh(force = true)
+
+        assertEquals("Named by me", index.titleOf(a))
+        assertEquals(SessionSnapshot.TITLE_USER, index.titleSourceOf(a))
+        assertEquals("Named by the model", index.titleOf(b))
+        assertEquals(SessionSnapshot.TITLE_LLM, index.titleSourceOf(b))
+    }
+
+    // A model's name renamed by a person is the person's from then on: it no longer matches the book.
+    @Test
+    fun `a model's name renamed by hand becomes the person's`() {
+        transcript(a, meta(a), said("user", "u3", "hi"))
+        val names = mutableMapOf(a to "Named by the model")
+        val index = SearchIndex(
+            store,
+            transcripts = { transcripts.listFiles { f -> f.extension == "jsonl" }!!.toList() },
+            names = { names },
+            givenByModel = { mapOf(a to "Named by the model") },
+        )
+        index.refresh(force = true)
+        assertEquals(SessionSnapshot.TITLE_LLM, index.titleSourceOf(a))
+
+        names[a] = "Named by me"
+        index.refresh(force = true)
+
+        assertEquals("Named by me", index.titleOf(a))
+        assertEquals(SessionSnapshot.TITLE_USER, index.titleSourceOf(a))
     }
 
     @Test

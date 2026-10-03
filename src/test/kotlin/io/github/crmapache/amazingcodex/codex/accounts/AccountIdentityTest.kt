@@ -29,7 +29,7 @@ class AccountIdentityTest {
         val token = jwt("""{"email":"someone@example.com","https://api.openai.com/auth":{"chatgpt_account_id":"ws-from-claims","chatgpt_plan_type":"pro"}}""")
         val who = AccountIdentity.read(auth("""{"OPENAI_API_KEY":null,"tokens":{"id_token":"$token","access_token":"a","refresh_token":"r","account_id":"ws-1"},"last_refresh":"2026-09-19T10:00:00Z"}"""))
 
-        assertEquals(AccountIdentity.Who(email = "someone@example.com", orgUuid = "ws-1", orgName = "pro"), who)
+        assertEquals(AccountIdentity.Who(email = "someone@example.com", orgUuid = "ws-1", orgName = "pro", method = AccountIdentity.CHATGPT), who)
         assertTrue(who.isNamed)
     }
 
@@ -49,7 +49,11 @@ class AccountIdentityTest {
         val who = AccountIdentity.read(auth("""{"OPENAI_API_KEY":"sk-proj-abcdefWXYZ"}"""))
 
         assertEquals("API key …WXYZ", who.email)
-        assertEquals("key-WXYZ", who.orgUuid)
+        // Filed by a fingerprint of the whole key, so two keys ending alike are two accounts.
+        assertTrue(who.orgUuid.startsWith("key-") && who.orgUuid.length == "key-".length + 16, who.orgUuid)
+        val twin = AccountIdentity.read(auth("""{"OPENAI_API_KEY":"sk-proj-zzzzzzWXYZ"}"""))
+        assertEquals("API key …WXYZ", twin.email)
+        assertTrue(twin.orgUuid != who.orgUuid)
         assertTrue(who.isNamed)
     }
 
@@ -69,7 +73,7 @@ class AccountIdentityTest {
     fun `a token that cannot be read still leaves the workspace`() {
         val who = AccountIdentity.read(auth("""{"tokens":{"id_token":"not-a-jwt","account_id":"ws-2"}}"""))
 
-        assertEquals(AccountIdentity.Who("", "ws-2", ""), who)
+        assertEquals(AccountIdentity.Who("", "ws-2", "", method = AccountIdentity.CHATGPT), who)
         assertFalse(who.isNamed)
     }
 

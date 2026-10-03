@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentStatus, AgentUsage, QueuedMessage } from '../protocol'
+import type { AgentEvent, AgentStatus, AgentUsage, EditorRef, OutrankedReason, QueuedMessage } from '../protocol'
 import type {
   BackgroundTask,
   CheckpointItem,
@@ -396,7 +396,7 @@ export type PanelAction =
    * steps rather than start a new turn with it. Such a message is only added to the feed and interrupts
    * nothing in it.
    */
-  | { kind: 'prompt'; tokens: UserToken[]; quotes: string[]; steering?: boolean }
+  | { kind: 'prompt'; tokens: UserToken[]; quotes: string[]; steering?: boolean; editor?: EditorRef }
   /**
    * replay marks an event of a past conversation's replay rather than a live turn: it lands in the feed
    * the same way but tells nothing about the conversation right now (see 'assistant').
@@ -438,6 +438,11 @@ export type PanelAction =
   | { kind: 'streamPrimed'; text: string; thinking: string }
   | { kind: 'status'; status: AgentStatus }
   | { kind: 'error'; message: string }
+  /**
+   * The repository's settings overrule the account this conversation came up on - see OutrankedItem.
+   * `names` are variable names, never values.
+   */
+  | { kind: 'outranked'; names: string[]; reason?: OutrankedReason }
   | { kind: 'init'; project: PanelProject }
   /**
    * A past conversation has just been handed to this tab - it holds that conversation from this moment,
@@ -471,8 +476,16 @@ export type PanelAction =
   | { kind: 'modeRequested'; mode: string }
   | { kind: 'modeApplied'; mode: string; applied: boolean; error?: string }
   | { kind: 'modelRequested'; model: string }
-  /** The model now in force: on the agent's refusal the previous one rather than the chosen one. */
-  | { kind: 'modelApplied'; model: string; error?: string }
+  /**
+   * The model now in force: on the agent's refusal the previous one rather than the chosen one.
+   *
+   * [born] says the shell is NAMING the tab's model rather than reporting a choice - at a conversation's
+   * birth, to a client that has just joined, after a reset, on a fork (see the `model` message in
+   * protocol.ts). Both kinds draw the chip, and only a choice is judged afterwards: read as a pick, an
+   * announcement of the model a tab has been working on all along accused it of not arriving (see
+   * [ownSwap]), and a re-attach was enough to put that in the feed of a conversation nobody had touched.
+   */
+  | { kind: 'modelApplied'; model: string; error?: string; born?: boolean }
   | { kind: 'effortRequested'; effort: string }
   /**
    * The effort this conversation works at, as the shell says it does. There is no "applied" beside it

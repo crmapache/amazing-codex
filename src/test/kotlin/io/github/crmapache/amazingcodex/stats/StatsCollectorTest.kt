@@ -487,4 +487,24 @@ class StatsCollectorTest {
         assertNull(day.models["<synthetic>"])
         assertEquals(setOf("GPT-5.6 Sol"), day.models.keys)
     }
+
+    @Test
+    fun `a press from a phone is counted as the phone's and tells the report somebody is using the plugin`() {
+        var used = 0
+        val phone = StatsCollector(
+            projectKey = "p-test",
+            projectName = "test",
+            workingDirectory = directory.toString(),
+            parentDisposable = disposable,
+            ledger = ledger,
+            clock = { now },
+            onUse = { used++ },
+        )
+
+        phone.notePhoneAction()
+        phone.notePhoneAction()
+
+        assertEquals(2, today().phoneActions)
+        assertEquals(2, used)
+    }
 }

@@ -10,6 +10,8 @@ import {
   scenario,
   shell,
   SESSION,
+  sideAnswer,
+  sideRetry,
   textReply,
   toolResult,
   toolUse,
@@ -17,7 +19,28 @@ import {
   user,
   wait,
 } from '../events'
-import type { Scenario } from '../types'
+import type { Scenario, ScenarioStep } from '../types'
+
+/**
+ * A refusal as a gateway actually writes one, taken from a report: its own sentence, its own shape, and
+ * the API's own body quoted inside it. The CLI puts `API Error: <code>` in front and passes the rest
+ * through untouched (measured against a refusing endpoint on 2.1.273) - see the `gateway-sampling`
+ * scenario below.
+ */
+const SPOILED_REQUEST =
+  'API Error: 400 {"error":"Error communicating with Anthropic model \'claude-fable-5\': ' +
+  'Error from client: AnthropicLLMClient\\nStatus code: 400\\nError body: ' +
+  '{\\"type\\":\\"error\\",\\"error\\":{\\"type\\":\\"invalid_request_error\\",' +
+  '\\"message\\":\\"temperature is deprecated for this model.\\"},\\"request_id\\":\\"req_011CXyz\\"}"}'
+
+/** The same agent steps, but happening in another tab than the one on screen. */
+const inTab = (sessionId: string, steps: ScenarioStep[]): ScenarioStep[] =>
+  steps.map((step) => (step.kind === 'agent' ? shell({ type: 'agent', sessionId, event: step.event }) : step))
+
+/** The three background conversations of the `tab-calls` scenario. */
+const REFUNDS = 's-refunds'
+const MIGRATION = 's-migration'
+const E2E = 's-e2e'
 
 export const scenariosSystem: Scenario[] = [
   /*
@@ -82,6 +105,74 @@ export const scenariosSystem: Scenario[] = [
           'review-log': { description: 'Write the findings into the review journal', argumentHint: '' },
         },
       }),
+    ]),
+  ]),
+
+  /*
+   * The screen after the last tab is closed (see Welcome.tsx). The shell's list simply comes back empty,
+   * the way it does when the tab's cross is pressed in the IDE. The scene plays from the start every time
+   * the screen opens, so to watch it again: "Let's start", then this checkpoint once more.
+   */
+  scenario('welcome', 'Every tab is closed', 'system', [
+    checkpoint('The last tab is closed', [shell({ type: 'sessions', sessions: [] })]),
+  ]),
+
+  /*
+   * Tabs calling from the background (see TabGlow in Header.tsx). Three conversations work behind the one
+   * on screen, and each calls in its own way: one finishes, one waits for a permission, one breaks off.
+   * The sound would come from the IDE; here what is left of it is the light on the tab it came from.
+   *
+   * The last checkpoint is the open tab calling somebody who was away: the IDE played its sound because the
+   * window was not in front, and said so (`calledAway`). It stays lit while the pointer only crosses the
+   * panel and goes out on the first click, key or scroll in it - not in the strip.
+   *
+   * Hands-on after the last checkpoint: open a glowing tab - its light fades - and come back.
+   */
+  scenario('tab-calls', 'Tabs calling from the background', 'system', [
+    checkpoint('Three conversations at work behind this one', [
+      shell({
+        type: 'sessions',
+        sessions: [
+          { id: SESSION, title: 'Checkout sheet polish', titleSource: 'llm', kind: 'main', groupId: SESSION, depth: 0, status: 'idle', awaitsYou: false },
+          { id: REFUNDS, title: 'Refund webhooks retry storm', titleSource: 'llm', kind: 'main', groupId: REFUNDS, depth: 0, status: 'running', awaitsYou: false },
+          { id: MIGRATION, title: 'Orders table migration', titleSource: 'llm', kind: 'main', groupId: MIGRATION, depth: 0, status: 'running', awaitsYou: false },
+          { id: E2E, title: 'E2E: guest checkout', titleSource: 'llm', kind: 'main', groupId: E2E, depth: 0, status: 'running', awaitsYou: false },
+        ],
+      }),
+      ...[REFUNDS, MIGRATION, E2E].flatMap((id) => [
+        shell({ type: 'status', sessionId: id, state: 'running' }),
+        ...inTab(id, [agent({ type: 'assistant', message: { content: [{ type: 'text', text: 'On it.' }] } })]),
+      ]),
+      user('Keep an eye on the other three for me while I look at the sheet'),
+      wait(400),
+      ...textReply('Sure - the tab that calls will light up in the strip.'),
+      turnResult(900),
+    ]),
+    checkpoint('The refunds one finishes', [
+      wait(1500),
+      ...inTab(REFUNDS, [...textReply('The retries back off now; the storm is gone.'), turnResult(4200)]),
+      shell({ type: 'status', sessionId: REFUNDS, state: 'idle' }),
+    ]),
+    checkpoint('The migration waits for a permission', [
+      wait(2200),
+      ...inTab(MIGRATION, [toolUse('Bash', { command: 'pnpm db:migrate --env staging' }, 'tc-migrate')]),
+      shell({
+        type: 'permission',
+        id: 'tc-perm',
+        sessionId: MIGRATION,
+        toolName: 'Bash',
+        target: 'pnpm db:migrate --env staging',
+        command: 'pnpm db:migrate --env staging',
+        mode: 'default',
+      }),
+    ]),
+    checkpoint('The e2e run breaks off', [wait(1700), shell({ type: 'processExited', sessionId: E2E, exitCode: 1 })]),
+    checkpoint('This one finishes while you are away', [
+      user('Tidy the spacing under the total while I grab a coffee'),
+      wait(1200),
+      ...textReply('Done - the total sits on the same baseline as the button now.'),
+      turnResult(3100),
+      shell({ type: 'calledAway', sessionId: SESSION, sound: 'turnFinished' }),
     ]),
   ]),
 
@@ -253,6 +344,7 @@ export const scenariosSystem: Scenario[] = [
       rateLimit({ status: 'rejected', resetsInSeconds: 90, isUsingOverage: true }),
       shell({
         type: 'usage',
+        account: '',
         session: { percent: 100, resets: inHours(1 / 40) },
         extra: { active: true, enabled: true, percent: 23, window: 'five_hour' },
       }),
@@ -271,9 +363,29 @@ export const scenariosSystem: Scenario[] = [
       }),
       shell({
         type: 'usage',
+        account: '',
         session: { percent: 18, resets: inHours(3) },
         week: { percent: 100, resets: inHours(72) },
         extra: { active: true, enabled: true, percent: 41, window: 'seven_day' },
+      }),
+      wait(600),
+    ]),
+    // The model's own week (Fable) is a third ring, and its window is the CLI's
+    // `seven_day_overage_included`: when it runs out, that ring burns and the shared week stays a figure.
+    checkpoint('The Fable week runs out instead: its own ring burns', [
+      rateLimit({
+        status: 'rejected',
+        rateLimitType: 'seven_day_overage_included',
+        resetsInSeconds: 2 * 24 * 60 * 60,
+        isUsingOverage: true,
+      }),
+      shell({
+        type: 'usage',
+        account: '',
+        session: { percent: 18, resets: inHours(3) },
+        week: { percent: 64, resets: inHours(72) },
+        models: [{ label: 'Fable', percent: 100, resets: inHours(48) }],
+        extra: { active: true, enabled: true, percent: 41, window: 'seven_day_overage_included' },
       }),
       wait(600),
     ]),
@@ -281,8 +393,10 @@ export const scenariosSystem: Scenario[] = [
       rateLimit({ status: 'allowed', resetsInSeconds: 18_000 }),
       shell({
         type: 'usage',
+        account: '',
         session: { percent: 4, resets: inHours(5) },
         week: { percent: 31, resets: inHours(4.5 * 24) },
+        models: [{ label: 'Fable', percent: 2, resets: inHours(7 * 24) }],
         extra: { active: false, enabled: true, percent: 23 },
       }),
       wait(400),
@@ -300,6 +414,7 @@ export const scenariosSystem: Scenario[] = [
       shell({ type: 'auth', installed: true, loggedIn: true, email: 'first@example.com', plan: 'Max' }),
       shell({
         type: 'usage',
+        account: '',
         session: { percent: 41, resets: inHours(2) },
         week: { percent: 18, resets: inHours(4 * 24) },
       }),
@@ -307,13 +422,13 @@ export const scenariosSystem: Scenario[] = [
     ]),
     checkpoint('Another account: the rings empty at once', [
       shell({ type: 'auth', installed: true, loggedIn: true, email: 'second@example.com', plan: 'Pro' }),
-      shell({ type: 'usage', reset: true }),
+      shell({ type: 'usage', account: '', reset: true }),
       wait(700),
     ]),
     // Only the five-hour window comes back: the new account's week has not started, and an empty ring is
     // the honest answer for it.
     checkpoint('The new account answers - and only about what it has spent', [
-      shell({ type: 'usage', session: { percent: 10, resets: inHours(4.5) } }),
+      shell({ type: 'usage', account: '', session: { percent: 10, resets: inHours(4.5) } }),
       wait(600),
     ]),
   ]),
@@ -388,6 +503,35 @@ export const scenariosSystem: Scenario[] = [
     ]),
   ]),
 
+  /**
+   * The turn dies on a refusal nobody in the panel caused: a gateway between Claude Code and Anthropic
+   * puts a sampling parameter into the request, and the models from Opus 4.7 onwards will not take one.
+   *
+   * Written down because the panel was reported for it. A refusal naming a parameter reads as the panel
+   * having sent that parameter - so the row says in words where it comes from, and points at the screen
+   * that decides what the requests are routed through (see ErrorItem.sampling). The gateway answers in
+   * its own format rather than the API's, and the CLI passes the whole body through - that is what such a
+   * refusal actually looks like, and reading it is the point of the scenario.
+   */
+  scenario('gateway-sampling', 'A gateway spoils the request', 'system', [
+    checkpoint('The user asks for a change', [user('Rename the helper and update everything that calls it'), wait(800)]),
+    checkpoint('The request comes back refused, and the row says whose parameter it is', [
+      agent({
+        type: 'assistant',
+        message: { model: '<synthetic>', content: [{ type: 'text', text: SPOILED_REQUEST }] },
+        error: 'unknown',
+      }),
+      agent({
+        type: 'result',
+        subtype: 'success',
+        is_error: true,
+        result: SPOILED_REQUEST,
+        api_error_status: 400,
+        duration_ms: 160,
+      }),
+    ]),
+  ]),
+
   scenario('signed-out', 'The sign-in has expired', 'system', [
     checkpoint('The panel is locked out, and it says whose sign-in it wants', [
       shell({
@@ -426,6 +570,61 @@ export const scenariosSystem: Scenario[] = [
     checkpoint('The /clear turn ends', [
       agent({ type: 'assistant', message: { content: [{ type: 'text', text: '(no content)' }] } }),
       turnResult(300),
+    ]),
+  ]),
+
+  /**
+   * A side question - /btw - asked while the agent works, and every way one can end. The point is the
+   * second checkpoint onwards: the card stands over the field while the feed keeps moving above it, the
+   * turn is never interrupted, and nothing of the thread lands in the feed.
+   */
+  scenario('side-question', 'A side question with /btw', 'system', [
+    checkpoint('The agent is at work', [
+      user('Move Apple Pay into the payment-method registry'),
+      wait(300),
+      toolUse('Read', { file_path: '/Users/you/demo-project/apps/web/src/checkout/paymentMethods.ts' }, 'side-read'),
+      wait(400),
+    ]),
+    checkpoint('A question aside while it works', [user('/btw which file holds the card form?'), wait(900)]),
+    checkpoint('The answer arrives, the work goes on', [
+      sideAnswer({
+        outcome: 'answered',
+        text: 'The card form lives in `apps/web/src/checkout/CardForm.tsx`. The sheet renders it when the registry offers no other method, so it is also the fallback for browsers **without** the Payment Request API.',
+      }),
+      wait(300),
+      toolResult('side-read', 'export const paymentMethods = [card]'),
+      toolUse('Edit', { file_path: '/Users/you/demo-project/apps/web/src/checkout/paymentMethods.ts' }, 'side-edit'),
+      wait(400),
+    ]),
+    checkpoint('A follow-up, while the API is retried', [
+      user('/btw and does it validate on blur?'),
+      wait(400),
+      sideRetry(2, 10, 8000),
+      wait(900),
+    ]),
+    checkpoint('The follow-up is answered from the thread', [
+      sideAnswer({ outcome: 'answered', text: 'Yes - each field checks itself on blur, and the button stays disabled until all three pass.' }),
+      wait(300),
+    ]),
+    checkpoint('A question that needs the files', [
+      user('/btw what does the e2e config say about retries?'),
+      wait(300),
+      sideAnswer({
+        outcome: 'empty',
+        text: '(The model tried to call a tool instead of answering directly. Try rephrasing or ask in the main conversation.)',
+      }),
+      wait(300),
+    ]),
+    checkpoint('The conversation went away before answering', [
+      user('/btw is the old branch merged?'),
+      wait(300),
+      sideAnswer({ outcome: 'failed', reason: 'ended', message: 'the process ended' }),
+      wait(300),
+    ]),
+    checkpoint('The turn finishes on its own', [
+      toolResult('side-edit', 'ok'),
+      ...textReply('Apple Pay is in the registry now, and the card form stays for browsers without the API.'),
+      turnResult(5200),
     ]),
   ]),
 
@@ -478,9 +677,13 @@ export const scenariosSystem: Scenario[] = [
       ]),
     ]),
     /**
-     * The same past conversation further on: the agent asked the person with options, they answered, and the
-     * answer lies in the conversation as an ordinary line. The question card must not appear over the input
-     * field here at all - this question was answered somewhere in the past (see AskItem.historic).
+     * The same past conversation further on: the agent asked the person with options and they answered. The
+     * question card must not appear over the input field here at all - this one was answered somewhere in
+     * the past (see AskItem.historic), and what stands in the feed instead is the answer, as the person's
+     * own line, exactly as the panel wrote it at the time (see addReplayedAnswers).
+     *
+     * On disk that answer is the tool's own result and nothing else - there is no message from the person
+     * anywhere near it - so that is the shape it arrives in here.
      */
     checkpoint('The replay held a question with options - and an answer to it', [
       ...replayed([
@@ -507,11 +710,14 @@ export const scenariosSystem: Scenario[] = [
           message: {
             content: [
               {
-                type: 'text',
-                text: 'Keep the previous order of the sections in the settings?\nKeep it',
+                type: 'tool_result',
+                tool_use_id: 'r-ask',
+                content:
+                  'Your questions have been answered: "Keep the previous order of the sections in the settings?"="Keep it". You can now continue with these answers in mind.',
               },
             ],
           },
+          toolUseResult: { answers: { 'Keep the previous order of the sections in the settings?': 'Keep it' } },
           timestamp: '2026-08-17T09:44:12.000Z',
         }),
         wait(300),
@@ -520,11 +726,45 @@ export const scenariosSystem: Scenario[] = [
       ]),
     ]),
     /**
+     * And the end of that conversation: the agent asked again, and nobody ever answered - the IDE was closed
+     * on the question. On disk the call is left with no result and with nothing after it, which is the one
+     * thing that tells this question from the one above (see revivedAsk in feed/build.ts).
+     *
+     * Nothing pops up yet: while the replay is still reading, every question in it is a record. The card
+     * comes back at the next checkpoint, when the reading ends.
+     */
+    checkpoint('The replay ends on a question nobody answered', [
+      ...replayed([
+        ...textReply('One thing left to settle before I touch the dock.'),
+        wait(300),
+        toolUse(
+          'AskUserQuestion',
+          {
+            questions: [
+              {
+                question: 'Where should the cards above the input field go in the narrow layout?',
+                header: 'Cards',
+                multiSelect: false,
+                options: [
+                  { label: 'Into the dock', description: 'Right above the field, as they are now' },
+                  { label: 'Into the side rail', description: 'Off to the side, leaving the field alone' },
+                ],
+              },
+            ],
+          },
+          'r-ask-open',
+        ),
+      ]),
+    ]),
+    /**
      * A tab is opened with the end of a past conversation rather than the whole of it, so the reading
      * finishes on a boundary: the mark above the feed stands for everything still on disk, and pressing it
      * asks for the next page (answered here by the harness itself - see player.ts).
+     *
+     * And the question the conversation was abandoned on comes back over the input field, answerable: there
+     * is nobody left to answer through the call, so the answer goes on as the next message instead.
      */
-    checkpoint('The replay has finished, with more of the conversation above it', [
+    checkpoint('The replay has finished - and its unanswered question is back', [
       shell({ type: 'replayFinished', sessionId: SESSION, cursor: 'r-top' }),
     ]),
   ]),
@@ -783,6 +1023,20 @@ export const scenariosSystem: Scenario[] = [
         },
       }),
       turnResult(9400),
+    ]),
+  ]),
+  /**
+   * The usage statistics' question - the card above the field that asks once, and the screen behind "What
+   * is sent". The IDE says the question has never been answered (the `usageStats` message it sends on
+   * every panel opening); the harness answers the card's buttons the way the IDE would, so a press on
+   * Allow takes the card away and the switch on the settings screen shows the answer.
+   */
+  scenario('usage-consent', 'Usage statistics: the question asked once', 'system', [
+    checkpoint('The panel opens on a machine that was never asked', [
+      shell({ type: 'usageStats', consent: 'unknown', lastSent: 0 }),
+      user('Tidy up the imports in the checkout module'),
+      wait(400),
+      turnResult(3100),
     ]),
   ]),
 ]

@@ -27,7 +27,8 @@ COPY package.json ./
 RUN npm install --omit=dev --omit=optional
 COPY --from=build /app/dist ./dist
 # The phone's own files, when this relay is the one serving them. Built from the plugin's repository
-# and dropped in here - see README. Absent is fine: RELAY_STATIC_DIR="" turns serving them off.
+# and staged here by scripts/relay-client.sh, which also checks they are this fork's client and not the
+# Claude project's - see README. Absent is fine: RELAY_STATIC_DIR="" turns serving them off.
 COPY public ./public
 EXPOSE 4450
 CMD ["node", "dist/index.js"]

@@ -43,6 +43,15 @@ internal object RemoteCommands {
         "kill",
         "stopTask",
         /**
+         * A question beside the conversation (`/btw`) and taking one back - narrower than `prompt` above,
+         * not wider: the answer comes out of the conversation this device may already write into, with no
+         * tools at all, nothing is written into the transcript, and it goes back to the one phone that
+         * asked (see CodexSessionHub.askAside). A long run watched from a sofa is exactly where "what are
+         * you on right now?" is worth asking without stopping anything.
+         */
+        "sideQuestion",
+        "sideQuestionCancel",
+        /**
          * Starting a conversation of one's own. Confirmed deliberately: a freshly started IDE has no
          * conversations at all, and a phone that cannot open one would show an empty project and be
          * useless precisely when it is wanted. It starts no more than sending a message does - that
@@ -220,6 +229,8 @@ internal object RemoteCommands {
          * they paired by carrying a fingerprint across the room.
          *
          * So: `scenarioSave`, `scenarioDelete`, `scenarioDuplicate` and `scenarioFetch` are the editor;
+         * `scenarioPlace` is a row dragged to a new place on the shelves, which is the editor's own "Kept in"
+         * without the rest of the form;
          * `scenarioDraft` and `scenarioDraftCancel` are a model writing one out of a sentence (a run
          * with read-only tools inside the project - see ScenarioAuthor); `scenarioRun` is play;
          * `scenarioSchedule` and `scenarioUnschedule` are the hours; `scenarioRunDelete` is the history;
@@ -240,6 +251,7 @@ internal object RemoteCommands {
         "scenarioSave",
         "scenarioDelete",
         "scenarioDuplicate",
+        "scenarioPlace",
         "scenarioDraft",
         "scenarioDraftCancel",
         "scenarioRun",
@@ -308,6 +320,15 @@ internal object RemoteCommands {
         // The same list, one step finer: the order the tabs at the desk are drawn in, which a phone has
         // no picture of and no reason to rearrange.
         "reorderTabs",
+        /**
+         * A name typed into a tab at the desk (see CodexSessionHub.nameSession).
+         *
+         * Refused for the reason `agentTranscript` is: nothing on the phone asks for it - its list has no
+         * field to type a name into. On its merits the door is narrow - a line in the transcript of a
+         * conversation this device may already write into - so it moves up to ALLOWED the day the phone
+         * grows the field, rather than being refused on principle.
+         */
+        "nameSession",
         "setMode",
         "setDefaultMode",
         /**
@@ -334,12 +355,32 @@ internal object RemoteCommands {
          */
         "setSendKey",
         /**
+         * Codex's own settings (see CodexConfigDesk) - the machine's config.toml, for every project and the
+         * terminal too, like the defaults refused above: what the next session at the keyboard starts with
+         * is not a sofa's to settle. The question goes with the change: the phone has no such screen.
+         */
+        "askCodexConfig",
+        "setCodexConfig",
+        /**
+         * Whether Codex reads the project's own settings, hooks and exec policies. Refused harder than the
+         * rest for the reason it exists: trusting a repository lets ITS hooks and policies run, and that is a
+         * decision for somebody who can see the repository.
+         */
+        "setProjectTrust",
+        /**
          * How much colour the gauges keep - a machine-wide setting beside the ones above, and settled the
          * same way as the language below it: the phone obeys it without being able to set it. It is handed
          * the figure as a fact of the project (see RemoteFeed), so somebody who damped the red at the desk
          * does not meet it again on the sofa.
          */
         "setCalmColors",
+        /**
+         * Which indicators around the input field are shown - a machine-wide setting about the desk's own
+         * row: the context bar, the rings, the token counter, the bubble and the heart. The phone has
+         * neither the counter nor the buttons, and it is not even told the setting (see
+         * ProjectCatalog.sendIndicators) - its strip is drawn for a thumb, not trimmed for a panel.
+         */
+        "setHiddenIndicators",
         /**
          * The models added by hand (see CustomModels.tsx) - a machine-wide setting beside the ones above,
          * and settled the same way: the phone is handed the list as a fact of the project (see
@@ -356,6 +397,38 @@ internal object RemoteCommands {
          * project (see RemoteFeed) and speaks it without being able to set it.
          */
         "setLanguage",
+        /**
+         * The panel's theme and its text size - machine-wide settings about the screen on the desk, one of
+         * them its zoom. Refused like the language above, and unlike the language the phone is not even
+         * handed them: it follows its own light or dark the way every app on it does (see
+         * mobile/main.tsx), and its type is drawn for a thumb rather than scaled from a console font.
+         */
+        "setTheme",
+        "setTextSize",
+        /**
+         * The tabs coming back after a restart: the desk's drafts, the tab on the desk's screen, and the
+         * switch for the whole thing. A phone has an input field and a screen of its own, and reporting
+         * either as the desk's would put its half-typed words into the panel and pull the desk's panel
+         * onto whatever tab the sofa is looking at. The switch is machine-wide like the ones above.
+         */
+        "saveDraft",
+        "tabShown",
+        "setRestoreTabs",
+        /**
+         * The pencil on a queued message: the whole message back into the asker's field (see
+         * CodexSessionHub.takeQueued). Refused because the phone has no such button, not on principle -
+         * the door is no wider than "unqueuePrompt", which is allowed. What stands in the way of the button
+         * is the answer: it carries the message in the desk field's pieces, the bytes of a pasted image
+         * among them, and the phone's field is plain text with photos of its own, while a frame back to it
+         * holds 256 kilobytes - a queued photo alone can be more.
+         */
+        "takeQueued",
+        /**
+         * Whether a message carries what the desk's editor shows (see EditorContext) - a machine-wide
+         * setting, like the ones above, and about an editor the phone is nowhere near. The `editor` flag on
+         * a phone's own message is ignored for the same reason (see SessionCommands).
+         */
+        "setShareEditor",
         /**
          * The sparkle button beside the paperclip and the text it asks by.
          *
@@ -494,6 +567,12 @@ internal object RemoteCommands {
         // book nor writes into it: what it does is counted on this side, where it is seen arriving.
         "statistics",
         "stat",
+        // The anonymous usage report: the answer to whether it may go, and the report shown before it is
+        // allowed. The answer is the machine's and its owner's, given at the desk - a phone saying yes on
+        // somebody's behalf is exactly the consent the question exists to avoid. The panel's own window
+        // handles both, which a phone's message never reaches in the first place (see CodexPanel).
+        "setUsageStats",
+        "usageStatsPreview",
     )
 
     /**

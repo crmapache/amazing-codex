@@ -120,6 +120,87 @@ const PRIORITY: SoundId[] = [
 ]
 
 /**
+ * What a call is about, in the three words the tab strip paints it with (see TabGlow in Header.tsx).
+ *
+ * Seven occasions sound seven different files, but a glance at the strip has room for three colours at
+ * most - any more and the eye has to learn a legend instead of reading a light. So the occasions fold
+ * into what the person is being called to: work that is done, something that waits for them, something
+ * that broke. A used-up limit is the middle one rather than the last: it is a pause, not a breakage,
+ * which is how the feed paints it too (see .limit in feed.module.css).
+ */
+export type CallTone = 'success' | 'attention' | 'error'
+
+const TONES: Record<SoundId, CallTone> = {
+  turnFinished: 'success',
+  permission: 'attention',
+  question: 'attention',
+  plan: 'attention',
+  rateLimit: 'attention',
+  extraUsage: 'attention',
+  trouble: 'error',
+}
+
+export const toneOf = (sound: SoundId): CallTone => TONES[sound]
+
+/**
+ * A tab that has called the person and has not been answered since - it glows in the strip until it is.
+ *
+ * A background tab is answered by being opened. The open tab can call too - when its sound played to
+ * somebody who was away from it (see the `calledAway` message) - and it is answered by the first thing that
+ * person does in it: being on screen is exactly what it already was while nobody looked.
+ *
+ * `at` is when: a second call of the same tone into a tab already glowing is news too (another turn has
+ * finished there), and the strip stirs on it again (see useResting).
+ */
+export interface TabCall {
+  tone: CallTone
+  at: number
+}
+
+/**
+ * The calls still standing: opening a tab answers its call, and a closed tab has nobody left to call.
+ *
+ * `opened` is the tab that has just been opened, and only that - empty on a pass where nothing was. The
+ * tab that merely stays on screen keeps its call: it can only have one because its sound played to a
+ * person who was not looking, and a list of tabs changing under them (a turn starting somewhere else) is
+ * not them coming back.
+ *
+ * The very same object when nothing went, so a pass that changes nothing repaints nothing.
+ */
+export const callsStanding = (
+  calls: Record<string, TabCall>,
+  opened: string,
+  open: ReadonlySet<string>,
+): Record<string, TabCall> => {
+  const ids = Object.keys(calls)
+  const kept = ids.filter((id) => id !== opened && open.has(id))
+  if (kept.length === ids.length) return calls
+
+  return Object.fromEntries(kept.map((id) => [id, calls[id]!]))
+}
+
+/**
+ * Whether a press answers the open tab's call, by where it landed: [inStrip] is the tab strip, [tab] the
+ * tab it landed on there (empty for the strip's own buttons).
+ *
+ * Anywhere in the panel below the strip answers it. In the strip only a press on the calling tab itself
+ * does - clicking a lit tab is the plainest "I see you" there is, and it used to do nothing, the light
+ * waiting for a click in the feed or a key in the field. Picking another tab still leaves this one calling
+ * in the background, and the "+", the menu and the rest of the strip are not about it.
+ */
+export const answersCall = (press: { inStrip: boolean; tab: string }, active: string): boolean =>
+  !press.inStrip || press.tab === active
+
+/**
+ * The call of one tab answered - the person has done something in it. The very same object when it had none.
+ */
+export const callAnswered = (calls: Record<string, TabCall>, id: string): Record<string, TabCall> => {
+  if (!(id in calls)) return calls
+
+  return Object.fromEntries(Object.entries(calls).filter(([key]) => key !== id))
+}
+
+/**
  * A limit refusal recognised by its text.
  *
  * The main route is different: the limit event arrives separately and becomes a row of its own in the

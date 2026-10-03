@@ -68,6 +68,41 @@ internal object CodexDialect {
 
     fun thinkingDelta(text: String): String = delta("thinking_delta", "thinking", text)
 
+    /**
+     * A new block of the agent's words begins - one per `agentMessage`. Nothing on the screen draws it;
+     * the readers of a scenario card's live line do: without it two remarks of one turn run together
+     * into one ("Reading the migration.Writing the tests"), see scenario/LiveWords.
+     */
+    fun textBlockStart(): String = buildJsonObject {
+        put("type", "stream_event")
+        putJsonObject("event") {
+            put("type", "content_block_start")
+            put("index", 0)
+            putJsonObject("content_block") {
+                put("type", "text")
+                put("text", "")
+            }
+        }
+    }.toString()
+
+    /**
+     * The model has finished what it had to say - its message ends with `end_turn`, the one stop reason
+     * that means "I am done" rather than "run this tool". Said after an answer Codex marks as the final
+     * one, and before the words a Stop hook sends the agent back to work with: a turn a project's hook
+     * sent back carries more than one ending, and a scenario's head is shown every one of them, in order
+     * (see scenario/TurnEndings).
+     */
+    fun messageEnd(): String = buildJsonObject {
+        put("type", "stream_event")
+        putJsonObject("event") {
+            put("type", "message_delta")
+            putJsonObject("delta") {
+                put("stop_reason", "end_turn")
+                put("stop_sequence", JsonNull)
+            }
+        }
+    }.toString()
+
     private fun delta(kind: String, field: String, text: String): String = buildJsonObject {
         put("type", "stream_event")
         putJsonObject("event") {
@@ -102,6 +137,38 @@ internal object CodexDialect {
             }
         }
 
+    /**
+     * Codex's `request_user_input` questions as the panel's question card takes them (AskUserQuestion's
+     * input), with Codex's id for each question by its text - the answer goes back by the id, while the
+     * card speaks of the question by its words.
+     */
+    fun askInput(asked: List<JsonObject>): Pair<JsonObject, Map<String, String>> {
+        val ids = LinkedHashMap<String, String>()
+        val input = buildJsonObject {
+            putJsonArray("questions") {
+                for (question in asked) {
+                    val text = AppServer.text(question["question"])
+                    ids[text] = AppServer.text(question["id"])
+                    addJsonObject {
+                        put("question", text)
+                        put("header", AppServer.text(question["header"]))
+                        put("multiSelect", false)
+                        putJsonArray("options") {
+                            (question["options"] as? JsonArray)?.forEach { option ->
+                                val o = option as? JsonObject ?: return@forEach
+                                addJsonObject {
+                                    put("label", AppServer.text(o["label"]))
+                                    put("description", AppServer.text(o["description"]))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return input to ids
+    }
+
     fun toolUses(calls: List<ToolCall>, model: String, uuid: String): String? {
         if (calls.isEmpty()) return null
 
@@ -117,12 +184,19 @@ internal object CodexDialect {
         }
     }
 
-    fun toolResults(results: List<ToolResult>, uuid: String): String? {
+    /**
+     * The results of tool calls, as the person's turn of the conversation carries them. [toolUseResult] is
+     * the call's own structured answer beside them - for a question, the options picked by question
+     * (`{"answers": {question: answer}}`), which is what draws the answer under a question in a past
+     * conversation (see feed/build.ts, addReplayedAnswers).
+     */
+    fun toolResults(results: List<ToolResult>, uuid: String, toolUseResult: JsonObject? = null): String? {
         if (results.isEmpty()) return null
 
         return buildJsonObject {
             put("type", "user")
             put("uuid", uuid)
+            toolUseResult?.let { put("toolUseResult", it) }
             putJsonObject("message") {
                 put("role", "user")
                 putJsonArray("content") {
@@ -143,7 +217,12 @@ internal object CodexDialect {
      * What the person said, as a past conversation remembers it. Only the replay draws this - in a live
      * turn the message is already on screen from the moment it was sent (see ClaudeSessionHub.prompt).
      */
-    fun userPrompt(text: String, images: Int, uuid: String, timestamp: String?): String = buildJsonObject {
+    /**
+     * A person's message as the panel reads one. [ideContext] is the editor note that went with it (see
+     * IdeContextPrompt): a block of its own after the words, in the panel's terms, so the line under the
+     * message survives the conversation being reopened.
+     */
+    fun userPrompt(text: String, images: Int, uuid: String, timestamp: String?, ideContext: String? = null): String = buildJsonObject {
         put("type", "user")
         put("uuid", uuid)
         timestamp?.let { put("timestamp", it) }
@@ -154,20 +233,33 @@ internal object CodexDialect {
                     put("type", "text")
                     put("text", text + (1..images).joinToString("") { " [Image #$it]" })
                 }
+                ideContext?.let(IdeContextPrompt::asPanelNote)?.let { note ->
+                    addJsonObject {
+                        put("type", "text")
+                        put("text", note)
+                    }
+                }
             }
         }
     }.toString()
 
+    /**
+     * The end of a turn. [apiErrorStatus] is the HTTP status a failed turn's request came back with, when
+     * Codex says - the panel explains a 400 about a sampling parameter by it (see feed/build.ts,
+     * overSampling).
+     */
     fun result(
         threadId: String,
         durationMs: Long,
         isError: Boolean,
         resultText: String,
         usage: JsonObject?,
+        apiErrorStatus: Int? = null,
     ): String = buildJsonObject {
         put("type", "result")
         put("subtype", if (isError) "error_during_execution" else "success")
         put("is_error", isError)
+        apiErrorStatus?.let { put("api_error_status", it) }
         put("duration_ms", durationMs)
         put("num_turns", 1)
         put("result", resultText)
@@ -380,7 +472,8 @@ internal object CodexDialect {
         for (element in content) {
             val part = element as? JsonObject ?: continue
             when (AppServer.text(part["type"])) {
-                "text" -> texts += AppServer.text(part["text"])
+                // The editor note that went with the message is not the person's words - see [userContextOf].
+                "text" -> AppServer.text(part["text"]).takeUnless(IdeContextPrompt::isContext)?.let { texts += it }
                 "image", "localImage" -> images += 1
                 "skill", "mention" -> AppServer.text(part["name"]).takeIf { it.isNotEmpty() }?.let { texts += "\$$it" }
             }
@@ -388,6 +481,13 @@ internal object CodexDialect {
 
         return texts.joinToString("\n").trim() to images
     }
+
+    /** The editor note a person's message carried, if any - see IdeContextPrompt. */
+    fun userContextOf(item: JsonObject): String? =
+        (item["content"] as? JsonArray).orEmpty()
+            .mapNotNull { it as? JsonObject }
+            .firstOrNull { AppServer.text(it["type"]) == "text" && IdeContextPrompt.isContext(AppServer.text(it["text"])) }
+            ?.let { AppServer.text(it["text"]) }
 
     // --- Commands ------------------------------------------------------------------------------
 

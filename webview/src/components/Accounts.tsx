@@ -126,6 +126,12 @@ const Meters = ({ facts, t }: { facts: UsageFacts; t: Dict }) => {
         <>
           <Meter name={t.accounts.fiveHour} window={facts.session} span={FIVE_HOUR_MS} />
           <Meter name={t.accounts.weekly} window={facts.week} span={WEEK_MS} />
+          {/* A limit of its own beside the plan's - an extra bucket Codex reports with a window of its
+              own, named by the server rather than by us. No dash while unknown, unlike the two above: an
+              account whose plan has no such bucket would otherwise promise a figure that never comes. */}
+          {(facts.models ?? []).map((model) => (
+            <Meter key={model.label} name={model.label} window={model} span={WEEK_MS} />
+          ))}
         </>
       )}
     </div>

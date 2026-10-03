@@ -1,4 +1,5 @@
 import { builtinCommands, effortOptions, isModelName, modelOptions, panelCommands, type CommandOption } from '../catalog'
+import { ASIDE_COMMAND, asideQuestion } from './side'
 import type { Dict } from '../i18n/en'
 import type { ModelInfo } from '../protocol'
 import { endsOpen } from './tokens'
@@ -277,6 +278,14 @@ export const localCommand = (
 
   const [name = '', ...rest] = trimmed.slice(1).split(/\s+/)
   const argument = rest.join(' ')
+
+  // `/config key=value` is the CLI's to carry out and does - only the bare one opens the panel's screen
+  // (see panelCommands).
+  if (name === 'config' && argument) return null
+
+  // A side question is prose: its lines stay its own rather than being joined into one by the split above.
+  const aside = asideQuestion(trimmed)
+  if (aside !== null) return { name: ASIDE_COMMAND, argument: aside }
 
   if (panelCommands(t).some((command) => command.id === name)) return { name, argument }
 

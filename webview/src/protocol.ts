@@ -46,13 +46,64 @@ export interface RemoteDevice {
   lastSeenAt: number
 }
 
-/** Where a tab's name came from - see SessionInfo.titleSource. */
-export type TitleSource = 'default' | 'heuristic' | 'llm'
+/**
+ * One of Claude Code's own settings as `/config` lists it (see the `codexConfig` message).
+ *
+ * `options` are the values the CLI takes, in its own words; `free` means any value (the language). `value`
+ * is absent when it is not known - a setting a newer CLI added, or one whose default the CLI works out at
+ * run time and nothing has been written for - and the screen marks nothing as current then rather than
+ * guessing. `lockedBy` names a layer stronger than the one `/config` writes into that holds the setting:
+ * a change here would change nothing, so the row says why instead.
+ */
+export interface CodexConfigSetting {
+  /** Codex's own dotted key - `model_verbosity`, `sandbox_workspace_write.network_access`, `features.<name>`. */
+  key: string
+  options: string[]
+  free?: boolean
+  value?: string
+  group: 'work' | 'terminal' | 'other'
+  /** Who decides it instead of the person: the project's own config, or an organisation's policy. */
+  lockedBy?: 'policy' | 'project'
+}
+
+/**
+ * Why a conversation's feed says the project's settings stand in its way - see OutrankedItem.reason.
+ */
+export type OutrankedReason = 'account' | 'untrusted'
+
+/** The project's own Codex settings (`.codex/config.toml`, hooks, exec policies) and whether Codex reads them. */
+export interface CodexProjectLayer {
+  present: boolean
+  trusted: boolean
+  /** The settings it sets, by name - never their values. */
+  sets: string[]
+}
+
+/**
+ * Where a tab's name came from - it decides whether it may be overwritten. 'default' means not a word
+ * has been said yet and a stand-in is in place ('main session' / 'new session'). 'heuristic' is an
+ * instant guess from the first message, which the LLM's answer arriving after it may replace. 'llm' is
+ * what the generation sent (see sessionTitle): the next answer no longer overwrites it, only a reset on
+ * /clear does. 'user' is a name the person typed into the tab (see nameSession): nothing but another
+ * such name replaces it, and it is written into the conversation's transcript, so the history and the
+ * search call the conversation by it too.
+ */
+export type TitleSource = 'default' | 'heuristic' | 'llm' | 'user'
 
 /** One subscription usage window: the share and when it resets. */
 export interface UsageWindow {
   percent: number
   resets: string
+}
+
+/**
+ * A weekly window of one model rather than of the whole subscription - on a plan that keeps one, the
+ * server counts a separate week for a named model beside the shared one (today Fable). `label` is the
+ * server's own name for the bucket, exactly as the account page writes it, so it is shown as it came
+ * rather than translated (see ClaudeUsage.modelWindows on the plugin's side).
+ */
+export interface ModelUsageWindow extends UsageWindow {
+  label: string
 }
 
 /**
@@ -67,8 +118,9 @@ export interface ExtraUsage {
   active: boolean
   /**
    * Which window is being paid past, in the CLI's words: `five_hour`, `seven_day`, `seven_day_opus` and
-   * so on. It decides which of the two rings burns and what the window is called in words (see
-   * limitWindowName and limitWindowRing in feed/usage.ts). Absent when the CLI did not say.
+   * so on. It decides which ring burns - `seven_day_overage_included` is the model's own week (Fable) - and
+   * what the window is called in words (see limitWindowName and limitWindowRing in feed/usage.ts). Absent
+   * when the CLI did not say.
    */
   window?: string
   enabled?: boolean
@@ -87,8 +139,9 @@ export interface HistoryEntry {
   updatedAt: number
   messages: number
   /**
-   * Where the name came from - the model's own or a guess off the first line. A conversation carried on
-   * in a tab keeps it, and a guess is the one a fresh name may replace (see sessionTitle).
+   * Where the name came from - the person's own, the model's or a guess off the first line. A
+   * conversation carried on in a tab keeps it at that rank: a guess is the one a fresh name may replace
+   * (see sessionTitle), and the person's own is replaced by nobody but them.
    */
   titleSource?: TitleSource
 }
@@ -142,8 +195,16 @@ export interface SearchHit {
   at: number
   /** The conversation's title, as the history lists it. */
   title: string
-  /** Whether that title is the model's own rather than a guess off the first line - see HistoryEntry.titleSource. */
+  /**
+   * Whether that title is the conversation's own name - the model's or the person's - rather than a guess
+   * off the first line. What a phone built before `titleSource` reads.
+   */
   named: boolean
+  /**
+   * Where that title came from - see HistoryEntry.titleSource. Absent from an IDE built before it, and
+   * then `named` is all there is to go by (see searchHitTitleSource).
+   */
+  titleSource?: TitleSource
   /** How many messages that conversation holds - what stands under its title where the list groups by it. */
   messages: number
   /** The whole message's length in characters, so an unfolded one can say how much of it is shown. */
@@ -277,6 +338,20 @@ export interface ModelInfo {
  * bytes of a photo taken on a phone - stays in the IDE, which is what will send it (see SessionQueue.kt):
  * a queued photo is measured in hundreds of kilobytes and the frame to a phone has a limit of 256.
  */
+/**
+ * The file in front of the person in the IDE's editor, and the lines selected in it - what a message sent from
+ * the panel carries to the agent unless switched off (see EditorContext.kt). The path is from the project's
+ * root, whole for a file outside it; `from`/`to` are there only when something is selected, counted from one
+ * the way the gutter counts. The selected text itself stays in the IDE: the chip and the card have no use
+ * for it.
+ */
+export interface EditorRef {
+  path: string
+  name: string
+  from?: number
+  to?: number
+}
+
 export interface QueuedMessage {
   id: string
   text: string
@@ -350,6 +425,13 @@ export interface ScenarioHead {
   onQuestion: 'head' | 'stop'
   /** How many times the head may send one card back to work before giving up on it. */
   retries: number
+  /**
+   * What happens to a card its own session could not finish: 'stop' ends the run on it, 'head' hands its
+   * work to the head, which finishes it itself before the run moves on (see HeadSettings.onGiveUp).
+   * Optional because a page served from a relay may be newer than the IDE that sends the scenario; absent
+   * reads as 'stop', which is what every scenario did before the setting existed.
+   */
+  onGiveUp?: 'stop' | 'head'
 }
 
 export interface ScenarioStage {
@@ -584,6 +666,11 @@ export interface ScenarioRunStep {
   error: string
   cost: number
   tokens: number
+  /**
+   * Why the head took this card's work over from its own session, and empty (or absent, from an IDE older
+   * than the setting) when it never had to - see ScenarioHead.onGiveUp.
+   */
+  takeOver?: string
 }
 
 export interface ScenarioRunNote {
@@ -640,6 +727,8 @@ export interface ScenarioRunSummary {
   nudges?: number
   /** What it has stopped to ask, when it is standing on a question. Empty otherwise. */
   asking?: string
+  /** Whether the card it is on is being finished by the main thread itself (see ScenarioRunStep.takeOver). */
+  takingOver?: boolean
 }
 
 /**
@@ -680,17 +769,30 @@ type ShellMessageBody =
       pluginVersion?: string
       /** The choice of model, effort and mode: it outlives both tabs and IDE restarts. */
       preferences?: {
+        /**
+         * What "as last chosen" comes to right now: the model and the effort a new tab starts on with
+         * nothing pinned. The account in use first and the machine's last pick after it, so not simply
+         * the last pick (see StartingChoice) - the "New chats" screen names it beside that entry.
+         */
         model: string
         effort: string
         mode: string
         /**
          * What a new tab is PINNED to, beside what was last chosen above. Empty - the usual case -
-         * means "whatever was last chosen", which is what the panel did before the setting existed:
-         * then an untouched tab is drawn by `model`/`effort`, and a pinned one by these (see
+         * means "whatever was last chosen", which is what the panel did before the setting existed (see
          * ClaudePreferences.newTabModel).
          */
         newTabModel?: string
         newTabEffort?: string
+        /**
+         * What an untouched tab is drawn by - the answer itself, worked out by the IDE and only there: it
+         * reads the pins, the account in use and what it remembers, and which models that account can
+         * run (see StartingChoice). The chip over an empty tab is a promise about the process the IDE
+         * will launch, and a formula of the panel's own broke it whenever the account's memory differed
+         * from the machine's last pick.
+         */
+        startingModel?: string
+        startingEffort?: string
         /** Where the input field sits. Unset means a panel opened for the first time, behaving as before (at the bottom). */
         composerLayout?: string
         /**
@@ -715,6 +817,11 @@ type ShellMessageBody =
          */
         calmVivid?: number
         /**
+         * The indicators around the input field switched off by hand (see indicators.ts). What is stored
+         * is what is OFF, so an empty list - or none at all - means every one of them shown.
+         */
+        hiddenIndicators?: string[]
+        /**
          * The language chosen by hand. Empty - which is the usual case - means "whatever the IDE
          * speaks", so that a Chinese IDE gets a Chinese panel without anyone having to find the switch.
          */
@@ -724,6 +831,16 @@ type ShellMessageBody =
          * which language "Automatic" means right now rather than promise something unnamed.
          */
         ideLanguage?: string
+        /**
+         * Whether the tabs open when the project closed come back when it opens again, drafts and all.
+         * Unset - a plugin older than the setting - reads as on, which is the default.
+         */
+        restoreTabs?: boolean
+        /**
+         * Whether a message carries the open file and the selected lines. Unset - a plugin older than the
+         * setting - reads as on, which is the default (see ClaudePreferences.shareEditor).
+         */
+        shareEditor?: boolean
       }
       /** The sound alert settings - they outlive an IDE restart. */
       sounds?: SoundSettings
@@ -744,6 +861,33 @@ type ShellMessageBody =
    */
   | { type: 'locale'; language?: string; ideLanguage?: string }
   /**
+   * Codex's own settings - its `config.toml` - for the screen `/config` opens in the panel (see
+   * CodexConfig.tsx and CodexConfigDesk on the IDE's side), with the project's own layer above them.
+   *
+   * `loading` while Codex is being asked; `error` is one of the screen's own words - `noCli` - rather than
+   * a sentence. `outcome` says how the last change went (`message` is Codex's own refusal, or `overridden`
+   * for a value written and overruled by the project or a policy), and only a panel waiting on that very
+   * key reads it: the hub hands this message to a page that joins later, and an old outcome must not
+   * surface there.
+   */
+  | {
+      type: 'codexConfig'
+      settings: CodexConfigSetting[]
+      project?: CodexProjectLayer
+      loading?: boolean
+      error?: string
+      outcome?: { key: string; ok: boolean; message?: string }
+    }
+  /**
+   * A conversation came up on a named account that the repository's settings overrule - these are the
+   * names doing it.
+   *
+   * The CLI applies a settings file's `env` over the environment it was handed, so a checked-in key
+   * beats the account chosen in the panel without a word from anyone. Nothing else can notice it, and
+   * the panel would go on drawing that account's name and its limits while somebody else pays.
+   */
+  | { type: 'accountOutranked'; sessionId: string; names: string[]; reason?: OutrankedReason }
+  /**
    * The no-stress colour mode, on its own for the same two readers as the language above: a phone never
    * sees `init`, and a machine-wide setting switched in one window has to reach the other.
    *
@@ -755,6 +899,12 @@ type ShellMessageBody =
    */
   | { type: 'calmColors'; vivid: number; on?: boolean }
   /**
+   * Which indicators around the input field are switched off, after somebody flipped one - in this window
+   * or another (the setting is the machine's). A joining window learns it from `init` and then from this,
+   * in that order (see PROJECT_ORDER in ClaudeSessionHub). Never sent to a phone.
+   */
+  | { type: 'indicators'; hidden: string[] }
+  /**
    * The models somebody added by hand, on its own for the same two readers as the two above.
    *
    * They stand beside the catalogue rather than inside it, and that is the whole point: the catalogue
@@ -765,14 +915,27 @@ type ShellMessageBody =
   | { type: 'customModels'; models: string[] }
   /**
    * What a new tab starts with, on its own beside `init` for the same reason the three above stand
-   * apart: the setting is machine-wide, and a second window is already past its own `init`.
+   * apart: the setting is machine-wide, and a second window is already past its own `init`. Sent again
+   * whenever anything the answer reads changes - a pin, a pick, the account chosen, what an account
+   * remembers, which models it can run, the hand-added list (see ClaudeSessionHub.announceNewTabDefaults).
    *
    * `model` and `effort` are the pins and travel empty when nothing is pinned - empty means "whatever
-   * was last chosen". `mode` is resolved rather than raw: a mode nobody ever chose is Claude Code's own
-   * default for that directory, and the selector has to name what the process will genuinely come up
-   * with (see PermissionDefaultMode).
+   * was last chosen". `startingModel`/`startingEffort` are what an untouched tab is drawn by, and
+   * `unpinnedModel`/`unpinnedEffort` what "as last chosen" comes to - both worked out by the IDE, the
+   * same way `init` carries them. `mode` is resolved rather than raw: a mode nobody ever chose is Claude
+   * Code's own default for that directory, and the selector has to name what the process will genuinely
+   * come up with (see PermissionDefaultMode).
    */
-  | { type: 'newTabDefaults'; model: string; effort: string; mode: string }
+  | {
+      type: 'newTabDefaults'
+      model: string
+      effort: string
+      mode: string
+      startingModel: string
+      startingEffort: string
+      unpinnedModel: string
+      unpinnedEffort: string
+    }
   | {
       type: 'usage'
       /**
@@ -788,6 +951,12 @@ type ShellMessageBody =
       account?: string
       session?: UsageWindow
       week?: UsageWindow
+      /**
+       * The per-model weekly windows (Fable), always as a whole list. An empty list is news - the plan
+       * keeps no such week, and a ring for it goes - while an absent field says nothing about them, like
+       * every other field here.
+       */
+      models?: ModelUsageWindow[]
       /**
        * Everything known about the subscription is somebody else's now: the sign-in has moved to another
        * account (see ProjectUsage.forget). Said out loud because the message is merged field by field -
@@ -852,17 +1021,102 @@ type ShellMessageBody =
    */
   | { type: 'queue'; sessionId: string; items: QueuedMessage[] }
   /**
+   * A queued message taken out to be edited (see takeQueued), to whoever pressed the pencil and to nobody
+   * else - it is going into one field.
+   *
+   * In the pieces it was typed in rather than as the text the agent would have read: the field takes a
+   * message back as chips, and a pasted image's bytes travel inside its chip. `tokens` is missing only for
+   * a message that came without them, and then the text is all there is.
+   */
+  | {
+      type: 'queuedTaken'
+      sessionId: string
+      id: string
+      /** The message that stood right after it - where Queue puts it back. Absent when it was the last. */
+      before?: string
+      text: string
+      tokens?: unknown
+      quotes?: string[]
+    }
+  /**
    * How a bash-mode command ended. stdout and stderr separately: they travel to the agent as separate
    * fields, as Claude Code itself does it - by them one can see that a command complained even when
    * the exit code was zero.
    */
   | { type: 'bashResult'; sessionId: string; id: string; exitCode: number; stdout: string; stderr: string }
   /**
+   * How a side question ended (`/btw`, see sideQuestion below) - told to the one client that asked it.
+   *
+   * `answered` carries the model's words and, rarely, `notice`: the CLI's word about a model that declined
+   * and the one that answered instead. `empty` came back without an answer of the model's - `text` is the
+   * CLI's own placeholder saying why, when there is one. `failed` names its `reason`: the process went away
+   * (`ended`), nothing came back in time (`timeout`), or the CLI answered with an error (`refused`, the
+   * error in `message`).
+   */
+  | {
+      type: 'sideAnswer'
+      sessionId: string
+      id: string
+      outcome: 'answered' | 'empty' | 'cancelled' | 'failed'
+      text?: string
+      notice?: string
+      reason?: 'ended' | 'timeout' | 'refused'
+      message?: string
+    }
+  /**
+   * A side question still being worked on: `started` once the CLI has taken it, `api_retry` for each new
+   * attempt at an API call that failed - with the CLI's own retry counters.
+   */
+  | {
+      type: 'sideProgress'
+      sessionId: string
+      id: string
+      status: string
+      attempt?: number
+      maxRetries?: number
+      delayMs?: number
+      errorStatus?: number
+    }
+  /**
    * The tabs as the shell keeps them. It is the shell that owns this list now: the interface makes the
    * identifiers up (a "+" has to answer instantly) but the order, the grouping and the names live on
    * the other side, where a second client can see them too.
    */
   | { type: 'sessions'; sessions: SessionInfo[] }
+  /**
+   * Which tab to put on screen: the one that was there when the panel was last closed or reloaded, empty
+   * when there is none to name. Sent to the panel alone, right after `sessions` whenever it joins - and
+   * always, because the panel reports its own tab only once it has heard this (see tabShown).
+   */
+  | { type: 'activeTab'; sessionId: string }
+  /**
+   * The drafts the IDE holds for the tabs - what was being written in each input field when the panel
+   * was last closed or reloaded (see TabMemory on the plugin's side). Read as it comes, off disk: the
+   * page checks every token before a field is given it (see restoredDraft). Always sent once on joining,
+   * even empty - the panel reports its own drafts only after this, so it never reports a field empty over
+   * a draft it has not been handed yet.
+   */
+  | { type: 'drafts'; drafts: Record<string, { tokens?: unknown; quotes?: unknown }> }
+  /** Whether the tabs come back after a restart - told to every window when it is switched. */
+  | { type: 'restoreTabs'; on: boolean }
+  /** The same, for whether a message carries what the editor shows - changed in this or another window. */
+  | { type: 'shareEditor'; on: boolean }
+  /**
+   * The anonymous usage statistics' state on this machine: whether the question has been answered, and when
+   * a report last went through (zero for never). Not to be confused with `usage` above, which is the
+   * subscription's limits - a different thing that happens to share the word. Sent when the panel opens
+   * and whenever either changes - in any IDE on the machine, since the answer is kept in one file for all
+   * of them (see UsageState).
+   */
+  | { type: 'usageStats'; consent: UsageStatsConsent; lastSent: number }
+  /** The report as it would go next, whole - the answer to `usageStatsPreview`. Empty if it could not be built. */
+  | { type: 'usageStatsReport'; text: string }
+  /**
+   * What the editor beside this panel shows now - the file in front of the person and the lines selected in
+   * it, or nothing (no text editor open, or a file the agent could not read). Sent as it changes, to this
+   * window only: a phone has no editor beside it.
+   */
+  | { type: 'editorContext'; context?: EditorRef }
   /**
    * A conversation's feed is about to be handed over from the shell's journal - everything up to
    * restoreFinished belongs to it and is applied as one change rather than one entry at a time.
@@ -962,7 +1216,15 @@ type ShellMessageBody =
       tokens?: unknown
       quotes?: string[]
       steering?: boolean
+      /** What the editor showed when the message was sent, as the IDE read it - the line under the card. */
+      editor?: EditorRef
     }
+  /**
+   * A phone's message has arrived, said to that phone alone (see SessionCommands.takeOnce in the plugin).
+   * The phone keeps what it sent until it hears this, and sends it again when it does not - see
+   * mobile/outbox.ts. Sent for a copy the IDE dropped as well: that copy is the phone asking again.
+   */
+  | { type: 'promptReceived'; sessionId: string; id: string }
   | { type: 'askResolved'; sessionId: string; id: string; outcome: 'answered' | 'dismissed' | 'withdrawn' }
   | { type: 'status'; sessionId: string; state: AgentStatus }
   /**
@@ -1076,6 +1338,11 @@ type ShellMessageBody =
       executablePath?: string
       /** Where the executable was looked for - arrives only when it was not found. */
       searched?: string[]
+      /**
+       * The project's own Codex settings, by name, that keep the credential in the account's drawer from
+       * counting as a sign-in here - a demanded sign-in method or workspace. Arrives only then.
+       */
+      heldBackBy?: string[]
     }
   /**
    * The sign-in could not even be started: there was no terminal to run it in, or the account in force
@@ -1255,19 +1522,6 @@ type ShellMessageBody =
   | {
       type: 'scenarioLive'
       runs: ScenarioRunSummary[]
-      /**
-       * The newest run of this project that is OVER, when it has ever had one.
-       *
-       * Here rather than only on the shelves because of who reads this message. The shelves are tens of
-       * kilobytes and reach one project at a time - whichever a phone is actually watching - while this
-       * one is a few hundred bytes and reaches every paired device (see RemoteFeed.isOverview). A project
-       * card away from that project could therefore say what is running and nothing about what ran: a
-       * scenario started at four in the morning and finished by breakfast left the card blank.
-       *
-       * Absent from an IDE older than this field, and absent when the project has never run anything -
-       * which the screen draws the same way, as no row.
-       */
-      last?: ScenarioRunSummary
     }
   /**
    * What is lined up to run one after another (see ScenarioQueue).
@@ -1400,14 +1654,37 @@ type ShellMessageBody =
    */
   | { type: 'dockAnchor'; anchor: 'left' | 'right' | 'top' | 'bottom' }
   /**
-   * The fonts from the IDE's settings. The panel's contents are drawn in the console font - the same as
-   * the built-in terminal - and what surrounds them in the interface font. It arrives at startup and
-   * again on every change of colour scheme or look and feel.
-   *
-   * There is no size here on purpose: the whole page is scaled by the embedded browser's zoom (see
-   * IdeTypography.kt on the plugin's side), so the layout knows nothing about it.
+   * A sound from the open tab did play: the person was away from it - the panel out of sight or the IDE's
+   * window not the one in front (see the `sound` message's `onlyIfAway`). Only the shell can know that, and
+   * it is the one case in which the tab on screen lights up too (see TabCall).
    */
-  | { type: 'typography'; monoFamily: string; uiFamily: string; lineHeight: number }
+  | { type: 'calledAway'; sessionId: string; sound: SoundId }
+  /**
+   * The fonts from the IDE's settings. The panel's contents are drawn in the console font - the same as
+   * the built-in terminal - and what surrounds them in the interface font. It arrives at startup, again on
+   * every change of colour scheme or look and feel, and whenever the panel's own text size is set.
+   *
+   * The sizes are for the settings screen alone, not for the layout: the whole page is scaled by the
+   * embedded browser's zoom (see IdeTypography.kt on the plugin's side), so the styles know nothing about
+   * them. `textSize` is the panel's own size in points, 0 while it follows the console's; `size` is what
+   * it is drawn at as a result. Absent from a plugin older than the setting - read as "follows".
+   */
+  | {
+      type: 'typography'
+      monoFamily: string
+      uiFamily: string
+      lineHeight: number
+      consoleSize?: number
+      textSize?: number
+      size?: number
+    }
+  /**
+   * The panel's theme: the choice made in its settings ('dark', 'light', or '' for the IDE's) and whether
+   * the IDE is dark right now. Sent as the two rather than as the theme they amount to - the settings
+   * screen shows "as in the IDE" as a choice of its own - and resolved by the page (see theme.ts). It
+   * arrives when the page is ready, on every change of the IDE's look and feel, and on every choice.
+   */
+  | { type: 'theme'; theme: string; ideDark: boolean }
   /**
    * The statistics tab's figures - the answer to the `statistics` request. The machine's days in full,
    * every project's minutes by day, and the achievements as they stand: the range shown (a week, a
@@ -1692,6 +1969,11 @@ export type WebviewMessage =
       text: string
       /** Images from the clipboard: bytes rather than a path for a tool to read. */
       images?: { mediaType: string; data: string }[]
+      /**
+       * Carry what the editor beside the panel shows - the IDE reads it the moment this arrives and puts it
+       * beside the text (see EditorContext.kt). Honoured from this IDE's own panel only.
+       */
+      editor?: boolean
     }
   /**
    * The same message, to be said when the agent comes free rather than now.
@@ -1712,9 +1994,21 @@ export type WebviewMessage =
       tokens?: unknown
       quotes?: string[]
       images?: { mediaType: string; data: string }[]
+      /**
+       * A message taken out for editing, going back to where it stood: before this one (see queuedTaken).
+       * Gone by now, it goes to the end like any other.
+       */
+      before?: string
+      /** The same as a prompt's - read when Queue is pressed, not when the message fires. */
+      editor?: boolean
     }
   /** The cross on a queued message: it is not going to be said after all. */
   | { type: 'unqueuePrompt'; sessionId: string; id: string }
+  /**
+   * The pencil on a queued message: take it out and hand it back to this window's field, whole (see
+   * queuedTaken). Out of the queue while it is being edited, so the end of the turn cannot fire it half-way.
+   */
+  | { type: 'takeQueued'; sessionId: string; id: string }
   /** The queue dragged into another order - the identifiers, in the order they are to fire. */
   | { type: 'reorderQueue'; sessionId: string; ids: string[] }
   /**
@@ -1722,6 +2016,21 @@ export type WebviewMessage =
    * not the agent. The answer arrives as a single bashResult with the same id.
    */
   | { type: 'bash'; sessionId: string; id: string; command: string }
+  /**
+   * A question beside the conversation - `/btw`. The agent is not interrupted and never sees it: the CLI
+   * answers from the conversation's context with no tools and writes nothing into the transcript (see
+   * SideQuestion.kt). `history` is the thread's earlier exchanges, so a follow-up has them; progress and
+   * the answer come back as sideProgress and sideAnswer under the same id.
+   */
+  | {
+      type: 'sideQuestion'
+      sessionId: string
+      id: string
+      question: string
+      history: { question: string; response: string; notice?: string }[]
+    }
+  /** Taking a side question back while it is still out - it then ends as `cancelled`. */
+  | { type: 'sideQuestionCancel'; sessionId: string; id: string }
   | { type: 'stop'; sessionId: string }
   /** The ordinary Stop went unconfirmed - the user asked outright to kill the process. */
   | { type: 'kill'; sessionId: string }
@@ -1760,6 +2069,12 @@ export type WebviewMessage =
    * same one, and a copy of it in another language would drift from this one.
    */
   | { type: 'renameSession'; sessionId: string; title: string }
+  /**
+   * The name the person typed into the tab themselves (see Header). It outranks every other, and the
+   * shell writes it into the conversation's transcript - where the history, the search and the CLI's own
+   * resume list read names from. Not sent from a phone: its list has no field to type one into.
+   */
+  | { type: 'nameSession'; sessionId: string; title: string }
   /** The tabs' new order after a drag - by group, as moveTab arranges it. The statistics tab is the panel's own and is never reported here. */
   | { type: 'reorderGroups'; groupId: string; beforeGroupId?: string }
   /**
@@ -1859,6 +2174,11 @@ export type WebviewMessage =
        * arrives without this flag: there it has to sound in any case.
        */
       onlyIfAway?: boolean
+      /**
+       * The tab it came from, so that a sound the shell did play over the open tab can be answered with
+       * `calledAway` about that tab. Absent from the "listen" button, which belongs to no tab.
+       */
+      sessionId?: string
     }
   /** The sound checkboxes and volumes: the shell keeps them along with the model and the mode. */
   | { type: 'soundSettings'; muted: SoundId[]; volumes: Record<string, number> }
@@ -1889,11 +2209,44 @@ export type WebviewMessage =
   | { type: 'setPasteCollapse'; lines: string }
   /** Which key sends a message - 'enter' or 'modEnter'. Machine-wide, like the layout (see sendKey.ts). */
   | { type: 'setSendKey'; key: string }
+  /** The screen of Codex's own settings, opening - see the `codexConfig` message. */
+  | { type: 'askCodexConfig' }
+  /**
+   * One of Codex's own settings changed. The IDE writes only a key the screen offers, with a value that
+   * fits it (see CodexConfig.wireValue).
+   */
+  | { type: 'setCodexConfig'; key: string; value: string }
+  /**
+   * Trust this project or stop trusting it - Codex reads a project's own settings, hooks and exec policies
+   * only once it is trusted (see CodexConfigDesk.trust). The desk's alone: a phone may not change what a
+   * repository is allowed to run.
+   */
+  | { type: 'setProjectTrust'; trusted: boolean }
   /**
    * How much colour the gauges keep, 0..100. Machine-wide beside the layout and the send key: whether a
    * red gauge presses on somebody is a property of the person rather than of the repository.
    */
   | { type: 'setCalmColors'; vivid: number }
+  /**
+   * The panel's theme - 'dark', 'light', or '' for the IDE's - and its text size in points, 0 for the
+   * console font's. Machine-wide, and about this desk's screen alone: the phone follows its own light or
+   * dark and is never handed either (see RemoteCommands).
+   */
+  | { type: 'setTheme'; theme: string }
+  | { type: 'setTextSize'; size: number }
+  /**
+   * The tabs coming back after a restart, the panel's two halves of it: what is being written in a tab's
+   * input field (null when it is empty - the message went, or the words were deleted), and which tab is
+   * on screen. Pasted pictures travel without their bytes - they are on disk already (see savableDraft).
+   * And the switch for the whole thing, machine-wide.
+   */
+  | { type: 'saveDraft'; sessionId: string; draft: { tokens: unknown[]; quotes: unknown[] } | null }
+  | { type: 'tabShown'; sessionId: string }
+  | { type: 'setRestoreTabs'; on: boolean }
+  /** Whether a message sent from the panel carries what the editor shows (see EditorContext.kt). */
+  | { type: 'setShareEditor'; on: boolean }
+  /** Which indicators around the input field are switched off - the whole list (see indicators.ts). */
+  | { type: 'setHiddenIndicators'; hidden: string[] }
   /**
    * The whole list of hand-added models, never a single addition or removal.
    *
@@ -2112,6 +2465,19 @@ export type WebviewMessage =
   /** Which way of saying thanks was taken: the star, the review, or the line copied - see Thanks.tsx. */
   | { type: 'stat'; kind: 'thanks'; way: string }
   /**
+   * A feature used that only the interface sees - a screen of the menu opened, a message pinned. The id is
+   * one of the few the IDE accepts from the panel (UsageFeatures.isPanelFeature); anything else is dropped.
+   * Everything a press sends to the IDE anyway is counted there, and is never reported here as well.
+   */
+  | { type: 'stat'; kind: 'feature'; id: string }
+  /**
+   * The answer to whether the anonymous usage report may go - from the card that asks, or the switch in
+   * the settings. A no also asks the service to delete what was already sent (see UsageReporter).
+   */
+  | { type: 'setUsageStats'; granted: boolean }
+  /** Build the report as it would go next and answer with `usageStatsReport`. */
+  | { type: 'usageStatsPreview' }
+  /**
    * Feedback: a message to the plugin's author, with files and a debug report beside it.
    *
    * All of it is handled by the panel's own window rather than by the conversation's commands (see
@@ -2203,6 +2569,13 @@ export type WebviewMessage =
   | { type: 'scenarioSave'; scenario: Scenario; scope: ScenarioScope }
   | { type: 'scenarioDelete'; id: string; scope: ScenarioScope }
   | { type: 'scenarioDuplicate'; id: string; scope: ScenarioScope }
+  /**
+   * A row dragged to a new place: on its own shelf, or over onto the other one - which moves its file.
+   *
+   * Named by the row it now stands before (empty for last) rather than by a number: two windows draw these
+   * shelves, and an index is a place in whatever this one last saw (see ScenarioStore.place).
+   */
+  | { type: 'scenarioPlace'; id: string; from: ScenarioScope; to: ScenarioScope; before: string }
   /**
    * One scenario, with every word of it - what the editor is opened on.
    *
@@ -2434,6 +2807,9 @@ export type VoiceBalance =
 /** What a piece of feedback is about. The words on the screen differ; these are what travel. */
 export type FeedbackKind = 'bug' | 'idea' | 'hello'
 
+/** Where the usage question stands on this machine: never answered, allowed, declined. */
+export type UsageStatsConsent = 'unknown' | 'granted' | 'declined'
+
 /**
  * A file picked for a piece of feedback, as the panel is allowed to know it: enough to draw a row and
  * to take it back off the list, and nothing that says where on the disk it came from.
@@ -2664,7 +3040,28 @@ export interface AgentUserEvent {
    * opened.
    */
   isMeta?: boolean
+  /**
+   * Why this record exists, when the CLI wrote it for a reason of its own: `task-notification` is a
+   * background agent reporting its end, handed to the conversation as a message in the person's name.
+   *
+   * The second mark beside `isMeta`, which such a record does not carry (checked across every transcript
+   * on the machine: sixty-four notifications, not one of them marked). It says the same thing about the
+   * record and says it in a field, so it holds where the text does not - a notification longer than the
+   * history's limit arrives cut in half (see JournalTrim), and what was cut off is exactly the end tag
+   * everything else recognised it by.
+   */
+  origin?: { kind?: string } | null
   timestamp?: string
+  /**
+   * What the tool handed back, in the shape it handed it back - the transcript keeps it beside the text
+   * form of the same result, and only a saved conversation has it.
+   *
+   * The panel reads one thing out of it: the options a question was closed with (see addReplayedAnswers
+   * in build.ts). The text form of that same result is an English sentence the CLI composes ("Your
+   * questions have been answered: …"), and reading the pairs back out of a sentence would be a parser
+   * for wording nobody promised to keep.
+   */
+  toolUseResult?: { answers?: Record<string, string> }
 }
 
 export interface AgentUsage {
@@ -2689,6 +3086,17 @@ export interface AgentResultEvent {
   subtype: string
   result?: string
   is_error?: boolean
+  /**
+   * The response code the model's own request came back with, when the turn died on one (`terminal_reason`
+   * is then `api_error`). Absent from every other ending.
+   *
+   * The one machine mark this kind of refusal has. Its word-sized twin beside the answer
+   * (AgentAssistantEvent.error) is no help here: measured against an endpoint refusing with 400, the CLI
+   * calls it `unknown` - the vocabulary of `authentication_failed` and `rate_limit` has no entry for a
+   * request the server would not take at all (2.1.273). See "A request the server would not take" in
+   * .claude/rules/setting-sources.md.
+   */
+  api_error_status?: number | null
   duration_ms?: number
   num_turns?: number
   total_cost_usd?: number

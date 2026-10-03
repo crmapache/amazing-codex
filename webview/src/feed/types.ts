@@ -4,6 +4,7 @@
  * list, the plan, the questions), some from system events.
  */
 
+import type { EditorRef, OutrankedReason } from '../protocol'
 import type { WorkflowView } from './workflow'
 
 /**
@@ -236,6 +237,12 @@ export interface UserItem {
    * the press of Send, before the CLI has written it anywhere, so a hit on it is found by its text.
    */
   uuid?: string
+  /**
+   * What the editor showed when the message went, carried to the agent beside it (see EditorContext.kt) -
+   * drawn as a line under the message, so what the agent was shown is on screen too. Read back out of the
+   * transcript for a past conversation (see feed/editorContext.ts).
+   */
+  editor?: EditorRef
 }
 
 export interface TextItem {
@@ -531,12 +538,33 @@ export interface AskItem {
    * A question out of a past conversation's replay rather than a live turn.
    *
    * Such a question is not shown as a card: there is nobody left to answer it - the turn that asked
-   * ended some time in the past - and the answer, if there was one, stands in the feed as the person's
-   * very next message. A tab opened from the history would otherwise greet the person with a card of
-   * options floating over the input field about a question from the week before last, and it would hold
-   * the panel until closed.
+   * ended some time in the past - and the answer to it stands in the feed right under it, as the
+   * person's own line (see addReplayedAnswers). A tab opened from the history would otherwise greet the
+   * person with a card of options floating over the input field about a question from the week before
+   * last, and it would hold the panel until closed.
+   *
+   * With one exception: a question the conversation ENDED on was never answered at all, and it comes
+   * back live - see revivedAsk in build.ts.
    */
   historic?: boolean
+  /**
+   * The call came back - with an answer, with a refusal, with an interruption, it makes no difference
+   * here. Set wherever a result arrives, live or replayed, and read in exactly one place: it is what
+   * tells a question that was dealt with from the one a conversation was abandoned on (see revivedAsk).
+   * A card on screen is not driven by it - that is answeredAsks in useCardState, which knows what was
+   * pressed here rather than what the transcript holds.
+   */
+  answered?: boolean
+  /**
+   * This question came back with a conversation opened from the history rather than being asked by a
+   * turn happening now (see revivedAsk).
+   *
+   * Nothing in the panel's behaviour turns on it - the card is answered exactly like any other - it is
+   * only what the card says about itself. Its usual two lines are both false here: there is no run for
+   * the question to block and none for the answer to continue, because the process that asked died with
+   * the IDE. The answer goes on as the next message instead, and the card says so.
+   */
+  reopened?: boolean
 }
 
 export interface CheckpointItem {
@@ -717,6 +745,33 @@ export interface ModelStuckItem {
   running: string
 }
 
+/**
+ * The repository's settings overrule the account this conversation came up on.
+ *
+ * Claude Code applies a settings file's `env` over the environment it was handed, and the repository's
+ * layers outrank the person's own. So a checked-in `ANTHROPIC_API_KEY` or base URL wins over the account
+ * chosen in the panel - silently: the turn runs, answers and is billed, while the panel goes on drawing
+ * the account nobody is paying with. With a dead address it does not even answer, and a panel that is
+ * waiting looks exactly like a panel that is thinking.
+ *
+ * A row rather than an error, because nothing is broken: the setup may be exactly what its owner wanted.
+ * What they cannot do is fix what they cannot see - so the row names what is overriding the account and
+ * where the switch is (see SettingSources).
+ *
+ * [names] are variable names and never values: what stands in that block is a key.
+ */
+export interface OutrankedItem {
+  id: string
+  kind: 'outranked'
+  names: string[]
+  /**
+   * What stands in the way: the project's settings demand another sign-in than the conversation's
+   * (`account`), or the project has settings of its own that Codex does not read because the project is
+   * not trusted (`untrusted` - then [names] are what those settings would set).
+   */
+  reason: OutrankedReason
+}
+
 /** The conversation's process died on its own - a separate, unambiguous mark in the feed. */
 export interface CrashItem {
   id: string
@@ -748,9 +803,21 @@ export interface ErrorItem {
    * end - which is exactly what the feedback this was built for said.
    *
    * Not set in a replay: a sign-in that fell over a month ago is a record, and a past conversation must
-   * not ask anybody to fix anything (see "A past conversation is a record" in CLAUDE.md).
+   * not ask anybody to fix anything (see "A past conversation is a record" in .claude/rules/history.md).
    */
   signIn?: boolean
+  /**
+   * The request was refused because of a sampling parameter - `temperature`, `top_p`, `top_k` - which the
+   * models from Opus 4.7 onwards no longer take.
+   *
+   * A fact rather than a conclusion, and the row draws the conclusion from it: a turn of Claude Code's own
+   * carries no such parameter, so one that arrived at Anthropic with it was changed on the way - by a
+   * gateway or a proxy the requests are routed through. Without that sentence the feed shows a bare
+   * refusal in the API's words, and the panel gets reported for it - which is how this arrived.
+   *
+   * See "A request the server would not take" in .claude/rules/setting-sources.md.
+   */
+  sampling?: boolean
 }
 
 /**
@@ -805,6 +872,7 @@ export type FeedItem =
   | ModelSwitchItem
   | ModelStuckItem
   | CrashItem
+  | OutrankedItem
   | ErrorItem
   | LimitItem
 

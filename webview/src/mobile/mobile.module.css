@@ -71,6 +71,13 @@
 .list {
   flex: 1 1 auto;
   overflow-y: auto;
+  /* Never sideways, and the same goes for every other scroller of the phone's own (the sheets, the limits,
+     a decision, the drawer) - the feed has had it all along. A scroller that is left `auto` one way is
+     `auto` the other way too, so one word too long for its line - a migration's file name in a run's error
+     - made the whole list a thing a thumb drags sideways, with every line of it cut off at the left edge.
+     The words themselves wrap (see mobile.css); this is what keeps the screen still when one of them slips
+     through anyway. */
+  overflow-x: hidden;
   /* No pull-to-refresh: there is nothing to refresh - the feed arrives on its own - and the gesture
      would fight the scroll at the top of every list. */
   overscroll-behavior-y: contain;
@@ -480,7 +487,7 @@
 }
 
 .choiceDanger {
-  color: var(--acc-danger, #e06c75);
+  color: var(--acc-bad);
 }
 
 /* The gap between two rows of choices - enough that the open one does not run into the next. */
@@ -491,7 +498,7 @@
 .startError {
   margin: 0;
   padding: var(--acc-sp-4) var(--acc-sp-5);
-  color: var(--acc-danger, #e06c75);
+  color: var(--acc-bad);
   font-size: 13px;
   line-height: 1.5;
 }
@@ -596,6 +603,58 @@
 }
 
 /*
+ * A message sent and not yet confirmed by the IDE (see mobile/outbox.ts) - the same strip as the queue
+ * under it, because it is the same kind of thing: something said that has not reached the conversation.
+ * "Sending" is said quietly, "not delivered" in the colour of something that needs a hand.
+ */
+.unsentList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--acc-sp-2) var(--acc-sp-5);
+  border-top: 1px solid var(--acc-line);
+  background: var(--acc-bg-raised);
+}
+
+.unsentRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--acc-hit);
+}
+
+.unsentState {
+  flex: none;
+  font: var(--acc-fs-label) var(--acc-mono);
+  color: var(--acc-fg-faint);
+}
+
+.unsentFailed {
+  color: var(--acc-warn);
+}
+
+.unsentText {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--acc-fg-dim);
+}
+
+.unsentRetry {
+  flex: none;
+  min-height: var(--acc-hit);
+  padding: 0 var(--acc-sp-3);
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-pill);
+  background: var(--acc-bg-control);
+  color: var(--acc-fg);
+  font-size: 13px;
+}
+
+/*
  * The composer: three rows, and the division between them is the whole idea. What is read never
  * moves, and what is pressed is never where a thumb might brush it by accident.
  */
@@ -683,9 +742,9 @@
   gap: 6px;
   max-width: 100%;
   padding: 4px 6px 4px 4px;
-  border: 1px solid rgb(168 148 242 / 32%);
+  border: 1px solid var(--acc-agent-32);
   border-radius: var(--acc-r-sm);
-  background: rgb(168 148 242 / 12%);
+  background: var(--acc-agent-12);
   color: var(--acc-agent-light);
   font: 12px var(--acc-mono);
   overflow: hidden;
@@ -895,6 +954,14 @@
   opacity: 0.4;
 }
 
+/* A side question (`/btw`) steps back from the solid fill that means "this goes to the agent" - the same
+   soft accent the desk's button and the card over the field wear (see composer.module.css .sendAside). */
+.sendAside {
+  border: 1px solid var(--acc-accent-line);
+  background: var(--acc-accent-soft);
+  color: var(--acc-accent);
+}
+
 /*
  * Queue and Stop stand beside Send rather than in place of it. While the agent works there are three
  * different things one might mean - reach the turn now, wait it out, end it - and the phone used to
@@ -955,7 +1022,7 @@
   border-bottom: 1px solid var(--acc-line);
   border-radius: var(--acc-r-card) var(--acc-r-card) 0 0;
   background: var(--acc-bg-panel);
-  box-shadow: 0 -14px 34px rgb(var(--acc-ch-shade) / 46%);
+  box-shadow: 0 -14px 34px var(--acc-drop);
 }
 
 .sheetGrab {
@@ -1001,6 +1068,8 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  /* Never sideways - see .list. */
+  overflow-x: hidden;
   overscroll-behavior: contain;
   padding: 0 var(--acc-sp-2) var(--acc-sp-3);
 }
@@ -1076,7 +1145,7 @@
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
-  background: rgb(var(--acc-ch-shade) / 46%);
+  background: var(--acc-scrim-soft);
 }
 
 .sheet {
@@ -1087,13 +1156,15 @@
   border-top: 1px solid var(--acc-line-strong);
   border-radius: var(--acc-r-card) var(--acc-r-card) 0 0;
   background: var(--acc-bg-panel);
-  box-shadow: 0 -18px 44px rgb(var(--acc-ch-shade) / 62%);
+  box-shadow: 0 -18px 44px var(--acc-drop-far);
 }
 
 .limBody {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  /* Never sideways - see .list. */
+  overflow-x: hidden;
   overscroll-behavior: contain;
   padding-bottom: var(--acc-sp-3);
 }
@@ -1189,6 +1260,8 @@
 .decisionBody {
   flex: 1 1 auto;
   overflow-y: auto;
+  /* Never sideways - see .list. A long command still scrolls, inside its own box (.decisionCommand). */
+  overflow-x: hidden;
   padding: var(--acc-sp-5) var(--acc-sp-5) var(--acc-sp-6);
 }
 
@@ -1289,7 +1362,7 @@
 
 .buttonDanger {
   border: 1px solid var(--acc-line-strong);
-  color: var(--acc-danger, #e06c75);
+  color: var(--acc-bad);
   background: none;
 }
 
@@ -1357,7 +1430,7 @@
 .pairingError {
   margin: 10px 0 0;
   font-size: 13px;
-  color: var(--acc-danger, #e06c75);
+  color: var(--acc-bad);
 }
 
 /* ===========================================================================
@@ -1513,8 +1586,8 @@
 
 /* The same caption on the list of projects, where the cards stand inset (see .project). A heading that
    begins at the screen's edge over cards that begin eighteen pixels in reads as a heading of the screen
-   rather than of the list under it. Not put on .bandTitle itself: the task screen shares that class and
-   its cards do run to the wall. */
+   rather than of the list under it. Not put on .bandTitle itself: every other screen that shares the class
+   stands its whole list off the edges instead (see .pageList), and a margin here would inset it twice. */
 .homeBand {
   margin-left: var(--acc-sp-5);
   margin-right: var(--acc-sp-5);
@@ -1569,6 +1642,9 @@
   border-radius: var(--acc-r-pill);
   font-size: 12.5px;
   line-height: 1.45;
+  /* What the IDE said, and it names files: a run's error carried a migration's name longer than the line,
+     and the note let it run out past its own edge and dragged the screen sideways with it. */
+  overflow-wrap: anywhere;
 }
 
 .noteOk {
@@ -1695,9 +1771,15 @@
 /* The two ways out of a project's card, on one row at its foot. Equal halves
    rather than a word and a square: at this width a square with a plus in it read
    as the card's own title bar rather than as the way into a conversation. */
+/*
+ * Three doors: the past conversations as a square icon, then the scenarios and a new chat sharing the rest.
+ *
+ * The icon is the width of its own height and no more - the two words it used to be took half the row away
+ * from the two doors that are pressed far more often.
+ */
 .projectFoot {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: var(--acc-hit) 1fr 1fr;
   gap: var(--acc-sp-2);
   /* No inset of its own: the card already has one, and the pair used to stand a step inside the chats
      above them - two left edges a few pixels apart, which reads as sloppy rather than as dense. */
@@ -1727,6 +1809,18 @@
 
 .footButton:disabled {
   opacity: 0.45;
+}
+
+.footButtonIcon {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: var(--acc-fg-dim);
+}
+
+.footIcon {
+  width: 18px;
+  height: 18px;
 }
 
 .footButtonAccent {
@@ -2040,7 +2134,7 @@
   position: fixed;
   inset: 0;
   z-index: 45;
-  background: rgb(var(--acc-ch-shade) / 55%);
+  background: var(--acc-scrim);
 }
 
 .drawer {
@@ -2053,7 +2147,7 @@
   flex-direction: column;
   background: var(--acc-bg-raised);
   border-right: 1px solid var(--acc-line);
-  box-shadow: 18px 0 44px rgb(var(--acc-ch-shade) / 62%);
+  box-shadow: 18px 0 44px var(--acc-drop-far);
 }
 
 .drawerHead {
@@ -2134,6 +2228,8 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  /* Never sideways - see .list. */
+  overflow-x: hidden;
   padding: var(--acc-sp-2) var(--acc-sp-2) var(--acc-sp-5);
 }
 
@@ -3046,10 +3142,18 @@
   display: flex;
   align-items: center;
   gap: var(--acc-sp-2);
+  /* The card's width, said out loud. This head is a button, and a button left to itself is as wide as what
+     it holds rather than as the card around it - so nothing in it ever had to shrink: a run named by a
+     Notion link laid the whole link out past the card's edge, and the screen scrolled sideways. A button
+     also centres its text of its own accord, which a card this wide would show. */
+  width: 100%;
+  text-align: left;
 }
 
+/* The name does not grow: the mark qualifies it and stands right after it, and the chevron goes to the
+   edge on its own margin, where every other row on the phone has it. */
 .runCardName {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3057,6 +3161,10 @@
   font-size: 15.5px;
   font-weight: 600;
   color: var(--acc-fg);
+}
+
+.runCardHead > .taskRowChevron {
+  margin-left: auto;
 }
 
 /*
@@ -3298,7 +3406,7 @@
 
 /* The danger of the two header words. Red standing rather than red on a press: it ends a run. */
 .headerWordDanger {
-  color: var(--acc-danger, #e06c75);
+  color: var(--acc-bad);
 }
 
 .timeline {
@@ -3402,29 +3510,27 @@
   color: var(--acc-accent);
 }
 
+/* Cut to three lines by the Glance it is drawn with. */
 .stepLine {
   font-family: var(--acc-mono);
   font-size: var(--acc-fs-meta);
   line-height: 1.5;
   color: var(--acc-fg-faint);
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  overflow-wrap: anywhere;
 }
 
+/* Bold inside a verdict keeps the verdict's colour: green or red is what the line says at a glance. */
 .stepVerdict {
   font-family: var(--acc-mono);
   font-size: var(--acc-fs-meta);
   line-height: 1.5;
   color: var(--acc-ok-text);
   overflow-wrap: anywhere;
+  --acc-glance-strong: currentColor;
 }
 
 .stepVerdictBad {
   color: var(--acc-bad-text);
+  --acc-glance-strong: currentColor;
 }
 
 .stepSlots {
@@ -3471,8 +3577,6 @@
 
 .noteText {
   min-width: 0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 
 /* --- The question a run is standing on --------------------------------------- */
@@ -3485,6 +3589,12 @@
  * can be a paragraph and a fixed block of one would leave no timeline underneath it.
  */
 /* What a finished run says first, and the two doors out of it - see the panel's .after. */
+/* How a run ended, under its last step: set off from the timeline by more than the steps are from each
+   other, because it is not one more of them. */
+.runEnd {
+  margin-top: var(--acc-sp-4);
+}
+
 .afterCard {
   margin: 0 0 var(--acc-sp-4);
   padding: var(--acc-sp-4);
@@ -3600,21 +3710,6 @@
   border-color: var(--acc-warn-16);
 }
 
-/*
- * A round of work that is over: the same row, without the promise.
- *
- * The accent on the border is what makes a live row read as something happening, and last night's run is
- * not. It keeps its place and its chevron - it is a door, and the door is the point - but it says so in
- * the voice the rest of a quiet card is written in.
- */
-.projectRunOver {
-  border-color: var(--acc-line-strong);
-}
-
-.projectRunOver .projectRunCount {
-  color: var(--acc-fg-dim);
-}
-
 .projectRunName {
   flex: 1 1 auto;
   min-width: 0;
@@ -3645,11 +3740,12 @@
    =========================================================================== */
 
 /*
- * The scenarios' own lists stand off the edges of the screen.
+ * A screen made of bordered cards stands them off the edges of the screen.
  *
- * Everywhere else here a card runs the full width, because a conversation is the screen. These are lists
- * of things to choose between - a shelf, a table of nights, a timetable - and a card that runs into the
- * edge reads as the screen itself rather than as one of several.
+ * Born for the scenarios and taken up by every screen of cards since - MCP, plugins, accounts, the task
+ * list and its agents. These are lists of things to choose between - a shelf, a table of nights, a list
+ * of servers - and a card that runs into the edge reads as the screen itself rather than as one of
+ * several, with its rounded corners cut off by the glass.
  */
 .pageList {
   composes: list;
@@ -3691,6 +3787,22 @@
   color: var(--acc-fg-ghost);
 }
 
+/* A turn has just gone onto the queue from a shelf that stays on screen: the count lights once and settles
+   back (useGrowthFlash, whose FLASH_MS is a little longer than this). Before .bandTabLive so that a stopped
+   queue keeps its own display and dot. */
+.bandTabGrew {
+  display: inline-block;
+  animation: accCountGrew 1.2s ease-out;
+}
+
+@keyframes accCountGrew {
+  0%,
+  25% {
+    color: var(--acc-accent-light);
+    transform: scale(1.35);
+  }
+}
+
 /* Something is going, and the count is the only thing on the strip that says so. */
 .bandTabLive {
   display: inline-flex;
@@ -3714,8 +3826,11 @@
 
 /* Which run of its scenario this is - a ticket, or the minute it started (see runMarks). */
 .runCardMark {
-  flex: none;
+  /* It gives way to the scenario's name and never takes more than a share of the line - the same rule as
+     the desk's (see .runCardMark in scenarios.module.css). */
+  flex: 0 1 auto;
   min-width: 0;
+  max-width: 45%;
   padding: 1px 6px;
   border-radius: var(--acc-r-xs);
   background: var(--acc-neutral-12);
@@ -4149,15 +4264,55 @@
 }
 
 /* The way into it, on the step's own row. */
+/*
+ * A step with a log behind it is a button the size of its card (see StepRow).
+ *
+ * The browser's own dress of a button is taken off - it would centre the text and change the font - and
+ * the press answers with the card's background, the only feedback a touch has.
+ */
+.stepOpens {
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.stepOpens:active {
+  background: var(--acc-bg-card);
+}
+
+/*
+ * The sign that the card opens its log, pushed to the far end of the pill's line, where a row's way on is
+ * looked for.
+ *
+ * The pill's twin in everything but colour: the same mono type at the same weight, the same padding,
+ * border, corner and background (see statePill.module.css). It used to be bold on an accent fill, and
+ * although its box and baseline matched the pill's to the pixel, it read as bigger and lower than the
+ * "Done" beside it - a heavy block with a descender against a light outline. What says "this opens" is
+ * the accent and the chevron; the card around it is the target.
+ */
 .stepLog {
   flex: none;
   display: inline-flex;
   align-items: center;
-  gap: 2px;
-  min-height: var(--acc-hit);
-  padding-left: var(--acc-sp-2);
-  font-size: var(--acc-fs-meta);
-  color: var(--acc-accent-light);
+  gap: 5px;
+  margin-left: auto;
+  padding: 2px 7px;
+  border: 1px solid var(--acc-accent-32);
+  border-radius: var(--acc-r-sm);
+  background: var(--acc-bg-raised);
+  font: var(--acc-fs-label) var(--acc-mono);
+  color: var(--acc-accent);
+  white-space: nowrap;
+}
+
+/* The shared chevron points down; this one points the way the card goes. */
+.stepLogChevron {
+  width: 8px;
+  height: 5px;
+  transform: rotate(-90deg);
 }
 
 /* --- The run's own timeline -------------------------------------------------- */

@@ -1,6 +1,7 @@
 package io.github.crmapache.amazingcodex.codex
 
 import com.intellij.openapi.diagnostic.thisLogger
+import io.github.crmapache.amazingcodex.scenario.ScenarioConversations
 import java.io.File
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
@@ -15,6 +16,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 
 /**
  * This project's past conversations.
@@ -38,39 +40,73 @@ internal object CodexHistory {
         val messages: Int,
         /** The name was given (by a model or by a person) rather than guessed from the first line. */
         val named: Boolean = false,
+        /**
+         * Whose name [title] is, in the tab's terms (see SessionSnapshot): a person's is shown whole and
+         * is never renamed by a model again, a model's is a stand-in - see AutoTitles.
+         */
+        val titleSource: String = SessionSnapshot.TITLE_HEURISTIC,
     )
 
     /** A page of a conversation in the panel's language; [cursor] is null once the beginning is on it. */
     data class Page(val lines: List<String>, val cursor: String?, val model: String = "")
 
+    /**
+     * The newest [limit] conversations of this project, without the ones a scenario run raised.
+     *
+     * Those are left out on purpose (see ScenarioConversations): a night of runs is a dozen conversations
+     * nobody held, and the list answers "what was I doing". Left out BEFORE the limit rather than after
+     * it: Codex hands the list out in pages, and filtering one page would leave a morning after a long
+     * night with a list of two rows - so the pages are read on until [limit] rows a person held are in
+     * hand or the threads run out, with a ceiling on the pages so a project of nothing but runs costs a
+     * bounded wait.
+     */
     fun list(workingDirectory: String?, limit: Int = 40): List<Entry> {
         val paths = CodexHome.of(workingDirectory).projectPaths
         if (paths.isEmpty()) return emptyList()
 
-        val result = CodexCatalog.call(
-            "thread/list",
-            buildJsonObject {
-                put("limit", limit)
-                put("sortKey", "updated_at")
-                putJsonArray("cwd") { paths.forEach { add(JsonPrimitive(it)) } }
-            },
-        ) as? JsonObject ?: return emptyList()
+        val hidden = ScenarioConversations(workingDirectory).all()
+        val givenByModel = AutoTitles(workingDirectory).all()
+        val entries = ArrayList<Entry>()
+        var cursor: String? = null
+        var pages = 0
 
-        return (result["data"] as? JsonArray).orEmpty().mapNotNull { element ->
-            val thread = element as? JsonObject ?: return@mapNotNull null
-            val id = AppServer.text(thread["id"]).ifEmpty { return@mapNotNull null }
-            val name = AppServer.text(thread["name"]).trim()
-            val preview = firstLine(AppServer.text(thread["preview"]))
-            AppServer.text(thread["path"]).takeIf { it.isNotEmpty() }?.let { files[id] = File(it) }
+        while (entries.size < limit && pages++ < MAX_LIST_PAGES) {
+            val result = CodexCatalog.call(
+                "thread/list",
+                buildJsonObject {
+                    put("limit", limit)
+                    put("sortKey", "updated_at")
+                    putJsonArray("cwd") { paths.forEach { add(JsonPrimitive(it)) } }
+                    cursor?.let { put("cursor", it) }
+                },
+            ) as? JsonObject ?: break
 
-            Entry(
-                id = id,
-                title = name.ifEmpty { preview }.ifEmpty { "Untitled" },
-                updatedAt = (AppServer.longOf(thread["updatedAt"]) ?: 0) * 1000,
-                messages = 0,
-                named = name.isNotEmpty(),
-            )
+            for (element in (result["data"] as? JsonArray).orEmpty()) {
+                val thread = element as? JsonObject ?: continue
+                val id = AppServer.text(thread["id"]).ifEmpty { null } ?: continue
+                if (id in hidden) continue
+                val name = AppServer.text(thread["name"]).trim()
+                // The preview is the start of the first message as Codex joined its parts - the editor note
+                // that went with it included, glued on without a break (measured on 0.152), so it is cut off
+                // at its heading (see IdeContextPrompt).
+                val preview = firstLine(AppServer.text(thread["preview"]).substringBefore(IdeContextPrompt.HEADER))
+                AppServer.text(thread["path"]).takeIf { it.isNotEmpty() }?.let { files[id] = File(it) }
+
+                entries += Entry(
+                    id = id,
+                    title = name.ifEmpty { preview }.ifEmpty { "Untitled" },
+                    updatedAt = (AppServer.longOf(thread["updatedAt"]) ?: 0) * 1000,
+                    messages = 0,
+                    named = name.isNotEmpty(),
+                    titleSource = AutoTitles.sourceOf(name, givenByModel[id]),
+                )
+                if (entries.size >= limit) break
+            }
+
+            cursor = AppServer.text(result["nextCursor"]).ifEmpty { null } ?: break
         }
+
+        return entries
     }
 
     /**
@@ -101,7 +137,12 @@ internal object CodexHistory {
         page(workingDirectory, id, before, local)
 
     private fun page(workingDirectory: String?, id: String, before: String?, local: Boolean): Page {
-        val maxChars = if (local) DESK_PAGE_CHARS else PHONE_PAGE_CHARS
+        // A desk page is measured in characters, a phone's in bytes: the phone's has to fit a relay frame,
+        // and a frame is bytes - Russian, Chinese and the like weigh two or three bytes a character, so a
+        // page measured in characters went past the frame on exactly those conversations and was dropped
+        // whole, which on the phone is "load earlier" doing nothing at all.
+        val budget = if (local) DESK_PAGE_CHARS else PHONE_PAGE_BYTES
+        val weigh: (String) -> Int = if (local) String::length else ::utf8Bytes
         val maxTurns = if (local) DESK_PAGE_TURNS else PHONE_PAGE_TURNS
         val outputLimit = if (local) DESK_OUTPUT_CHARS else PHONE_OUTPUT_CHARS
 
@@ -112,6 +153,10 @@ internal object CodexHistory {
         var oldestTurnRequest: String? = null
         // Whether every turn down to the very first one is on this page.
         var exhausted = false
+
+        // The questions with options the conversation asked, by turn - they live in the thread's file alone
+        // (see [asksOf]), read once for the page.
+        val asks = asksOf(transcriptFile(workingDirectory, id))
 
         // Where the request holding [before] began, when this reader asked for the page above it: the walk
         // starts there instead of at the newest turn. Still searched for [before] - a cursor is a place,
@@ -155,22 +200,22 @@ internal object CodexHistory {
                         turn.forEach { (key, value) -> if (key != "items") put(key, value) }
                         put("items", JsonArray(items.take(at)))
                     }
-                    val lines = CodexReplay.lines(partial, outputLimit, closeTurn = false)
+                    val lines = CodexReplay.lines(partial, outputLimit, closeTurn = false, asks = asks[turnId].orEmpty())
                     if (lines.isNotEmpty()) {
                         collected += lines
-                        chars += lines.sumOf { it.length }
+                        chars += lines.sumOf(weigh)
                     }
                     oldestTurn = turnId
                     oldestTurnRequest = requestCursor
                     continue
                 }
 
-                val lines = CodexReplay.lines(turn, outputLimit, closeTurn = true)
-                val full = collected.size >= maxTurns || chars + lines.sumOf { it.length } > maxChars
+                val lines = CodexReplay.lines(turn, outputLimit, closeTurn = true, asks = asks[turnId].orEmpty())
+                val full = collected.size >= maxTurns || chars + lines.sumOf(weigh) > budget
                 if (collected.isNotEmpty() && full) break@walk
 
                 collected += lines
-                chars += lines.sumOf { it.length }
+                chars += lines.sumOf(weigh)
                 oldestTurn = turnId
                 oldestTurnRequest = requestCursor
             }
@@ -250,6 +295,77 @@ internal object CodexHistory {
 
     private const val TOKEN_COUNT = "\"token_count\""
 
+    /**
+     * A question with options the agent asked (`request_user_input`) and how it was answered - null
+     * [answers] when it never was. [input] is the panel's question card's (see CodexDialect.askInput).
+     */
+    data class Ask(val callId: String, val input: JsonObject, val answers: Map<String, String>?)
+
+    /**
+     * The questions a conversation's file holds, by the id of the turn they were asked in.
+     *
+     * Read off the file because nothing else has them: `thread/turns/list` leaves the question and its
+     * answer out of a turn's items altogether (measured on 0.152) - they are a call of the model's and the
+     * person's reply to it, written into the thread as `function_call` and `function_call_output`. Without
+     * them a conversation reopened from the history had a hole exactly where a decision was taken, and
+     * one that ended on a question lost the question it was waiting on.
+     *
+     * The turn is the one whose `turn_context` came last before the call; the answer is matched by the
+     * call's id.
+     */
+    internal fun asksOf(file: File?): Map<String, List<Ask>> {
+        if (file == null || !file.isFile) return emptyMap()
+
+        val calls = LinkedHashMap<String, Pair<String, List<JsonObject>>>()
+        val replies = HashMap<String, JsonObject>()
+        var turn = ""
+
+        runCatching {
+            file.useLines { lines ->
+                for (line in lines) {
+                    val context = line.contains(TURN_CONTEXT)
+                    if (!context && !line.contains(ASK_CALL) && !line.contains(FUNCTION_OUTPUT)) continue
+                    val payload = runCatching { Json.parseToJsonElement(line).jsonObject["payload"] as? JsonObject }.getOrNull() ?: continue
+
+                    if (context) {
+                        AppServer.text(payload["turn_id"]).takeIf { it.isNotEmpty() }?.let { turn = it }
+                        continue
+                    }
+
+                    val callId = AppServer.text(payload["call_id"]).ifEmpty { null } ?: continue
+                    when (AppServer.text(payload["type"])) {
+                        "function_call" -> if (AppServer.text(payload["name"]) == ASK_NAME) {
+                            val arguments = runCatching { Json.parseToJsonElement(AppServer.text(payload["arguments"])).jsonObject }.getOrNull()
+                            val questions = (arguments?.get("questions") as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
+                            if (questions.isNotEmpty()) calls[callId] = turn to questions
+                        }
+
+                        "function_call_output" -> runCatching {
+                            Json.parseToJsonElement(AppServer.text(payload["output"])).jsonObject
+                        }.getOrNull()?.let { replies[callId] = it }
+                    }
+                }
+            }
+        }
+
+        return calls.entries.groupBy({ it.value.first }) { (callId, asked) ->
+            val (input, ids) = CodexDialect.askInput(asked.second)
+            val reply = replies[callId]?.get("answers") as? JsonObject
+            val answers = reply?.let { byId ->
+                ids.mapNotNull { (question, id) ->
+                    val picked = ((byId[id] as? JsonObject)?.get("answers") as? JsonArray).orEmpty()
+                        .map { AppServer.text(it) }.filter { it.isNotBlank() }
+                    if (picked.isEmpty()) null else question to picked.joinToString(", ")
+                }.toMap()
+            }
+            Ask(callId, input, answers)
+        }
+    }
+
+    private const val ASK_NAME = "request_user_input"
+    private const val ASK_CALL = "\"request_user_input\""
+    private const val FUNCTION_OUTPUT = "\"function_call_output\""
+
     /** The first line of a thread's preview, cut to fit a row of the history list. */
     private fun firstLine(text: String): String {
         val line = text.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }.orEmpty()
@@ -327,10 +443,36 @@ internal object CodexHistory {
     internal const val DESK_PAGE_CHARS = 512 * 1024
     internal const val DESK_OUTPUT_CHARS = 12_000
 
-    /** A phone's page has to survive a relay frame of 256 KB with room for the envelope. */
+    /**
+     * A phone's page has to survive a relay frame of 256 KB with room for the envelope and the sealing -
+     * in BYTES, which is what the frame counts (see [page]).
+     */
     internal const val PHONE_PAGE_TURNS = 10
-    internal const val PHONE_PAGE_CHARS = 150 * 1024
+    internal const val PHONE_PAGE_BYTES = 128 * 1024
     internal const val PHONE_OUTPUT_CHARS = 2_000
+
+    /** How many pages of the thread list are read at most for one listing - see [list]. */
+    private const val MAX_LIST_PAGES = 10
+
+    /** A line's weight on the wire: what a relay frame is measured in. */
+    internal fun utf8Bytes(line: String): Int {
+        var bytes = 0
+        var index = 0
+        while (index < line.length) {
+            val char = line[index]
+            bytes += when {
+                char.code < 0x80 -> 1
+                char.code < 0x800 -> 2
+                Character.isHighSurrogate(char) && index + 1 < line.length && Character.isLowSurrogate(line[index + 1]) -> {
+                    index++
+                    4
+                }
+                else -> 3
+            }
+            index++
+        }
+        return bytes
+    }
 }
 
 /**
@@ -341,18 +483,32 @@ internal object CodexHistory {
  */
 internal object CodexReplay {
 
-    fun lines(turn: JsonObject, outputLimit: Int, closeTurn: Boolean): List<String> {
+    fun lines(turn: JsonObject, outputLimit: Int, closeTurn: Boolean, asks: List<CodexHistory.Ask> = emptyList()): List<String> {
         val items = (turn["items"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
+        // Where the turn's questions go: before its final answer - the question is what the answer came out
+        // of - or at its end when there is none (see [CodexHistory.asksOf] on why they are not items).
+        val askAt = items.indexOfLast { AppServer.text(it["type"]) == "agentMessage" && AppServer.text(it["phase"]) == "final_answer" }
+            .takeIf { it >= 0 } ?: items.size
+        var asked = false
         val startedAt = AppServer.longOf(turn["startedAt"])?.let { Instant.ofEpochSecond(it).toString() }
         val lines = ArrayList<String>()
         var lastText = ""
 
-        for (item in items) {
+        fun ask() {
+            if (asked) return
+            asked = true
+            for (question in asks) lines += askLines(question)
+        }
+
+        for ((index, item) in items.withIndex()) {
+            if (index == askAt) ask()
             val id = AppServer.text(item["id"])
             when (AppServer.text(item["type"])) {
                 "userMessage" -> {
                     val (text, images) = CodexDialect.userTextOf(item)
-                    if (text.isNotBlank() || images > 0) lines += CodexDialect.userPrompt(text, images, uuid = id, timestamp = startedAt)
+                    if (text.isNotBlank() || images > 0) {
+                        lines += CodexDialect.userPrompt(text, images, uuid = id, timestamp = startedAt, ideContext = CodexDialect.userContextOf(item))
+                    }
                 }
 
                 "agentMessage" -> {
@@ -393,7 +549,12 @@ internal object CodexReplay {
             }
         }
 
-        if (closeTurn && lines.isNotEmpty()) {
+        ask()
+
+        // A turn that stopped on a question nobody answered is left open: the question is the last thing
+        // that happened, and the panel brings it back as a card to answer (see feed/build.ts, revivedAsk).
+        val waiting = asks.any { it.answers == null }
+        if (closeTurn && lines.isNotEmpty() && !waiting) {
             val status = AppServer.text(turn["status"])
             val error = turn["error"] as? JsonObject
             lines += CodexDialect.result(
@@ -405,6 +566,24 @@ internal object CodexReplay {
             )
         }
 
+        return lines
+    }
+
+    /** One question as the panel reads it: the card's call, and the answer under it when there was one. */
+    private fun askLines(ask: CodexHistory.Ask): List<String> {
+        val lines = ArrayList<String>()
+        CodexDialect.toolUses(listOf(CodexDialect.ToolCall(ask.callId, CodexLaunch.ASK_TOOL, ask.input)), model = "", uuid = ask.callId)
+            ?.let(lines::add)
+
+        val answers = ask.answers ?: return lines
+        val summary = answers.entries.joinToString("\n") { (question, answer) -> "$question: $answer" }
+        CodexDialect.toolResults(
+            listOf(CodexDialect.ToolResult(ask.callId, summary, isError = answers.isEmpty())),
+            uuid = "${ask.callId}-answer",
+            toolUseResult = buildJsonObject {
+                putJsonObject("answers") { answers.forEach { (question, answer) -> put(question, answer) } }
+            },
+        )?.let(lines::add)
         return lines
     }
 

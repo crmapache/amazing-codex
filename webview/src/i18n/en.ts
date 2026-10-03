@@ -40,17 +40,22 @@ export const en = {
       mcp: { title: 'MCP SERVERS', hint: 'status · sign in · reconnect' },
       plugins: { title: 'PLUGINS', hint: 'installed · browse · marketplaces' },
       settings: { title: 'SETTINGS', hint: 'how the panel behaves and sounds' },
+      appearance: { title: 'APPEARANCE', hint: 'theme and text size' },
       sounds: { title: 'SOUND ALERTS', hint: 'when the panel calls you' },
       calmColors: { title: 'NO-STRESS COLORS', hint: 'how the gauges are painted' },
+      indicators: { title: 'INDICATORS', hint: 'what stays around the field' },
       remote: { title: 'REMOTE ACCESS', hint: 'state · relay · paired devices' },
       remoteAbout: { title: 'WHAT TRAVELS', hint: 'read this before you turn it on' },
       newChat: { title: 'NEW CHATS', hint: 'what a new tab starts with' },
+      restoreTabs: { title: 'TABS ON START', hint: 'what comes back after a restart' },
+      shareEditor: { title: 'EDITOR IN MESSAGES', hint: 'what goes along with a message' },
       newChatModel: { title: 'DEFAULT MODEL', hint: 'what a new tab starts on' },
       newChatEffort: { title: 'DEFAULT EFFORT', hint: 'how hard a new tab thinks' },
       newChatMode: { title: 'DEFAULT MODE', hint: 'what new tabs start in' },
       composerLayout: { title: 'COMPOSER LAYOUT', hint: 'where the input sits' },
       pasteCollapse: { title: 'PASTED TEXT', hint: 'when a paste folds into a chip' },
       sendKey: { title: 'SENDING A MESSAGE', hint: 'which key sends it' },
+      codexConfig: { title: 'CODEX SETTINGS', hint: 'its config.toml - what /config changes' },
       improvePrompt: { title: 'IMPROVE PROMPT', hint: 'what the sparkle button asks for' },
       voice: { title: 'VOICE INPUT', hint: 'dictate instead of typing' },
       voiceLanguage: { title: 'SPOKEN LANGUAGE', hint: 'what dictation listens for' },
@@ -60,6 +65,8 @@ export const en = {
       accounts: { title: 'CODEX ACCOUNTS', hint: 'which subscription pays for the work' },
       feedback: { title: 'FEEDBACK', hint: 'a bug, an idea, or just hello' },
       feedbackLog: { title: 'WHAT GETS ATTACHED', hint: 'the whole report, before it goes' },
+      usageStats: { title: 'USAGE STATISTICS', hint: 'anonymous counts, only if you allow' },
+      usageStatsReport: { title: 'WHAT GETS SENT', hint: 'the whole report, as it would go' },
     },
 
     rows: {
@@ -69,7 +76,7 @@ export const en = {
       plugins: { label: 'Plugins', sub: 'Installed, browse, marketplaces' },
       remote: { label: 'Remote access', sub: 'State, relay, paired devices' },
       accounts: { label: 'Codex accounts', sub: 'Switch without signing out' },
-      settings: { label: 'Settings', sub: 'Sounds, new chats, layout, language' },
+      settings: { label: 'Settings', sub: 'Theme, sounds, new chats, language' },
       feedback: { label: 'Send feedback', sub: 'A bug, an idea, or just hello' },
     },
 
@@ -89,16 +96,22 @@ export const en = {
 
   settings: {
     rows: {
+      appearance: { label: 'Appearance', sub: 'Theme and text size' },
       sounds: { label: 'Sound alerts', sub: 'When the panel calls you' },
       calmColors: { label: 'No-stress colors', sub: 'How much colour the gauges keep' },
+      indicators: { label: 'Indicators', sub: 'Which readings stay around the field' },
       newChat: { label: 'New chats', sub: 'Model, effort and permission mode' },
+      restoreTabs: { label: 'Tabs on start', sub: 'Reopen what was open, drafts included' },
+      shareEditor: { label: 'Open file and selection', sub: 'What goes along with each message' },
       composerLayout: { label: 'Composer layout', sub: 'Where the input sits' },
       pasteCollapse: { label: 'Pasted text', sub: 'When a paste folds into a chip' },
       sendKey: { label: 'Sending a message', sub: 'Which key sends it' },
+      codexConfig: { label: 'Codex settings', sub: 'Its own config.toml, and this project’s trust' },
       improvePrompt: { label: 'Improve prompt', sub: 'What the sparkle button asks for' },
       voice: { label: 'Voice input', sub: 'Dictate with your own Deepgram key' },
       customModels: { label: 'Custom models', sub: 'Ones Codex does not offer' },
       language: { label: 'Language', sub: 'What the panel speaks' },
+      usageStats: { label: 'Usage statistics', sub: 'Anonymous counts that help the plugin' },
     },
 
     /** The value beside the "Improve prompt" row: whose words the button asks by. */
@@ -169,6 +182,101 @@ export const en = {
     volumeOf: (sound: string): string => `${sound} volume`,
   },
 
+  /**
+   * The theme and the text size, on one screen: both are about how the panel looks rather than how it
+   * behaves, and a person who came for one is likely to want the other. The unit of a size ("13 pt") is
+   * the IDE's own and is written by the code in every language (see formatPoints).
+   */
+  appearance: {
+    /** Over the two halves of the screen. */
+    size: 'TEXT SIZE',
+    theme: 'THEME',
+    followConsole: 'As the console font',
+    followConsoleSub: (size: string): string => `Follow the IDE's console font - ${size} right now`,
+    own: 'A size of its own',
+    ownSub: 'The panel alone - the editor, the terminal and the console stay as they are',
+    smaller: 'Smaller',
+    larger: 'Larger',
+    followIde: 'As in the IDE',
+    followIdeSub: (theme: string): string => `Follow the IDE - ${theme} right now`,
+    dark: 'Dark',
+    darkSub: 'Always dark, even in a light IDE',
+    light: 'Light',
+    lightSub: 'Always light, even in a dark IDE',
+    /** The IDE's theme in the middle of the line above. */
+    darkWord: 'dark',
+    lightWord: 'light',
+    /** The value beside the row in the settings list when nothing is chosen - "Auto · 13 pt". */
+    auto: 'Auto',
+  },
+
+  /**
+   * The tabs coming back after a restart - one switch, and the two sentences people ask about: what
+   * comes back, and what it costs (nothing starts on its own, and the drafts stay on this machine).
+   */
+  restoreTabs: {
+    label: 'Bring the tabs back',
+    hint: 'The tabs, their conversations and what was being typed in them come back when the project opens again - after a crash of the IDE too',
+    note: 'Nothing is started again: an agent comes up only when its tab is opened or written into. Drafts are kept on this machine, in the IDE’s own folder, and nowhere else.',
+    on: 'On',
+    off: 'Off',
+  },
+
+  shareEditor: {
+    label: 'Send the editor along',
+    hint: 'Each message carries the file open in the editor, and the lines selected in it - the way Codex’s /ide does it in a terminal',
+    note: 'Only from this panel: a message written on a phone carries nothing of the editor. One message can go without it - press the file’s chip in the input field.',
+    on: 'On',
+    off: 'Off',
+  },
+
+  /**
+   * The anonymous usage statistics: the card that asks once, the switch in the settings, and the
+   * report shown whole. The lists say exactly what UsageReport.kt sends and what it never reads -
+   * change one and the other, and PRIVACY.md, change with it.
+   */
+  usageStats: {
+    label: 'Send anonymous usage statistics',
+    hint: 'While you use the panel, a few times a day: which features are used, how often, and how long sessions last',
+    /** Under the switch once a report has gone - the moment written the machine's own way. */
+    lastSent: (when: string): string => `Last sent ${when}`,
+    notYet: 'Nothing has gone yet - the first report goes the next time you send a message.',
+    sentTitle: 'WHAT IS SENT',
+    sent: [
+      'Counts for each day: minutes in the panel, messages, answers, conversations, edits',
+      'How long each sitting lasted - never when it began',
+      'Which features were used, and how often',
+      'Built-in tools, Codex’s own model names and built-in commands, by name',
+      'The versions of the plugin, the IDE and Codex, the operating system, the panel language and how the settings are set',
+      'A random id made on this machine, so that one machine’s days can be told from another’s',
+    ],
+    neverTitle: 'NEVER SENT',
+    never: [
+      'Your messages, the answers, code, file names or paths',
+      'Project names, or the names of your own commands, MCP servers and models',
+      'Your Codex or ChatGPT account, your email or API key - and your IP address is not stored',
+      'Tokens, costs, or the hours of the day you work',
+    ],
+    offNote: 'Turning it off stops the reports and asks the service to delete everything already sent under this machine’s id.',
+    seeReport: 'See exactly what gets sent',
+    privacy: 'Privacy policy',
+    reportNote: 'The whole report, as it would go next. Nothing else travels with it.',
+    building: 'Building the report…',
+    /** The value beside the row in the settings list. */
+    on: 'On',
+    off: 'Off',
+    unasked: 'Not asked',
+    /** The card above the input field. No close cross: closing without an answer would ask again. */
+    card: {
+      label: 'ANONYMOUS',
+      title: 'Help make the plugin better?',
+      body: 'Send anonymous counts of how the panel is used - which features, how often, how long. Never your code, messages, file names or anything that says who you are. You can turn it off in Settings at any time.',
+      allow: 'Allow',
+      decline: 'No thanks',
+      more: 'What is sent',
+    },
+  },
+
   calmColors: {
     /** Over the sample: four gauges, one per step of the ladder. */
     sample: 'A GAUGE AT EVERY LEVEL',
@@ -182,6 +290,29 @@ export const en = {
      */
     full: 'Full colour',
     none: 'One tone',
+  },
+
+  indicators: {
+    contextBar: { label: 'Context bar', hint: 'The strip over the field that fills as the conversation grows' },
+    contextFigure: {
+      label: 'Context figure',
+      hint: '“ctx 42%” at the end of the bar - in the ordinary layout only; in the narrow ones it is the bar’s hover hint',
+    },
+    fiveHour: { label: '5-hour limit', hint: 'The ring for the plan’s five-hour window' },
+    week: { label: 'Weekly limit', hint: 'The ring for the plan’s weekly window' },
+    modelWeek: {
+      label: 'Extra limit',
+      /** Named by the limit once the figures have said which - the server's own name, never translated. */
+      named: (limit: string): string => `${limit} limit`,
+      hint: 'A limit Codex reports beside the plan’s two - shown only while the plan keeps one',
+    },
+    spending: {
+      label: 'Spending limit',
+      hint: 'The ring for a business seat’s monthly spending cap - shown only on a seat that has one',
+    },
+    tokens: { label: 'Tokens today', hint: 'Spent today, across every project' },
+    feedback: { label: 'Feedback button', hint: 'The bubble that opens the feedback form - the menu keeps its own way in' },
+    thanks: { label: 'Heart', hint: 'A star, a review, a word to a friend, or a tip' },
   },
 
   history: {
@@ -439,6 +570,8 @@ export const en = {
       unread: 'The queue could not be read - the file on this machine may be damaged. Nothing is lost: nothing is ever written over a list that could not be read.',
     },
     duplicate: 'Duplicate',
+    /** The grip on a scenario's row, for whoever cannot see it: it picks the row up (see Shelves). */
+    moveRow: 'Drag to another place or onto the other shelf',
     delete: 'Delete',
     deleteTitle: 'Delete this scenario?',
     deleteRun: 'Delete this run',
@@ -482,6 +615,8 @@ export const en = {
     },
     /** The row at the foot of the past runs: the table is shown a screenful at a time (see RUNS_PAGE). */
     moreRuns: (count: number): string => `Show ${count} more`,
+    /** Beside it once more than a screenful is open: the whole table back to its first screenful at once. */
+    fewerRuns: 'Show fewer',
     shelves: {
       project: 'IN THIS REPOSITORY',
       /** Beside the heading: what the shelf means, in half a line. */
@@ -528,6 +663,7 @@ export const en = {
       retries: 'Out of goes',
       stopped: 'Cut short by you',
       undone: 'Not done',
+      headGaveUp: 'The main thread could not finish it either',
     },
     /** What the IDE said it could not do. */
     outcomes: {
@@ -543,6 +679,12 @@ export const en = {
       runNotResumable: 'This run cannot be picked up again: its main thread never came up.',
       /** Said out loud, like the hours': a row drawn and then gone reads as the panel forgetting it. */
       queueNotWritten: 'The queue could not be written to disk.',
+      /** A row dragged onto the other shelf, whose file would not move (see ScenarioStore.place). */
+      scenarioNotMoved: 'The scenario could not be moved to the other shelf.',
+      /** Refused rather than written over: either of the two could be the one somebody meant to keep. */
+      scenarioOnBothShelves: 'The other shelf already holds a scenario under the same identifier, so this one stayed where it was.',
+      /** Nothing is lost: every row is still on a shelf, only not in the place it was put. */
+      orderNotWritten: 'The new order of the shelf could not be written to disk.',
       unknown: 'Something went wrong.',
     },
     run: {
@@ -590,6 +732,10 @@ export const en = {
       /** In front of what the head said, between the cards. */
       headSaid: 'MAIN THREAD',
       sentBack: (n: number): string => (n === 1 ? 'sent back once' : `sent back ${n} times`),
+      /** A card the main thread finished itself, and why its own session could not. */
+      takenOver: (why: string): string => `The main thread took it over: ${why}`,
+      /** On the card of a live run, while that is happening. */
+      takingOver: 'the main thread is finishing it',
       allow: 'Allow',
       deny: 'Refuse',
       send: 'Send',
@@ -655,6 +801,10 @@ export const en = {
       onQuestion: 'ON A QUESTION',
       questionHead: 'It answers',
       questionStop: 'Stand still and wait',
+      /** What happens to a card its own session could not finish (see HeadSettings.onGiveUp). */
+      onGiveUp: 'WHEN A CARD CANNOT FINISH',
+      giveUpStop: 'Stop the run',
+      giveUpHead: 'It finishes the card',
       retries: 'SEND BACK',
       noRetries: 'Never',
       retriesCount: (n: number): string => (n === 1 ? 'Once' : n === 2 ? 'Twice' : `${n} times`),
@@ -929,12 +1079,20 @@ export const en = {
     send: 'Send',
     run: 'Run',
     runHint: 'Run in your shell - Codex sees the output with your next message',
+    /** Send while the field holds `/btw ...`: the question goes beside the work rather than into it. */
+    askAside: 'Ask aside',
+    askAsideHint: 'Codex answers from the conversation and keeps working',
     improveEmpty: 'Codex answered with nothing to put in the field.',
     improveChanged: 'The draft changed while it was being rewritten, so it was left alone.',
     /** The sparkle over a draft that begins with "!" - see runShellCommand. */
     improveTerminal: 'A terminal command is not rewritten',
     voice: 'Dictate',
     voiceStop: 'Stop dictating',
+    editor: {
+      /** Hover over the file's chip in the field: it goes along with this message, or it has been left out. */
+      on: (place: string): string => `Codex sees ${place} with this message · click to leave it out`,
+      off: (place: string): string => `${place} is left out of this message · click to send it along`,
+    },
   },
 
   header: {
@@ -951,9 +1109,35 @@ export const en = {
     closeRun: 'Close this run',
     conversations: 'Conversations',
     newSession: 'New session',
+    /** The field a double click on a conversation's tab opens in place of its name. */
+    renameTab: 'Rename conversation',
     menu: 'Menu',
     /** How many others have this project open - a browser page beside the IDE, or a phone. */
     watchers: (n: number): string => `${n} other ${n === 1 ? 'client is' : 'clients are'} watching this project`,
+  },
+
+  /** The card of side questions over the field - `/btw` (see SideQuestion.tsx). */
+  side: {
+    title: 'SIDE QUESTION',
+    /** Beside the title: the answer is the model's, but the agent at work never sees the thread. */
+    unseen: 'The agent doesn\'t see this',
+    /** While the answer is coming - the seconds follow it. */
+    thinking: 'Thinking aside',
+    retrying: (attempt: number, max: number, seconds: number): string =>
+      `API error, retry ${attempt} of ${max} in ${seconds}s`,
+    cancel: 'Cancel',
+    cancelled: 'Cancelled',
+    askAgain: 'Ask again',
+    empty: 'No answer came back',
+    /** Why one ended without an answer - by the IDE's reason (see SideQuestion.Reason). */
+    failed: { ended: 'The conversation stopped before answering', timeout: 'No answer in ten minutes', refused: 'Codex could not answer it' },
+    copy: 'Copy the answer',
+    close: 'Close (Esc)',
+    notSaved: 'Not saved to the chat',
+    askInChat: 'Ask in the chat',
+    askInChatHint: 'Put the question into the field as an ordinary message - there Codex can change files and run commands',
+    /** A bare `/btw` with nothing asked yet: the card says what it is for. */
+    hint: 'Type /btw or /side and a question. Codex answers from this conversation without stopping its work - it may read files, but changes nothing - and the answer stays out of the chat.',
   },
 
   thanks: {
@@ -966,6 +1150,9 @@ export const en = {
     share: 'Share with friends',
     shareSub: 'Copies a line about it and the link',
     shareCopied: 'Copied - paste it wherever you like',
+    /** The tip page: the author's Ko-fi, where the amount and once-or-monthly are chosen. */
+    tip: 'Leave a tip',
+    tipSub: 'On Ko-fi, once or monthly',
     /**
      * What lands in the clipboard. It is pasted into somebody else's chat under this person's name, so it
      * is written the way one writes to a friend rather than the way one writes an advertisement - and in
@@ -989,6 +1176,9 @@ export const en = {
     signInAs: (account: string): string => `Sign in as ${account}`,
     signInText:
       'Signing in happens once, in the IDE terminal: Codex opens a browser and waits for you to come back. The panel picks it up on its own.',
+    /** Signed in, but the project's own Codex settings demand another sign-in (see LoginGate). */
+    heldBack: (names: string): string =>
+      `This account is signed in, but this project’s Codex settings (.codex/config.toml) ask for another kind of sign-in: ${names}. Signing in again will not change that - choose another account, or change the project’s settings.`,
     logIn: 'Log in',
     openTerminalAgain: 'Open the terminal again',
     finishInTerminal: 'Finish the login in the terminal - this screen closes by itself.',
@@ -1039,6 +1229,14 @@ export const en = {
     moreActions: 'More',
     /** The two buttons in the head of a message of one's own - see UserCard. */
     copyMessage: 'Copy this message, with the paths of what was attached',
+    editor: {
+      /** Under a sent message: the lines selected in the editor that went to the agent with it. */
+      selected: (n: number, name: string): string => (n === 1 ? `1 line from ${name}` : `${n} lines from ${name}`),
+      /** The same when nothing was selected: the file that stood open. */
+      opened: (name: string): string => `In ${name}`,
+      /** On hover over that line: where it points, and what a click does. */
+      open: (place: string): string => `${place} · open in the editor`,
+    },
     reuse: {
       label: 'Edit and send again',
       hint: 'Put this message back into the input field, to edit and send again',
@@ -1241,6 +1439,28 @@ export const en = {
       textWithCode: (code: number): string => `Codex stopped unexpectedly (exit code ${code}).`,
     },
 
+    outranked: {
+      /** A trusted project's own settings demand another sign-in than the one this conversation runs on. */
+      account: {
+        label: 'SIGN-IN',
+        text: 'This project’s Codex settings ask for another sign-in than the account chosen here:',
+      },
+      /** The project has Codex settings of its own, and Codex reads none of them until it is trusted. */
+      untrusted: {
+        label: 'SETTINGS',
+        text: 'Codex is not reading this project’s own settings - the project is not trusted yet:',
+      },
+      open: 'Codex settings',
+    },
+
+    /**
+     * Under a request Anthropic would not take because of a sampling parameter - see ErrorItem.sampling.
+     * The button beside it is the one above: the same screen deserves the same name in every language.
+     */
+    sampling: {
+      note: 'The newest models no longer accept a sampling parameter, and this request carried one. Codex adds none of its own, so it comes from whatever the requests are routed through - usually a gateway or proxy set as a model provider in config.toml.',
+    },
+
     limit: {
       label: 'LIMIT',
       extraLabel: 'EXTRA USAGE',
@@ -1267,6 +1487,11 @@ export const en = {
     ask: {
       label: 'CODEX ASKS',
       blocks: (n: number): string => `${n} ${n === 1 ? 'question' : 'questions'} · blocks the run`,
+      /**
+       * And the same for a question a conversation was abandoned on (see AskItem.reopened): nothing is
+       * running, so there is nothing for it to block - it simply never got an answer.
+       */
+      leftOver: (n: number): string => `${n} ${n === 1 ? 'question' : 'questions'} · never answered`,
       pickAny: 'pick any',
       other: 'Other',
       /** The field beside "Other" - it is a placeholder, so it is written in lower case. */
@@ -1274,6 +1499,8 @@ export const en = {
       send: 'Send answers',
       pickToContinue: 'Pick to continue',
       note: 'the run continues right where it asked',
+      /** And the same for a question left over from a conversation that ended on it. */
+      leftOverNote: 'that run is long over - your answer goes on as a new message',
       expand: 'Expand the question',
       collapse: 'Collapse the question',
       dismiss: 'Close the question',
@@ -1303,6 +1530,13 @@ export const en = {
       label: 'QUEUED',
       hint: (n: number): string =>
         `${n} will fire in order when the run finishes · drag to reorder`,
+      /** On the pencil beside a queued message: it goes back into the field to be corrected. */
+      edit: 'Edit in the field',
+      /**
+       * In the place of a message taken out to be edited. The send key and the Queue button go in: both put
+       * it back (see Composer's keyQueues).
+       */
+      editing: (key: string, button: string): string => `Being edited in the field · ${key} or ${button} puts it back here`,
     },
     selection: { quote: 'Quote', fork: 'Fork from here' },
     streams: {
@@ -1391,6 +1625,7 @@ export const en = {
       'no-executable': 'Codex was not found on this machine.',
       'no-store': 'A folder for the new account could not be created.',
       'not-supported': 'This Codex cannot keep two sign-ins apart, so nothing was added.',
+      'already-here': 'That account is already here: it is the sign-in Codex itself has (codex login), so nothing was added.',
       'logout-failed': 'Logging out did not work. Try it in a terminal.',
       'already-running': 'A sign-in is already under way.',
       unknown: 'That did not work.',
@@ -1664,8 +1899,7 @@ export const en = {
     scenarios: {
       /** Over the card of the run that is happening right now. */
       running: 'RUNNING NOW',
-      /** The row that names the repository whose shelf stands under it, and the heading over that shelf. */
-      repository: 'Repository',
+      /** The heading over the repository's own shelf, named - the screen is always about one project. */
       inRepository: (name: string): string => `In ${name}`,
       /** Under a closed repository in the pickers: choosing it opens the project in the IDE first. */
       opensProject: 'Not open in the IDE - picking it opens it there',
@@ -1855,13 +2089,22 @@ export const en = {
       projectFiles: 'Project files',
       ofTotal: (shown: number, total: number): string => `${shown} of ${total}`,
       photosDropped: (n: number): string => `${n} more would not fit in one message - send these first.`,
-      photoTooBig: 'That would not fit in one message. Try one photo at a time.',
+      photoTooBig: 'This photo is too large to send, even made smaller.',
+      /** The IDE on the other end predates photos sent in parts and takes only what fits one frame. */
+      photoTooBigOldIde: 'The plugin on your computer takes only small photos. Update it to send this one.',
+      photoUnreadable: 'That file could not be opened as a picture.',
+      /** A message sent and not yet confirmed by the IDE - see mobile/outbox.ts. */
+      sending: 'Sending…',
+      notDelivered: 'Not delivered',
+      retry: 'Retry',
+      discardUnsent: 'Discard this message',
     },
 
     limits: {
       title: 'Limits and context',
       fiveHourWindow: 'Five-hour window',
       weeklyWindow: 'Weekly window',
+      modelWindow: (model: string): string => `${model} weekly window`,
       paceNote: (percent: number): string =>
         `The dim arc is an even pace: ${percent}% of the week is already “due” by today. While the bright arc is shorter than it, the week is on plan.`,
       context: 'This conversation’s context',
@@ -1892,6 +2135,7 @@ export const en = {
     modeHint: (mode: string): string => `Permission mode: ${mode}`,
     sessionLimit: '5-hour limit',
     weekLimit: 'Weekly limit',
+    modelWeekLimit: (limit: string): string => `${limit} limit`,
     /** The ring of a Codex business seat's spending cap - see ExtraUsage.resets. */
     spendLimit: 'Spending limit',
     windowUsed: (title: string, percent: number): string => `${title}: ${percent}% used`,
@@ -1913,7 +2157,7 @@ export const en = {
     weeklyOpus: 'weekly Opus',
     weeklySonnet: 'weekly Sonnet',
     weeklyApps: 'weekly apps',
-    weeklyWithExtra: 'weekly, extra usage included',
+    weeklyFable: 'weekly Fable',
     extra: 'extra usage',
   },
 
@@ -1938,11 +2182,71 @@ export const en = {
     modeHint: 'shift+tab',
   },
 
+  /**
+   * The screen of Codex's own settings - its config.toml (see CodexConfig.tsx). The values are Codex's own
+   * words and stay as it spells them; the names of the settings are ours.
+   */
+  codexConfig: {
+    intro: "Codex's own settings - its config.toml, the same file a terminal reads, so a change here holds there too.",
+    loading: 'Asking Codex for its settings…',
+    noCli: 'Codex was not found on this machine.',
+    unreadable: 'Codex did not answer with its settings. Try again in a moment.',
+    groups: { work: 'How Codex works', terminal: 'Terminal and Default tabs', other: 'Experimental' },
+    on: 'On',
+    off: 'Off',
+    saving: 'Saving…',
+    notSet: 'Not set - Codex decides',
+    lockedPolicy: "Set by your organization's policy - it cannot be changed here.",
+    lockedProject: "Set in the project's .codex/config.toml - a change here would not win over it.",
+    chips: 'In the panel the MODEL, effort and MODE chips decide this per tab; this is what a terminal and a tab left on Default go by.',
+    failed: 'Codex did not take this change.',
+    overridden: "Saved, but the project's settings or a policy set it above yours, so it does not apply here.",
+    save: 'Save',
+    project: {
+      title: 'THIS PROJECT',
+      none: 'No Codex settings of its own',
+      noneHint: 'A .codex/config.toml, hooks or exec policies in the project would show up here.',
+      trusted: "Trusted - Codex reads the project's own settings",
+      untrusted: "Not trusted - Codex ignores the project's own settings",
+      sets: (names: string): string => `It sets: ${names}`,
+      trust: 'Trust this project',
+      untrust: 'Stop trusting',
+    },
+    /** By Codex's own key; a key missing here is shown as the key itself. */
+    labels: {
+      model_reasoning_summary: 'Reasoning summary',
+      model_verbosity: 'Answer length',
+      personality: 'Personality',
+      web_search: 'Web search',
+      'sandbox_workspace_write.network_access': 'Network access in the workspace sandbox',
+      approvals_reviewer: 'Who reviews approval requests',
+      service_tier: 'Service tier',
+      model_auto_compact_token_limit: 'Auto-compact after (tokens)',
+      review_model: 'Model for /review',
+      model: 'Model',
+      model_reasoning_effort: 'Reasoning effort',
+      approval_policy: 'When to ask for approval',
+      sandbox_mode: 'Sandbox',
+      'features.network_proxy': 'Network proxy',
+      'features.prevent_idle_sleep': 'Prevent sleep while running',
+    },
+  },
+
   commands: {
     resume: 'open a past conversation of this project',
     fork: 'continue this conversation in a new tab',
     login: 'sign in to Codex in the IDE terminal',
     logout: 'sign out - opens the IDE terminal',
+    /** The panel's own `/rename` (see runLocal) - the CLI's makes up a slug when no name is given. */
+    rename: 'rename this tab; without a name, opens the field on it',
+    /** Grey after `/rename ` until the name is typed. */
+    renameArgument: '[new name]',
+    /** The panel's own `/config` with no settings named: it opens the screen of Codex's settings. */
+    config: 'Codex settings - opens them in the menu',
+    /** The panel's `/btw` - a question beside the work (see feed/side). */
+    btw: 'ask a quick side question - the work goes on',
+    /** Grey after `/btw ` until the question is typed. */
+    btwArgument: '<question>',
     model: 'switch the model for this session',
     effort: 'set how long Codex thinks before acting',
     codeReview: 'review changes with Codex\'s own reviewer',
