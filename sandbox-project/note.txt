@@ -1,0 +1,1 @@
+This is the disposable Panel sandbox project, currently on branch feature/socket-reconnect with two commits so far (Initial sandbox project, Ignore .idea).

@@ -1,0 +1,105 @@
+# Amazing Codex GUI
+
+**O OpenAI Codex como um painel de chat dentro da sua IDE JetBrains.** Cartões no lugar da rolagem
+do terminal, arquivos que você aponta em vez de caminhos que digita, e o seu código bem ao lado.
+
+Ele usa o próprio CLI do Codex que já está na sua máquina, então o seu login do ChatGPT ou a sua
+chave de API, os modelos, a configuração, os servidores MCP, as skills e os seus próprios prompts
+personalizados vêm junto. Sem proxy no meio e sem nenhuma conta nossa.
+
+🌐 [English](en.md) | [简体中文](zh.md) | [Русский](ru.md) | [Українська](uk.md) | [Español](es.md) | **Português (Brasil)** | [Deutsch](de.md) | [Français](fr.md) | [日本語](ja.md) | [한국어](ko.md)
+
+## Por que este
+
+- **Uma rodada de trabalho, escrita uma vez e executada para você.** Cenários: um punhado de
+  cartões, cada um com sua própria conversa do Codex - implementar, revisar, corrigir, rodar os
+  testes - em etapas que podem se repetir mais de uma vez, com uma conversa principal acompanhando
+  tudo e avaliando o que cada uma encontrou. Rode um pelo botão, três de uma vez contra três
+  tickets, ou num horário marcado, às nove da manhã em todo dia útil, com as perguntas já
+  respondidas de antemão. Descreva a rodada em uma frase e o Codex lê o projeto e escreve o
+  formulário.
+- **O painel inteiro a partir do seu celular, não só um botão de "sim".** Responda um pedido de
+  aprovação ou um plano, abra um projeto fechado, leia a conversa de ontem, ramifique, mude o
+  modelo e o esforço, troque de conta, acompanhe um cenário em execução e desbloqueie-o. Desligado
+  por padrão, pareado por QR code, criptografado de ponta a ponta por um relay que não lê uma
+  palavra sequer, revogável com um toque.
+- **Várias contas do Codex, trocadas com um clique.** Trabalho e pessoal na mesma máquina, sem
+  precisar sair de nenhuma das duas: cada uma mantém seu próprio login, enquanto o histórico, a
+  configuração e as skills ficam compartilhados. Cada linha mostra o que resta dos limites daquela
+  conta, e Select move todas as conversas abertas para ela.
+- **Busca em todas as conversas do projeto.** Prefixos, erros de digitação, radicais de palavras,
+  frases entre aspas; nesta conversa ou em todas elas, com um salto direto até a mensagem, na
+  conversa em que ela está. Quando as palavras não bastam, descreva o que você está procurando e o
+  Codex lê as conversas para você.
+- **Tudo o que ele faz fica na tela.** Cada comando com a duração, cada patch como um diff já
+  aberto com números de linha reais, o plano sendo riscado, buscas na web, chamadas de ferramentas
+  MCP, e quanto custou o turno em tokens. Um pedido reenviado ou um limite esgotado vira um cartão
+  com o motivo e a contagem regressiva, não silêncio.
+- **Nada responde por você, e nada se perde.** Um pedido de aprovação, um plano ou uma pergunta
+  esperam o tempo que for preciso: sem prazo, sem continuação automática. As conversas continuam
+  mesmo com o painel recolhido ou o projeto trocado, e as mensagens escritas durante um turno
+  entram nele ou esperam numa fila que a IDE mantém.
+- **Android Studio incluído**, junto com todas as IDEs JetBrains a partir da 2026.1.
+
+## Também no painel
+
+- **Aponte para os arquivos em vez de digitá-los.** Arraste um, digite `@` para escolher, cole uma
+  captura de tela ou um log longo - cada um vira uma cápsula em que não dá para errar.
+- **Mande o código com o endereço dele.** Selecione as linhas, "Send to Amazing Codex GUI", e o
+  agente lê o arquivo de verdade em volta delas, não um trecho sem contexto.
+- **Caminhos abrem arquivos.** Um caminho em qualquer lugar da conversa - o cabeçalho de um
+  cartão, uma resposta, um erro, sua própria mensagem - abre o arquivo no editor na linha que ele
+  indica; uma edição já abre na própria edição.
+- **Pegue qualquer parte de uma resposta.** Cite-a na próxima mensagem, ramifique a conversa
+  exatamente daquele ponto, fixe até três mensagens acima da conversa, ou traga uma mensagem
+  enviada de volta para o campo, para corrigir e reenviar.
+- **Modelo, esforço de raciocínio e modo de aprovação mudam no meio da conversa**, cada aba por si,
+  sem reiniciar nada: perguntar sempre, automático, somente leitura, plano, ou acesso total. O menu
+  de esforço mostra exatamente os níveis que o modelo escolhido tem.
+- **Servidores MCP e plugins** em telas próprias: qual servidor está no ar, qual precisa de login,
+  qual caiu e por quê.
+- **Histórico** das conversas anteriores deste projeto, inclusive as que começaram no terminal,
+  abertas pelo final e com as páginas mais antigas carregadas sob demanda.
+- **Os comandos do próprio Codex** - `/compact`, `/review`, `/init`, `/new`, seus prompts
+  personalizados e suas skills - nas sugestões do campo.
+- **`!` roda um comando no seu próprio shell**, e a saída viaja com a sua próxima mensagem, sem
+  custar um turno nem pedir permissão.
+- **Melhorar o prompt**: a estrelinha reescreve seu rascunho em uma execução separada, sem gastar o
+  contexto da conversa, e um botão traz de volta as suas palavras.
+- **Ditado por voz** com a sua própria chave da Deepgram: segure um atalho, mesmo a partir do
+  editor.
+- **Avisos sonoros** para os momentos que merecem um, e só quando você já não está olhando.
+- **Estatísticas** de horas, hábitos e conquistas, que dá para compartilhar como imagem.
+- **Dez idiomas**, seguindo a sua IDE por padrão.
+- **Seus buffers não salvos** são gravados antes de um turno, e os arquivos que o agente mudou são
+  relidos na hora.
+- **Um painel lateral, não uma aba do editor**, em qualquer borda da janela; números escolhem uma
+  opção, Shift+Tab alterna o modo, Escape interrompe o turno.
+
+## Privacidade e transparência
+
+- **Tudo roda na sua máquina.** Sem proxy e sem nenhum servidor nosso no meio. Seu login no Codex
+  pertence ao CLI: o plugin nunca o envia para lugar nenhum nem sai procurando chaves de API no seu
+  disco.
+- **Sem telemetria, sem analytics, sem conta.** Com o acesso remoto desligado, a única coisa que
+  sai da máquina é um relatório de erro que você escreve e envia, e um botão mostra antes o texto
+  exato dele.
+- **Suas regras continuam suas.** O Codex aplica a sua configuração, o próprio sandbox dele e a
+  própria política de aprovação dele; o modo na tela é exatamente a política com que a conversa
+  roda, e o plugin nunca inicia uma conversa em um modo mais frouxo.
+- **Código disponível** no GitHub sob a Elastic License 2.0, e a
+  [política de privacidade](https://github.com/crmapache/amazing-codex/blob/main/PRIVACY.md) lista
+  tudo o que pode sair da máquina.
+
+## Requisitos
+
+Codex CLI instalado (`npm install -g @openai/codex`) e logado, e qualquer IDE JetBrains a partir da
+2026.1, incluindo o Android Studio. O Android Studio não traz navegador embutido próprio, então a
+IDE oferece instalar o plugin de navegador da JetBrains junto com este.
+
+## Links
+
+- [Código-fonte](https://github.com/crmapache/amazing-codex)
+- [Relatar um problema ou pedir uma função](https://github.com/crmapache/amazing-codex/issues), ou
+  use o formulário dentro do painel
+- [Política de privacidade](https://github.com/crmapache/amazing-codex/blob/main/PRIVACY.md)

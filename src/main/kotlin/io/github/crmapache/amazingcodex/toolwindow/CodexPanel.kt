@@ -1,0 +1,886 @@
+package io.github.crmapache.amazingcodex.toolwindow
+
+import com.intellij.ide.BrowserUtil
+import com.intellij.ide.ui.LafManagerListener
+import com.intellij.openapi.Disposable
+import com.intellij.openapi.application.ApplicationActivationListener
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
+import com.intellij.openapi.diagnostic.thisLogger
+import com.intellij.openapi.editor.colors.EditorColorsListener
+import com.intellij.openapi.editor.colors.EditorColorsManager
+import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.Disposer
+import com.intellij.openapi.wm.IdeFrame
+import com.intellij.openapi.wm.ToolWindow
+import com.intellij.openapi.wm.ToolWindowAnchor
+import com.intellij.openapi.wm.ToolWindowManager
+import com.intellij.openapi.wm.WindowManager
+import com.intellij.openapi.wm.ex.ToolWindowManagerListener
+import com.intellij.ui.components.JBLabel
+import com.intellij.ui.components.JBPanel
+import com.intellij.util.Alarm
+import com.intellij.util.ui.JBUI
+import io.github.crmapache.amazingcodex.AccBundle
+import io.github.crmapache.amazingcodex.codex.CodexPreferences
+import io.github.crmapache.amazingcodex.codex.CodexSessionHub
+import io.github.crmapache.amazingcodex.codex.SessionClient
+import io.github.crmapache.amazingcodex.codex.accounts.CodexAccounts
+import io.github.crmapache.amazingcodex.editor.OpenInEditor
+import io.github.crmapache.amazingcodex.editor.SelectionReference
+import io.github.crmapache.amazingcodex.feedback.DiagnosticsLog
+import io.github.crmapache.amazingcodex.feedback.FeedbackDesk
+import io.github.crmapache.amazingcodex.sound.AlertSounds
+import io.github.crmapache.amazingcodex.voice.VoiceDesk
+import io.github.crmapache.amazingcodex.webview.FilePicker
+import io.github.crmapache.amazingcodex.webview.IdeTypography
+import io.github.crmapache.amazingcodex.webview.ImageDownloads
+import io.github.crmapache.amazingcodex.webview.PastedFiles
+import io.github.crmapache.amazingcodex.webview.WebviewClipboard
+import io.github.crmapache.amazingcodex.webview.WebviewFileDrop
+import io.github.crmapache.amazingcodex.webview.WebviewHost
+import java.awt.BorderLayout
+import java.awt.Component
+import javax.swing.Box
+import javax.swing.BoxLayout
+import javax.swing.JButton
+import javax.swing.JComponent
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.put
+
+/**
+ * The panel's contents: the interface in a browser, and the window's own half of the conversation with
+ * it.
+ *
+ * The conversations themselves no longer live here - they belong to the project (see
+ * [CodexSessionHub]), and this panel is one of the hub's clients rather than its owner. That is what
+ * lets a turn carry on while the panel is closed, and what lets a second client - a phone - see the
+ * same feed.
+ *
+ * What is left here is what genuinely needs a window: the embedded browser, the file chooser and drag
+ * and drop, the clipboard, the cursor, the fonts and the dock side, and the sounds - because only a
+ * window knows whether anyone is looking at it.
+ */
+internal class CodexPanel(
+    private val project: Project,
+    private val toolWindow: ToolWindow,
+    private val parentDisposable: Disposable,
+) {
+
+    val component: JComponent
+
+    /**
+     * The language setting changed somewhere on this machine - see CodexPanels.everyPanel.
+     *
+     * Everything that carries it to a screen goes through the hub, and the hub belongs to one project:
+     * the window that made the change is not the only one that has to hear about it.
+     */
+    fun localeChanged() = hub.catalog.sendLocale()
+
+    /** The same, for the voice input settings - they are the machine's too (see VoiceDesk). */
+    fun voiceSettingsChanged() = voice.sendConfig()
+
+    /**
+     * Whether the panel is still alive. The platform answers that same question only in a deprecated
+     * way, while a checked disposable answers it itself: it dies with its parent and from that moment
+     * on honestly says "I am gone".
+     */
+    private val alive = Disposer.newCheckedDisposable(parentDisposable)
+
+    private var webview: WebviewHost? = null
+
+    private val hub = CodexSessionHub.getInstance(project)
+
+    /**
+     * The panel as the hub sees it. The messages arrive as a batch and go straight into the browser's
+     * own queue, which already coalesces a frame's worth into one call and cuts oversized ones into
+     * pieces (see WebviewHost) - a second such layer here would only argue with it over the order.
+     */
+    private val client = object : SessionClient {
+        override val id = "${CodexSessionHub.PANEL_PREFIX}${System.identityHashCode(this@CodexPanel)}"
+
+        /** This one is the IDE - whatever a person may do at the keyboard, it may ask for. */
+        override val isLocal = true
+
+        override fun deliver(messages: List<String>) {
+            val host = webview ?: return
+            for (message in messages) host.send(message)
+        }
+    }
+
+    /**
+     * The feedback screen's side of the house: the files picked for it, the debug report, and the one
+     * request the plugin makes of the internet on its own (see FeedbackDesk). It answers through this
+     * window rather than through the hub - what it does belongs to no conversation.
+     */
+    private val feedback = FeedbackDesk(project, hub) { message -> webview?.send(message) }
+
+    /**
+     * Voice input's side of the house: the microphone, the Deepgram key and the hotkeys (see VoiceDesk).
+     * It answers through this window for the same reason the feedback screen does - what it does belongs
+     * to no conversation, and this is the one door a paired phone cannot reach.
+     */
+    private val voice = VoiceDesk(project) { message -> webview?.send(message) }
+
+    /** When something was last dropped into the panel with the mouse - see [attachDropped]. */
+    @Volatile
+    private var lastDropAt = 0L
+
+    /** Whether a file is being held over the panel right now - see [sendFileDrag]. */
+    @Volatile
+    private var fileDragOver = false
+
+    init {
+        component = if (WebviewHost.isSupported()) {
+            buildWebview(parentDisposable)
+        } else {
+            buildUnsupportedNotice()
+        }
+
+        hub.register(client)
+        CodexPanels.getInstance(project).register(this, parentDisposable)
+        // The hotkeys need a panel to put a dictation into, and this is the moment one exists.
+        voice.opened(parentDisposable)
+        Disposer.register(parentDisposable) {
+            hub.detach(client.id)
+            hub.auth.stopPolling()
+        }
+        watchDockAnchor()
+        watchTypography()
+        watchIdeActivation()
+    }
+
+    /** Whether the interface has said a single word to us - see [watchForSilence]. */
+    private var pageSpoke = false
+
+    /**
+     * The panel's own frame, holding either the interface or the notice about it never arriving.
+     *
+     * An ordinary BorderLayout with one child, and the child is swapped by hand. A CardLayout was the
+     * obvious way to hold two faces and is the wrong one here: it hides every card but the shown one,
+     * and an embedded browser hidden at the moment it is being built comes up as an empty rectangle -
+     * which is precisely the failure this whole notice exists to explain. Verified live, both ways.
+     */
+    private var frame: JBPanel<JBPanel<*>>? = null
+
+    private fun buildWebview(parentDisposable: Disposable): JComponent {
+        val host = WebviewHost(parentDisposable) { message -> handleWebviewMessage(message) }
+        webview = host
+
+        // Dragging files into the panel: inside the IDE that goes past the embedded browser, so we take
+        // it here - see WebviewFileDrop.
+        WebviewFileDrop.install(
+            component = host.component,
+            parentDisposable = parentDisposable,
+            onDragging = ::sendFileDrag,
+            onDropped = ::attachDropped,
+        )
+
+        val frame = JBPanel<JBPanel<*>>(BorderLayout()).apply { add(host.component, BorderLayout.CENTER) }
+        this.frame = frame
+        watchForSilence(parentDisposable)
+
+        return frame
+    }
+
+    private fun buildUnsupportedNotice(): JComponent =
+        JBPanel<JBPanel<*>>(BorderLayout()).apply {
+            border = JBUI.Borders.empty(16)
+            add(JBLabel(AccBundle["webview.unsupported.text"]).apply { setAllowAutoWrapping(true) })
+        }
+
+    /**
+     * What is shown when the interface never arrives.
+     *
+     * The one case worth naming by hand is an update applied to a running IDE: the handler that serves
+     * the interface to the embedded browser is registered for the whole IDE process and cannot be taken
+     * back (see the note at the top of plugin.xml), so after a live swap the page is asked of a plugin
+     * that is no longer there and nothing is served. What that leaves on screen is a grey rectangle with
+     * no word on it - and no way to report it either, since the feedback button lives inside the very
+     * panel that is missing. This is that word.
+     */
+    private fun buildStalledNotice(): JComponent =
+        JBPanel<JBPanel<*>>(BorderLayout()).apply {
+            border = JBUI.Borders.empty(16)
+
+            val column = JBPanel<JBPanel<*>>(null).apply {
+                layout = BoxLayout(this, BoxLayout.Y_AXIS)
+                add(
+                    JBLabel(AccBundle["webview.stalled.text"]).apply {
+                        setAllowAutoWrapping(true)
+                        alignmentX = Component.LEFT_ALIGNMENT
+                    },
+                )
+                add(Box.createVerticalStrut(JBUI.scale(12)))
+                add(
+                    JButton(AccBundle["webview.stalled.restart"]).apply {
+                        alignmentX = Component.LEFT_ALIGNMENT
+                        addActionListener { ApplicationManager.getApplication().restart() }
+                    },
+                )
+            }
+
+            add(column, BorderLayout.NORTH)
+        }
+
+    /**
+     * The panel is given a while to come up, and is asked about afterwards.
+     *
+     * The signal is a word from the page itself rather than the browser's own "loaded": a page served as
+     * a 404 loads perfectly well and stays empty, which is precisely the failure being watched for here.
+     */
+    private fun watchForSilence(parentDisposable: Disposable) {
+        val alarm = Alarm(Alarm.ThreadToUse.SWING_THREAD, parentDisposable)
+        alarm.addRequest({
+            if (pageSpoke) return@addRequest
+
+            thisLogger().warn("The panel's interface never reported ready")
+            DiagnosticsLog.note(DiagnosticsLog.PANEL, "interface silent for ${STALL_MS / 1000}s")
+            show(buildStalledNotice())
+        }, STALL_MS)
+    }
+
+    /** Put one thing in the frame in place of whatever is there - the browser, or the notice about it. */
+    private fun show(face: JComponent) {
+        val frame = frame ?: return
+
+        frame.removeAll()
+        frame.add(face, BorderLayout.CENTER)
+        frame.revalidate()
+        frame.repaint()
+    }
+
+    /**
+     * A message from the page.
+     *
+     * Anything about the conversations goes to the hub through its single entrance (see
+     * SessionCommands) rather than being handled here: that entrance is where a network client will be
+     * filtered, and a second path around it would be a hole nobody would notice. What is handled here
+     * is what only this window can do.
+     */
+    private fun handleWebviewMessage(message: String) {
+        val payload = runCatching { Json.parseToJsonElement(message).jsonObject }.getOrNull()
+
+        if (payload == null) {
+            thisLogger().warn("Malformed message from webview: $message")
+            return
+        }
+
+        val field = { name: String -> payload[name]?.jsonPrimitive?.contentOrNull.orEmpty() }
+        /** A figure from the panel, or zero for "not said" - a line, a column (see OpenInEditor.Place). */
+        val whole = { name: String -> payload[name]?.jsonPrimitive?.intOrNull ?: 0 }
+
+        when (field("type")) {
+            "ready" -> {
+                thisLogger().info("Webview reported ready")
+                // Back from the notice, for a page that took its time rather than never came. Only then:
+                // putting the browser back on every ready would take it out of the tree and return it on
+                // an ordinary page reload, and a browser taken out of the tree is the empty rectangle
+                // above.
+                val late = !pageSpoke && frame?.componentCount == 1 && frame?.getComponent(0) !== webview?.component
+                pageSpoke = true
+                if (late) webview?.component?.let { show(it) }
+                // Whatever the page already has: after a reload of the page alone (the conversations
+                // outlive it now) only the tail is worth sending.
+                hub.attach(client.id, seenSequences(payload))
+                sendDockAnchor()
+                sendTypography()
+                // The menu's row carries the account in force, so the list has to be there before anybody
+                // opens the screen behind it - otherwise that row sits blank next to a full one for
+                // remote access, and the screen it opens jumps from a skeleton to its content mid-slide.
+                hub.accounts.sendList()
+            }
+
+            "pick" -> pickAttachment()
+
+            "dropped" -> attachDropped(
+                payload["paths"]?.jsonArray.orEmpty().mapNotNull { it.jsonPrimitive.contentOrNull },
+            )
+
+            "setComposerLayout" -> CodexPreferences.composerLayout = field("layout")
+
+            // From how many lines a pasted text folds into a chip - "0" is "never fold". An empty value
+            // is a value here too: it puts the panel's own default back (see setPasteCollapse in App).
+            "setPasteCollapse" -> CodexPreferences.pasteCollapse = field("lines")
+
+            // Which key sends a message out of the input field - "enter" or "modEnter" (see sendKey.ts).
+            "setSendKey" -> CodexPreferences.sendKey = field("key")
+
+            // The no-stress colour mode. Told to every hub rather than only to this panel: the setting
+            // is the machine's, so a second window must not go on showing the ladder - and a project
+            // reached from a phone has no tool window at all, which is exactly the screen somebody
+            // switches the red off for (see CodexSessionHub.everyHub).
+            "setCalmColors" -> {
+                // Read on its own rather than through `whole` above: that one answers zero for "not
+                // said", and zero here is the one reading nobody meant - every gauge grey at once.
+                CodexPreferences.gaugeVivid =
+                    payload["vivid"]?.jsonPrimitive?.intOrNull ?: CodexPreferences.GAUGE_VIVID_FULL
+                CodexSessionHub.everyHub { it.catalog.sendCalmColors() }
+            }
+
+            /*
+             * The models somebody added by hand (see CustomModels.tsx). The whole list every time - an
+             * addition and a removal are the same message - and told to every hub afterwards, exactly
+             * like the colour mode above: the setting is the machine's, so a second window must not go
+             * on offering a model that has just been removed, and a project reached from a phone has no
+             * tool window to hear it any other way.
+             *
+             * What cannot be a launch argument is dropped on the way in (see
+             * CodexPreferences.customModels): this is the door such a name would come through.
+             */
+            "setCustomModels" -> {
+                val dropped = CodexPreferences.customModels
+                CodexPreferences.customModels =
+                    payload["models"]?.jsonArray.orEmpty().mapNotNull { it.jsonPrimitive.contentOrNull }
+
+                // A model taken off the list stops being what the NEXT tab starts on. Every applied pick
+                // writes that default (see CodexSessions.setModel), so removing the one it names would
+                // otherwise leave new tabs launching with a name nobody offers any more - and the CLI does
+                // not refuse an unknown model at launch, it dies on the first message (see
+                // CodexAccounts.canRun). Only a name that was on this list is touched: what the CLI's own
+                // catalogue names is none of this list's business.
+                val gone = dropped - CodexPreferences.customModels.toSet()
+                if (CodexPreferences.model in gone) CodexPreferences.model = ""
+                // And the pin behind "New chats", which is the STRONGEST of the three: it beats both the
+                // account's memory and the pick above (see CodexSessions.newSession). Left standing, it
+                // would go on launching every new tab on a name that is in no menu any more.
+                if (CodexPreferences.newTabModel in gone) CodexPreferences.newTabModel = ""
+
+                // And the same name wherever an account still holds it, because that record is the
+                // STRONGER of the two: a new tab launches on what the account was last left on and only
+                // then on the machine's default (see CodexSessions.newSession). Clearing one half left
+                // the other standing, and nothing downstream catches it - the clamp knows a hand-added
+                // model by this very list, so a name just taken off it is in no catalogue at all and the
+                // check answers "unknown", which the launch reads as a yes.
+                CodexAccounts.getInstance().forgetModels(gone.toSet())
+
+                CodexSessionHub.everyHub {
+                    it.catalog.sendCustomModels()
+                    it.catalog.sendNewTabDefaults()
+                }
+            }
+
+            // An empty value is a value here: it means "follow the IDE", which is what the picker's own
+            // first entry sets (see the language screen in SideMenu). Told to everyone afterwards rather
+            // than only to whoever asked: the setting is machine-wide, and a second window - or a phone -
+            // left speaking the old language would be showing a setting that is no longer true.
+            /*
+             * The two halves of the accounts screen that stay at this door, and the reason is no longer
+             * "a network client cannot reach it" - the rest of that screen has moved to SessionCommands,
+             * where a phone reaches it (see RemoteCommands).
+             *
+             * These two end in a terminal window and a browser sign-in on THIS machine: adding an account
+             * runs `claude auth login` in a drawer of its own, and Claude Design is the same thing for its
+             * own credential. Neither can be finished from anywhere but the keyboard in front of them, so
+             * the door they are behind is the honest one.
+             */
+            "accountAdd" -> hub.accounts.add()
+
+            "accountCancel" -> hub.accounts.cancelAdd()
+
+
+            "setLanguage" -> {
+                CodexPreferences.language = field("language")
+                CodexPanels.everyPanel { it.localeChanged() }
+            }
+
+            // The panel calls the person. It decides that itself (only there is it known what exactly
+            // the turn is busy with), and the sound happens here - see AlertSounds.
+            "sound" -> playAlert(
+                sound = field("sound"),
+                volume = payload["volume"]?.jsonPrimitive?.intOrNull ?: 100,
+                onlyIfAway = payload["onlyIfAway"]?.jsonPrimitive?.booleanOrNull == true,
+            )
+
+            "soundSettings" -> {
+                CodexPreferences.mutedSounds =
+                    payload["muted"]?.jsonArray.orEmpty().mapNotNull { it.jsonPrimitive.contentOrNull }.toSet()
+                CodexPreferences.soundVolumes = payload["volumes"]?.jsonObject.orEmpty()
+                    .mapNotNull { (id, value) -> value.jsonPrimitive.intOrNull?.let { id to it } }
+                    .toMap()
+            }
+
+            /*
+             * A line from the panel itself - see protocol, the trace message. Uncaught errors and the
+             * panel's own crashes arrive this way (see main.tsx and Crash.tsx), which makes this the one
+             * place where "the interface broke" can be recorded at all - so it is kept for a report as
+             * well as logged.
+             */
+            "trace" -> {
+                val line = field("message")
+                thisLogger().info("Webview: $line")
+                DiagnosticsLog.note(DiagnosticsLog.PANEL, line)
+            }
+
+            "openDevTools" -> webview?.openDevTools()
+
+            // The cursor is set by the shell: an offscreen browser does not carry its own as far as the
+            // IDE's window.
+            "cursor" -> webview?.setCursor(field("cursor"))
+
+            // The PR number in the status bar is a link: we open it in the system browser rather than
+            // inside JCEF, so as not to raise a full web viewport inside the panel.
+            "openExternal" -> field("url").takeIf { it.isNotBlank() }?.let { BrowserUtil.browse(it) }
+
+            // A path named in the feed - the head of a call's card, a file mentioned in an answer -
+            // opened in the editor beside the panel (see OpenInEditor). Handled here rather than by the
+            // conversation's commands for the same reason the clipboard and the file chooser are: it
+            // reaches this machine's own surfaces, and a network client never arrives at this handler.
+            "openFile" -> OpenInEditor.open(
+                project,
+                field("path"),
+                OpenInEditor.Place(
+                    line = whole("line"),
+                    column = whole("column"),
+                    endLine = whole("endLine"),
+                    endColumn = whole("endColumn"),
+                    find = field("find"),
+                ),
+            )
+
+            // The embedded browser's clipboard is its own and does not reach the IDE's (see
+            // WebviewClipboard) - we go to the real one on its behalf.
+            "clipboardWrite" -> writeClipboard(field("text"), field("html"))
+
+            "clipboardRead" -> readClipboard(field("id"))
+
+            // The statistics screen as a picture to share: JCEF has no downloads of its own, so the bytes
+            // come here and the file is written where downloads belong (see ImageDownloads).
+            "saveImage" -> ImageDownloads.save(project, field("name"), field("data"))
+
+            // A picture or a document pasted into the panel, given a file of its own - so that the
+            // attachment can be copied, opened and pointed at like any other (see PastedFiles). Here
+            // rather than with the conversation's commands for the same reason as the clipboard above: it
+            // writes to this machine's disk, and a network client never reaches this handler.
+            "savePastedFile" -> PastedFiles.save(
+                field("id"),
+                field("name"),
+                field("mediaType"),
+                field("data"),
+            ) { id, path ->
+                webview?.send(
+                    buildJsonObject {
+                        put("type", "pastedFile")
+                        put("id", id)
+                        put("path", path)
+                    }.toString(),
+                )
+            }
+
+            // Feedback. Handled here rather than by the conversation's commands on purpose: this is the
+            // one place a remote client cannot reach (see FeedbackDesk), and these messages read files
+            // off this machine and post them outwards.
+            "feedbackOpen" -> feedback.opened()
+
+            "feedbackReport" -> feedback.report(field("sessionId"))
+
+            "feedbackAttach" -> feedback.attach()
+
+            "feedbackDetach" -> feedback.detach(field("id"))
+
+            /*
+             * Voice input. Handled here rather than by the conversation's commands for the same reason
+             * the feedback screen is (see VoiceDesk): these open a microphone on this machine and spend
+             * a key kept in its keychain, and a network client never reaches this handler at all.
+             */
+            "voiceStart" -> voice.start(field("mode"))
+
+            "voiceStop" -> voice.stop()
+
+            "voiceCancel" -> voice.cancel()
+
+            "voiceConfig" -> voice.sendConfig()
+
+            "voiceEnabled" -> voice.setEnabled(payload["enabled"]?.jsonPrimitive?.booleanOrNull == true)
+
+            "voiceLanguage" -> voice.setLanguage(field("language"))
+
+            "voiceDevice" -> voice.setDevice(field("device"))
+
+            "voiceKey" -> voice.setKey(field("key"))
+
+            "voiceBalance" -> voice.refreshBalance()
+
+            "voiceCaptureHotkey" -> voice.captureHotkey(field("slot"))
+
+            "voiceStopCapture" -> voice.stopCapturing()
+
+            "voiceClearHotkey" -> voice.clearHotkey(field("slot"))
+
+            "feedbackSend" -> feedback.send(
+                kind = field("kind"),
+                sessionId = field("sessionId"),
+                text = field("text"),
+                email = field("email"),
+                logs = payload["logs"]?.jsonPrimitive?.booleanOrNull == true,
+            )
+
+            /**
+             * A batch travelled into the page in pieces and did not survive the trip - see the bridge in
+             * WebviewHost.
+             *
+             * Written down rather than acted upon. There is nothing sensible to do about it here: the page
+             * has already lost those messages, and asking for them again would need a second road into it -
+             * the very road that has just proved unreliable. What was missing until now is any trace at
+             * all: a whole conversation could fail to draw itself with the log saying nothing, which is
+             * exactly how "opening a chat from the history shows an empty feed" arrived as a bug report
+             * with nothing to go on.
+             */
+            "channelLoss" -> {
+                val reason = field("reason")
+                val expected = payload["expected"]?.jsonPrimitive?.intOrNull ?: -1
+                val got = payload["got"]?.jsonPrimitive?.intOrNull ?: -1
+                thisLogger().warn("A batch did not reach the page whole: $reason (expected $expected, got $got)")
+                DiagnosticsLog.note(DiagnosticsLog.PANEL, "lost a batch into the page: $reason $expected/$got")
+            }
+
+            else -> if (!hub.commands.handle(client.id, payload)) {
+                thisLogger().warn("Unknown message from webview: $message")
+                /*
+                 * The type and how big it was, never the message. The line above carries the whole JSON,
+                 * which includes the text a person typed - and this buffer is attached to reports that
+                 * leave the machine (see DiagnosticsLog).
+                 */
+                DiagnosticsLog.note(DiagnosticsLog.PANEL, "unknown message ${field("type")} (${message.length} chars)")
+            }
+        }
+    }
+
+    /**
+     * What the page says it already has, by conversation. A page that has just opened says nothing and
+     * is given everything; one that has merely been reloaded over a live conversation names the last
+     * number it saw and is given only the tail.
+     */
+    private fun seenSequences(payload: JsonObject): Map<String, Long> =
+        payload["since"]?.jsonObject.orEmpty()
+            .mapNotNull { (sessionId, value) -> value.jsonPrimitive.longOrNull?.let { sessionId to it } }
+            .toMap()
+
+    // --- A reference from the editor -------------------------------------------
+
+    /**
+     * Put an attachment with a ready path into the input field - the same way a file dropped into the
+     * panel with the mouse gets there.
+     *
+     * The path is taken as it is, without shortening: this is where "Send Absolute Path…" arrives, and
+     * there the full path is the whole point of the action (see SendSelectionAbsoluteAction).
+     */
+    fun attachPath(path: String) {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            // We do not touch the file system from the interface thread: a path may lead anywhere, up to
+            // an unmounted drive.
+            val kind = FilePicker.kindOf(path) ?: return@executeOnPooledThread
+
+            webview?.send(
+                buildJsonObject {
+                    put("type", "picked")
+                    put("kind", kind)
+                    put("value", path)
+                }.toString(),
+            )
+
+            // The action was invoked from the editor or from the project tree - the focus stayed there,
+            // and typing into the input field would take a separate click.
+            ApplicationManager.getApplication().invokeLater { webview?.focus() }
+        }
+    }
+
+    /** A piece of a file from the editor: in the input field it becomes a reference, not text. */
+    fun sendSelection(reference: SelectionReference) {
+        webview?.send(
+            buildJsonObject {
+                put("type", "selection")
+                put("path", reference.path)
+                put("startLine", reference.startLine)
+                put("startColumn", reference.startColumn)
+                put("endLine", reference.endLine)
+                put("endColumn", reference.endColumn)
+                put("wholeLines", reference.wholeLines)
+            }.toString(),
+        )
+    }
+
+    // --- Attachments --------------------------------------------------------------
+
+    /** The chooser dialog lives on the IDE's interface thread, so we go there explicitly. */
+    private fun pickAttachment() {
+        ApplicationManager.getApplication().invokeLater {
+            FilePicker.pick(project) { kind, path ->
+                webview?.send(
+                    buildJsonObject {
+                        put("type", "picked")
+                        put("kind", kind)
+                        put("value", path)
+                    }.toString(),
+                )
+            }
+        }
+    }
+
+    /**
+     * A file is being held over the panel - the page highlights the input field it will land in.
+     *
+     * This is asked on every mouse move, while sending a message is a call into the browser: we send
+     * only the transitions, not every pixel of the path.
+     */
+    private fun sendFileDrag(over: Boolean) {
+        if (over == fileDragOver) return
+        fileDragOver = over
+
+        webview?.send(
+            buildJsonObject {
+                put("type", "fileDrag")
+                put("over", over)
+            }.toString(),
+        )
+    }
+
+    /**
+     * Files and folders dropped into the input field. We answer with the same picked as for the chooser
+     * dialog: for the panel this is one and the same attachment, the difference being only in the
+     * gesture that called it.
+     */
+    private fun attachDropped(paths: List<String>) {
+        if (paths.isEmpty()) return
+
+        // One and the same drop can in theory arrive by both routes at once - from the IDE and from the
+        // page itself. The chips would then be doubled, so a second one for the same gesture is thrown
+        // away.
+        val now = System.currentTimeMillis()
+        if (now - lastDropAt < DROP_ECHO_MS) return
+        lastDropAt = now
+
+        ApplicationManager.getApplication().executeOnPooledThread {
+            // We do not touch the virtual file system from the interface thread: a path may point
+            // anywhere, up to an unmounted drive.
+            val attachments = paths.mapNotNull { path -> FilePicker.describe(project, path) }
+
+            for ((kind, value) in attachments) {
+                webview?.send(
+                    buildJsonObject {
+                        put("type", "picked")
+                        put("kind", kind)
+                        put("value", value)
+                    }.toString(),
+                )
+            }
+
+            // The file is dragged from the project tree - the focus stays there, and typing into the
+            // input field would take a separate mouse click. We return it to the panel ourselves; inside
+            // it the caret lands after the chip (see Composer).
+            if (attachments.isNotEmpty()) {
+                ApplicationManager.getApplication().invokeLater { webview?.focus() }
+            }
+        }
+    }
+
+    // --- The clipboard --------------------------------------------------------------
+
+    /**
+     * Put what was copied in the panel into the system clipboard.
+     *
+     * We put it from the interface thread: the platform keeps its own synchronization over the clipboard
+     * and notifies those subscribed to content changes - and such notifications expect exactly this
+     * thread.
+     */
+    private fun writeClipboard(text: String, html: String) {
+        if (text.isEmpty() && html.isEmpty()) return
+
+        ApplicationManager.getApplication().invokeLater { WebviewClipboard.write(text, html) }
+    }
+
+    /**
+     * Hand the system clipboard's contents to the panel - as an answer to its request.
+     *
+     * We read off the interface thread on purpose: on X11, reading the clipboard is a request to another
+     * application that owns it, with a wait for its answer, and that application may answer slowly or
+     * not at all. On the interface thread such a wait is a frozen IDE, so it goes into the background,
+     * and the page waits with a timeout of its own (see clipboard.ts).
+     *
+     * `id` is the same one the page sent: several requests may fly in a row, and each waits for its own
+     * answer.
+     */
+    private fun readClipboard(id: String) {
+        if (id.isEmpty()) return
+
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val content = WebviewClipboard.read()
+
+            webview?.send(
+                buildJsonObject {
+                    put("type", "clipboard")
+                    put("id", id)
+                    put("text", content.text)
+                    put("html", content.html)
+                    put("image", content.image)
+                }.toString(),
+            )
+        }
+    }
+
+    // --- Sounds ---------------------------------------------------------------------
+
+    /**
+     * Play an alert - if the person genuinely is not looking.
+     *
+     * `onlyIfAway` arrives from an occasion that happened in the open tab: calling someone to what is
+     * already in front of them serves nothing. But "the open tab" does not yet mean "someone is looking
+     * at it": the panel may be collapsed into a strip at the side or covered by a neighbouring tool
+     * window, and the IDE's window put behind a browser or minimized altogether. Only the shell knows
+     * that, so the last word is here.
+     *
+     * We ask on the interface thread: the windows' state lives there, while the message arrives from the
+     * embedded browser on its own.
+     */
+    private fun playAlert(sound: String, volume: Int, onlyIfAway: Boolean) {
+        if (!onlyIfAway) {
+            AlertSounds.play(sound, volume)
+            return
+        }
+
+        // A modal window may stand over the IDE - settings, a commit, a refactoring. An ordinary queue
+        // would wait for it to close, that is, stay silent exactly when the person is busy with
+        // something else and the sound is needed most, and then let everything accumulated out at once.
+        ApplicationManager.getApplication().invokeLater(
+            {
+                // While the signal waited in the queue, the project could have been closed and the panel
+                // disposed: asking them whether anyone is looking at the panel is no longer possible,
+                // and there is nobody left to call anyway.
+                if (!project.isDisposed && !alive.isDisposed && !isPanelWatched()) {
+                    AlertSounds.play(sound, volume)
+                }
+            },
+            ModalityState.any(),
+        )
+    }
+
+    /**
+     * The panel is in view, and the IDE's window is the one the person is working with right now.
+     *
+     * We ask carefully: by the time of the answer the project's window could have started closing and
+     * the tool window been disposed. Bringing the IDE down with an error report over a sound is out of
+     * the question; uncertainty is read as "not looking" - staying silent for nothing is worse than
+     * calling for nothing.
+     */
+    private fun isPanelWatched(): Boolean = runCatching {
+        toolWindow.isVisible && WindowManager.getInstance().getFrame(project)?.isActive == true
+    }.getOrDefault(false)
+
+    // --- The window's own state -------------------------------------------------------
+
+    /**
+     * The panel can be docked to any edge of the screen, and only the side bordering the editor should
+     * get a separating frame - as native tool windows have (the terminal, the project view and so on).
+     * The anchor changes on the fly, when the user drags the panel to another side, so we subscribe to
+     * the change rather than ask once at startup.
+     */
+    private fun watchDockAnchor() {
+        // The stateChanged overload taking ToolWindowManagerEventType is marked @ApiStatus.Internal (the
+        // Plugin Verifier does not let it through) - we use the public overload without the event type
+        // and compare the anchor ourselves.
+        var lastAnchor = toolWindow.anchor
+        project.messageBus.connect(parentDisposable).subscribe(
+            ToolWindowManagerListener.TOPIC,
+            object : ToolWindowManagerListener {
+                override fun stateChanged(toolWindowManager: ToolWindowManager) {
+                    val currentAnchor = toolWindow.anchor
+                    if (currentAnchor == lastAnchor) return
+                    lastAnchor = currentAnchor
+                    sendDockAnchor()
+                }
+            },
+        )
+    }
+
+    private fun sendDockAnchor() {
+        webview?.send(
+            buildJsonObject {
+                put("type", "dockAnchor")
+                put("anchor", dockSide(toolWindow.anchor))
+            }.toString(),
+        )
+    }
+
+    /**
+     * The panel does not choose its fonts: the IDE sets them, and they change while it runs - a person
+     * edits the console font size or switches the theme and expects the panel to follow, like the
+     * terminal beside it. The colour scheme carries the console font, the look-and-feel change the
+     * interface one, so we listen to both events.
+     */
+    private fun watchTypography() {
+        val connection = ApplicationManager.getApplication().messageBus.connect(parentDisposable)
+        connection.subscribe(EditorColorsManager.TOPIC, EditorColorsListener { sendTypography() })
+        connection.subscribe(LafManagerListener.TOPIC, LafManagerListener { sendTypography() })
+    }
+
+    /**
+     * Signing in to an MCP server goes off into a browser outside the IDE - the status is pulled again
+     * there by schedule, but waiting for the next mark is awkward: the person authorized and came
+     * straight back to the IDE while the list is still the old one. As soon as the window is in focus
+     * again, we nudge the refresh right away - the waiting window and the conversation are remembered
+     * by the catalogue.
+     */
+    private fun watchIdeActivation() {
+        ApplicationManager.getApplication().messageBus.connect(parentDisposable).subscribe(
+            ApplicationActivationListener.TOPIC,
+            object : ApplicationActivationListener {
+                override fun applicationActivated(ideFrame: IdeFrame) {
+                    // And we repaint the panel afresh along the way: the frame may have been left torn
+                    // since last time (see repaintWhole), and coming back to the IDE to such a sight is
+                    // no good.
+                    webview?.repaintWhole()
+
+                    val sessionId = hub.catalog.pendingMcpRefreshSessionId ?: return
+                    if (System.currentTimeMillis() > hub.catalog.pendingMcpRefreshUntil) return
+                    hub.catalog.refreshMcp(sessionId)
+                }
+            },
+        )
+    }
+
+    private fun sendTypography() {
+        val typography = IdeTypography.read()
+        val host = webview ?: return
+
+        host.setZoom(typography.scale)
+        host.send(
+            buildJsonObject {
+                put("type", "typography")
+                put("monoFamily", typography.monoFamily)
+                put("uiFamily", typography.uiFamily)
+                put("lineHeight", typography.lineHeight)
+            }.toString(),
+        )
+    }
+
+    private fun dockSide(anchor: ToolWindowAnchor): String = when (anchor) {
+        ToolWindowAnchor.LEFT -> "left"
+        ToolWindowAnchor.TOP -> "top"
+        ToolWindowAnchor.BOTTOM -> "bottom"
+        else -> "right"
+    }
+
+    private companion object {
+        /** Within this window a repeated drop counts as an echo of the first rather than a second file. */
+        const val DROP_ECHO_MS = 700L
+
+        /**
+         * How long the interface is given to say its first word before the panel says one instead.
+         *
+         * Long enough that a machine busy with its own startup is never accused - the page is served
+         * from the plugin's own archive and normally speaks within a second or two - and short enough
+         * that nobody sits in front of an empty rectangle deciding the plugin is dead.
+         */
+        const val STALL_MS = 20_000
+
+    }
+}

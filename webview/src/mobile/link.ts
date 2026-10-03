@@ -1,0 +1,970 @@
+import {
+  agentProof,
+  agree,
+  base64,
+  base64url,
+  deviceProof,
+  exportPublic,
+  fingerprint,
+  generateKeyPair,
+  importPublic,
+  longLivedAuth,
+  resumeSession,
+  sameBytes,
+  seal,
+  unbase64,
+  unbase64url,
+  unseal,
+  type SessionKeys,
+} from '../core/crypto'
+import { buildFrame, FRAME_CONTROL, FRAME_SEALED, headerOf, parseFrame } from '../core/frame'
+import { rememberAgent, writeSetting, type PairedAgent } from './storage'
+
+/**
+ * The phone's end of the line: one socket to the relay, everything sealed inside it.
+ *
+ * What travels is what the IDE's own panel receives, unchanged - the same messages, the same feed
+ * (see ShellMessage in protocol.ts). That is deliberate: the parsing, the cards and the rules for what
+ * a conversation looks like are one implementation used by both screens, not two that have to be kept
+ * saying the same thing.
+ */
+
+export interface LinkEvents {
+  onMessage: (message: unknown, projectKey: string) => void
+  onInventory: (inventory: unknown) => void
+  onState: (state: LinkState) => void
+  /** How a request to open a closed project ended - see [openProject]. */
+  onProjectOpened?: (result: { sessionId: string; ok: boolean; projectKey?: string; error?: string }) => void
+  /**
+   * The IDE gave up on what it had queued for this device and says so: ask again.
+   *
+   * It happens when a phone is out of reach long enough for the queue on that side to fill, and it
+   * happened on nothing more exotic than opening a long conversation - the journal alone was more than
+   * the queue held. Either way the cure is the same and it belongs to whoever knows what this phone is
+   * looking at: subscribe again from the number it has (see RemoteAgent.resyncFrame).
+   */
+  onResync?: () => void
+}
+
+/**
+ * How this phone is doing at reaching one IDE.
+ *
+ * `connected` means the IDE itself has answered, not that the relay took the socket. The two used to
+ * be one state and it read as a lie in the case that matters most: with the laptop shut, the socket to
+ * the relay opens perfectly well, so the app said "connected" over an empty list - which is
+ * indistinguishable from a machine where nothing is happening. `asleep` is that case named.
+ *
+ * `silent` is the same case grown old, and it exists because `asleep` stops being the likeliest reading
+ * of it. A machine that has not answered for a minute is having a nap; one that has not answered for
+ * five is switched off, or has had remote access turned off on it, or has let this device go - and none
+ * of those is mended by waiting. So it is said in words, beside the button that ends it.
+ *
+ * `revoked` is that last one confirmed by the IDE itself rather than guessed at.
+ */
+export type LinkState =
+  | 'connecting'
+  | 'connected'
+  | 'asleep'
+  | 'silent'
+  | 'revoked'
+  | 'elsewhere'
+  | 'reconnecting'
+  | 'offline'
+
+/**
+ * What a conversation started from this phone is to begin on - the shell's SessionLaunch, on the wire.
+ *
+ * It travels with the request rather than being read from the machine's settings, because the phone is
+ * where the choice is made: the selectors that would hold it live in the panel at the desk. It applies
+ * to that conversation and changes nothing on the machine.
+ */
+export interface SessionLaunch {
+  model: string
+  effort: string
+  mode: string
+}
+
+const PROTOCOL_VERSION = 1
+
+/** How often the line is knocked on. Comfortably inside the shortest NAT timeouts worth surviving. */
+const BEAT_MS = 25_000
+
+/** Past this much silence the line is dead rather than quiet - two knocks have gone unanswered. */
+const SILENCE_MS = 70_000
+
+/**
+ * The same, for a line the IDE has never answered on.
+ *
+ * Longer on purpose. With keys in hand, silence means something is wrong - every knock is answered.
+ * Without them, silence is the ordinary state of a machine that is switched off, and tearing the socket
+ * down every minute to ask again achieves nothing except a list that never stops saying "reconnecting".
+ */
+const IDLE_SILENCE_MS = 180_000
+
+/**
+ * How long the IDE has to answer the handshake before the phone says it is not there.
+ *
+ * Generously more than a round trip through the relay and less than anybody's patience: the answer
+ * comes back in tens of milliseconds when the machine is awake, and when it is not, no amount of
+ * waiting produces one.
+ */
+const AGENT_SILENCE_MS = 6_000
+
+/**
+ * How long an IDE may say nothing before "asleep" stops being the honest word for it - see [LinkState].
+ *
+ * Comfortably past the point where a laptop being opened would have answered, and short enough that
+ * somebody who has just revoked this device at the desk is not left guessing for a quarter of an hour.
+ */
+const SILENT_AFTER_MS = 4 * 60_000
+
+/**
+ * How often the handshake is offered again while the IDE has not answered it.
+ *
+ * The same offer each time rather than a new one - the agent recognises a repeat and answers it with
+ * the answer it gave before, so nothing drifts (see RemoteAgent.sessionInit). Without the repeat, an
+ * IDE that starts a minute from now is not noticed until the socket is torn down for silence.
+ */
+const HANDSHAKE_RETRY_MS = 15_000
+
+/**
+ * The relay closed this socket because the same device connected somewhere else - another tab, or the
+ * installed app beside the browser. One address, one connection (see the relay's Hub).
+ */
+const CLOSE_DISPLACED = 4009
+
+/** How long the displaced side waits before taking the connection back. */
+const DISPLACED_PAUSE_MS = 3_000
+
+/** How many handshakes an unsealed frame may set off, and over what stretch - see [Link.mayHandshake]. */
+const HANDSHAKE_BURST = 6
+
+const HANDSHAKE_WINDOW_MS = 60_000
+
+/**
+ * What is left of the allowance after asking for one more, or null for "not this time".
+ *
+ * Apart from the class because it is the kind of rule that breaks in silence: too tight and a phone
+ * that genuinely lost its keys stops reconnecting, too loose and anybody carrying frames can spend
+ * this phone's battery on key exchanges.
+ */
+export const handshakeBudget = (asked: number[], now: number): number[] | null => {
+  const fresh = asked.filter((at) => now - at < HANDSHAKE_WINDOW_MS)
+  if (fresh.length >= HANDSHAKE_BURST) return null
+
+  return [...fresh, now]
+}
+
+export class Link {
+  private socket: WebSocket | null = null
+
+  private keys: SessionKeys | null = null
+
+  private counter = 0n
+
+  /** The highest counter seen from the agent, and the window below it - see the plugin's ReplayWindow. */
+  private highest = -1n
+
+  private seenBelow = 0n
+
+  private attempts = 0
+
+  private closed = false
+
+  /**
+   * When the agent last said anything, and the timer that checks it.
+   *
+   * A socket that dies quietly is the ordinary case on a phone - a tunnel, a switch from wifi to
+   * cellular, a screen locked for an hour - and the browser is under no obligation to notice. Without
+   * this the app sits showing a list from twenty minutes ago and calling itself connected, which is
+   * indistinguishable from a quiet morning. The plugin has had the same check from the start; this is
+   * the phone's half of it.
+   */
+  private lastHeard = 0
+
+  private beat: number | null = null
+
+  /** The wait for the IDE's half of the handshake - what tells a sleeping machine from a slow one. */
+  private answering: number | null = null
+
+  /** The pending reconnect, kept so that waking up can overtake a backoff rather than race it. */
+  private retry: number | null = null
+
+  /**
+   * Since when this IDE has answered nothing, across reconnects rather than within one.
+   *
+   * Not reset by the socket coming and going, and that is the whole of it: with no keys the line is
+   * torn down and rebuilt every three minutes by [probe], so a count kept per socket could never grow
+   * past three minutes and the case it is for - a machine that has been unreachable all afternoon -
+   * would never be reached.
+   */
+  private quietSince = 0
+
+  /**
+   * The IDE has said, sealed, that it no longer knows this device.
+   *
+   * Nothing on this side can undo that - the keys are gone at the other end, and only pairing again
+   * makes a new device - so the knocking stops. Apart from `closed`, because the two mean different
+   * things to a person: this one leaves the IDE in the list, named and with a way to be let go of.
+   */
+  private retired = false
+
+  /** What is still going out, so that frames leave in the order they were asked for - see [send]. */
+  private outgoing: Promise<void> = Promise.resolve()
+
+  constructor(
+    private readonly agent: PairedAgent,
+    private readonly events: LinkEvents,
+  ) {}
+
+  async connect(): Promise<void> {
+    if (this.retired) return
+    this.closed = false
+
+    // Whatever was scheduled is now happening: a second socket alongside this one would leave an
+    // orphan whose own close would schedule yet another.
+    if (this.retry !== null) {
+      window.clearTimeout(this.retry)
+      this.retry = null
+    }
+
+    // And whatever is still open goes first, silently.
+    //
+    // Two sockets from one device is not a waste - it is a loop that cannot end: the relay allows one
+    // connection per address and closes the older one, whose close then asks for a reconnect, which
+    // displaces the newer one, whose close asks for a reconnect. That is the "it just keeps
+    // reconnecting" this exists to prevent, and the handlers are dropped before the close so that the
+    // old socket's death says nothing about the new socket's life.
+    this.abandon()
+
+    // A line that has answered nothing for minutes keeps saying so while it is rebuilt: without this
+    // the words a person is reading are replaced by "connecting…" every three minutes, for a second,
+    // by the very teardown that proves nothing is there.
+    this.events.onState(this.longQuiet() ? 'silent' : this.attempts === 0 ? 'connecting' : 'reconnecting')
+
+    const address = base64url(unbase64url(this.agent.deviceId))
+    const socket = new WebSocket(`${relayAddress(this.agent.relay)}/v1/device?id=${address}`)
+    socket.binaryType = 'arraybuffer'
+    this.socket = socket
+
+    // Every handler below asks first whether this is still the socket in use. A browser delivers events
+    // from a socket that has been replaced, and without the question they would wipe the state of the
+    // one that replaced it - which reads, from the outside, as a connection that never settles.
+    socket.onopen = () => {
+      if (this.socket !== socket) return
+
+      this.attempts = 0
+      this.lastHeard = Date.now()
+      this.startBeat()
+      // Not "connected" yet: this is the relay taking the socket, and the relay is up whether or not
+      // the machine with the IDE on it is. What answers that is the handshake below.
+      this.events.onState('connecting')
+      void this.resume()
+    }
+
+    socket.onmessage = (event) => {
+      if (this.socket !== socket) return
+      void this.receive(new Uint8Array(event.data as ArrayBuffer))
+    }
+
+    socket.onclose = (event) => {
+      if (this.socket !== socket) return
+
+      this.socket = null
+      this.keys = null
+      this.stopBeat()
+      this.stopWaitingForAgent()
+      if (this.closed) return
+
+      const displaced = event.code === CLOSE_DISPLACED
+      if (!displaced) this.attempts += 1
+
+      this.events.onState(displaced ? 'elsewhere' : this.longQuiet() ? 'silent' : 'reconnecting')
+
+      const wait = reconnectAfter(event.code, document.visibilityState === 'visible', this.attempts)
+      if (wait === null) return
+
+      this.retry = window.setTimeout(() => {
+        this.retry = null
+        void this.connect()
+      }, wait)
+    }
+
+    socket.onerror = () => {
+      if (this.socket !== socket) return
+      this.events.onState('offline')
+    }
+  }
+
+  /**
+   * Let go of the socket in hand without hearing anything more from it.
+   *
+   * The handlers come off first: a close that arrives afterwards belongs to a connection nobody is
+   * using, and the only thing it could do is undo the state of the one that took its place.
+   */
+  private abandon(): void {
+    const socket = this.socket
+    if (!socket) return
+
+    this.socket = null
+    this.keys = null
+    this.stopBeat()
+    this.stopWaitingForAgent()
+
+    socket.onopen = null
+    socket.onmessage = null
+    socket.onclose = null
+    socket.onerror = null
+
+    if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) socket.close()
+  }
+
+  /** Whether the wait for this IDE has gone on long enough to be worth different words. */
+  private longQuiet(): boolean {
+    return this.quietSince > 0 && Date.now() - this.quietSince > SILENT_AFTER_MS
+  }
+
+  /**
+   * The IDE has let this device go, and said so under seal.
+   *
+   * The socket goes and nothing brings it back: the key at the other end has been deleted, so every
+   * handshake from here would meet the same answer for ever. What is left on screen is the IDE, named,
+   * with the two things that are actually left to do beside it - pair again, or forget it.
+   */
+  private retire(): void {
+    this.retired = true
+    this.abandon()
+    this.events.onState('revoked')
+  }
+
+  close(): void {
+    this.closed = true
+
+    if (this.retry !== null) {
+      window.clearTimeout(this.retry)
+      this.retry = null
+    }
+
+    this.abandon()
+  }
+
+  /**
+   * The phone is back in a hand: find out now whether the line is real.
+   *
+   * The plugin does the same when its window is focused, and for the same reason - after a sleep the
+   * socket is usually dead and nothing has said so. Waiting out a backoff of up to half a minute for
+   * something a person is looking at right now is the difference between "it works" and "it is broken".
+   */
+  wake(): void {
+    if (this.closed || this.retired) return
+
+    const socket = this.socket
+
+    // Already on its way, or already there: leave it be. Starting another one here is what used to turn
+    // a moment of doubt into two sockets fighting over one address.
+    if (socket?.readyState === WebSocket.CONNECTING) return
+
+    if (socket?.readyState === WebSocket.OPEN) {
+      this.probe()
+      return
+    }
+
+    // Nothing open. That includes the case of having been displaced by another tab: this is the one
+    // being looked at now, so this is the one that takes the connection.
+    this.attempts = 0
+    void this.connect()
+  }
+
+  /**
+   * Ask for the inventory, and treat a long silence as a death.
+   *
+   * The inventory is used as the knock rather than a heartbeat of its own: the agent already answers
+   * it, it is already on the list of things a device may ask for, and a reply is what proves the line
+   * is alive. A frame each way every half minute is also what keeps a NAT from quietly dropping the
+   * connection between two people who have nothing to say to each other.
+   */
+  private probe(): void {
+    const socket = this.socket
+    if (!socket || socket.readyState !== WebSocket.OPEN) return
+
+    const patience = this.keys ? SILENCE_MS : IDLE_SILENCE_MS
+    if (this.lastHeard > 0 && Date.now() - this.lastHeard > patience) {
+      // Quiet is normal; this much quiet is not. Closing it is what starts the reconnect.
+      socket.close()
+      return
+    }
+
+    if (this.keys) {
+      this.send({ p: PROTOCOL_VERSION, k: 'inventory' })
+      return
+    }
+
+    // Still no answer to the handshake. The same offer goes again - the same one, not a new one: the
+    // agent recognises a repeat and replies with the reply it already gave, so an IDE that starts in a
+    // minute is picked up in seconds without the two sides ending up on different keys.
+    if (Date.now() - this.offeredAt >= HANDSHAKE_RETRY_MS) this.offerHandshake()
+  }
+
+  private startBeat(): void {
+    this.stopBeat()
+    this.beat = window.setInterval(() => this.probe(), BEAT_MS)
+  }
+
+  private stopBeat(): void {
+    if (this.beat === null) return
+    window.clearInterval(this.beat)
+    this.beat = null
+  }
+
+  /**
+   * Reconnecting without another QR code: fresh ephemeral keys on both sides, vouched for by the
+   * long-lived key from pairing. The session keys are new every time, so recording today's traffic and
+   * stealing a key later opens nothing.
+   */
+  /**
+   * Whether a frame that proved nothing may start a handshake.
+   *
+   * Two frames ask this side to throw its keys away and start again - the relay's "there was a break"
+   * and the agent's "your keys are stale" - and neither can be sealed, because both are about not
+   * having keys. So anything carrying frames can send either, at any rate it likes, and each one costs
+   * a key pair, a key agreement and a round trip. A few a minute is more than the honest case ever
+   * needs; past that the line stays as it is.
+   */
+  private mayHandshake(): boolean {
+    const next = handshakeBudget(this.handshakes, Date.now())
+    if (!next) return false
+
+    this.handshakes = next
+    return true
+  }
+
+  private handshakes: number[] = []
+
+  private async resume(): Promise<void> {
+    const ephemeral = await generateKeyPair(true)
+    const ephemeralPub = await exportPublic(ephemeral.publicKey)
+
+    this.pendingResume = { ephemeral, ephemeralPub }
+    this.offerHandshake()
+  }
+
+  /**
+   * Put the current offer on the wire - the first time and every repeat.
+   *
+   * The keys are made once per connection and re-offered as they are. A repeat carrying fresh keys
+   * would be a different offer, and an IDE catching up on a buffer full of those would answer each one
+   * and end up on the last while this side kept the first.
+   */
+  private offerHandshake(): void {
+    const pending = this.pendingResume
+    if (!pending) return
+
+    this.offeredAt = Date.now()
+    // From the first unanswered offer rather than from this one: the wait is what is being measured,
+    // and it does not start again every time the question is repeated.
+    if (this.quietSince === 0) this.quietSince = Date.now()
+    this.waitForAgent()
+
+    this.sendPlain({
+      p: PROTOCOL_VERSION,
+      k: 'sessionInit',
+      deviceId: this.agent.deviceId,
+      ephemeralPub: pending.ephemeralPub,
+    })
+  }
+
+  private pendingResume: { ephemeral: CryptoKeyPair; ephemeralPub: string } | null = null
+
+  /** When the offer above last went out - what paces the repeats (see HANDSHAKE_RETRY_MS). */
+  private offeredAt = 0
+
+  private async receive(raw: Uint8Array): Promise<void> {
+    // Anything at all counts as a sign of life, before it is opened or judged: a frame that turns out
+    // to be a replay still proves the line carried it.
+    this.lastHeard = Date.now()
+
+    const envelope = parseFrame(raw)
+
+    if (envelope.type === FRAME_CONTROL) {
+      // The relay's own word, and the only one it says: there was a break, ask again. Advice, never
+      // content - which is why it arrives as a different kind of frame rather than as a message. It
+      // carries no proof of anything and cannot: rate limited for the same reason as sessionStale.
+      if (this.mayHandshake()) void this.resume()
+      return
+    }
+
+    if (!this.keys) {
+      // Nothing is sealed yet: the two frames worth reading are the agent's half of the handshake and
+      // its refusal to take part in one.
+      const opening = this.parse(envelope.body) as { k?: string } | null
+
+      if (opening?.k === 'sessionAck') {
+        await this.finishResume(opening as unknown as { ephemeralPub: string; for?: string })
+        return
+      }
+
+      /*
+       * "This machine no longer knows you", said to a device that came back after being let go of.
+       *
+       * It cannot be sealed - the key it would have been sealed with is exactly what was deleted - so
+       * whoever carries frames could write one. It is therefore allowed to change what the screen says
+       * and nothing else: the handshake goes on being offered on its own timetable, so a forgery costs
+       * a wrong label until the real IDE answers, and never a phone that has stopped trying.
+       */
+      if (opening?.k === 'revoked') this.events.onState('revoked')
+
+      return
+    }
+
+    // Two frames arrive in the open even while this side has keys, and both say the same thing: what we
+    // hold is not what the IDE holds. Answering them is what turns a conversation that has quietly
+    // stopped working back into one that works.
+    //
+    // Looked for before the replay window rather than after, because they are sent with a counter of
+    // zero and would be refused as "seen that one" - and cheaply: a sealed body is ciphertext, and an
+    // opening brace is one byte to rule almost all of it out.
+    if (envelope.body[0] === OPEN_BRACE) {
+      const plain = this.parse(envelope.body) as { k?: string; ephemeralPub?: string; for?: string } | null
+
+      if (plain?.k === 'sessionStale') {
+        // Rate limited, because this frame is not sealed and cannot be: it is what says the keys are
+        // gone. Anything carrying frames can send one, and every one of them costs a key pair, a key
+        // agreement and a round trip - on a phone, that is somebody else deciding how fast its battery
+        // goes. The keys in hand are let go only when a handshake is actually started.
+        if (!this.mayHandshake()) return
+
+        this.keys = null
+        void this.resume()
+        return
+      }
+
+      if (plain?.k === 'sessionAck' && plain.ephemeralPub) {
+        await this.finishResume(plain as { ephemeralPub: string; for?: string })
+        return
+      }
+    }
+
+    // The tag is checked before the window is touched, and the order is the whole point: the counter
+    // is a plaintext field whoever carries the frame can write, so a made-up one would otherwise pin
+    // the window at its maximum and every real frame afterwards would fall off the bottom of it - the
+    // line going deaf, in silence. The header goes in as it arrived, kind of frame included, so a
+    // frame relabelled on the way no longer matches what was sealed.
+    const keys = this.keys
+    const header = headerOf(envelope.type, envelope.to, envelope.from, envelope.counter)
+    const opened = await unseal(keys.fromAgent, keys.noncePrefixFromAgent, envelope.counter, header, envelope.body)
+
+    // The keys can be replaced while this is in flight - a handshake finishing resets the window with
+    // them - and a frame opened under the old ones must not stamp the new window.
+    if (!opened || this.keys !== keys) return
+    if (!this.accept(envelope.counter)) return
+
+    const payload = this.parse(opened) as { k?: string; pj?: string; b?: unknown } | null
+    if (!payload) return
+
+    if (payload.k === 'event' && payload.b) this.events.onMessage(payload.b, payload.pj ?? '')
+    if (payload.k === 'inventory') this.events.onInventory(payload)
+    if (payload.k === 'resync') this.events.onResync?.()
+
+    // Sealed, so only this IDE can have written it: worth acting on rather than merely displaying.
+    // It arrives at the moment somebody presses Revoke at the desk, while the keys it is sealed with
+    // still exist - which is the only moment it can be sent at all.
+    if (payload.k === 'revoked') this.retire()
+
+    if (payload.k === 'projectOpened') {
+      const answer = payload as unknown as { s?: string; ok?: boolean; pj?: string; error?: string }
+      this.events.onProjectOpened?.({
+        sessionId: answer.s ?? '',
+        ok: answer.ok === true,
+        projectKey: answer.pj,
+        error: answer.error,
+      })
+    }
+  }
+
+  /**
+   * The IDE's half of the handshake.
+   *
+   * Every one of them is honoured rather than only the first. The same offer can be answered more than
+   * once - a copy of it waited in the relay while the IDE was shut - and taking only the first answer
+   * left this side on keys the IDE had already moved on from. Since the answers arrive in the order
+   * they were sent, honouring each of them ends on the same one the IDE ended on.
+   */
+  private async finishResume(ack: { ephemeralPub: string; for?: string }): Promise<void> {
+    const pending = this.pendingResume
+    if (!pending) return
+
+    // The answer to an offer this side has already moved past - one that waited in the relay while the
+    // IDE was shut. Taking it would leave this half on keys the IDE no longer holds, and nothing would
+    // say so: frames that will not open are dropped in silence. Older agents do not say which offer
+    // they are answering, and their answer is taken as before.
+    if (ack.for && ack.for !== pending.ephemeralPub) return
+
+    const agentEphemeral = await importPublic(ack.ephemeralPub)
+
+    this.keys = await resumeSession(
+      // Worked out from the static key rather than read back from the database - see longLivedAuth.
+      await longLivedAuth(this.agent.staticPrivate, this.agent.agentStaticPublic),
+      await agree(pending.ephemeral.privateKey, agentEphemeral),
+      this.agent.agentId,
+      this.agent.deviceId,
+      ack.ephemeralPub,
+      pending.ephemeralPub,
+    )
+
+    // The worker that shows a notification while this app is closed needs the same keys, and cannot
+    // ask this code for them - it runs in a different context entirely. So they are put where both can
+    // reach them, as handles the browser will use and never hand back as bytes.
+    void writeSetting('pushKeys', {
+      fromAgent: this.keys.fromAgent,
+      noncePrefixFromAgent: this.keys.noncePrefixFromAgent,
+    })
+
+    // Counters start again with the keys, which is precisely why they may: a fresh key never meets an
+    // old counter.
+    this.counter = 0n
+    this.highest = -1n
+    this.seenBelow = 0n
+
+    // The IDE has spoken: this is the moment the machine is genuinely reachable, and the only honest
+    // moment to say so.
+    this.quietSince = 0
+    this.stopWaitingForAgent()
+    this.events.onState('connected')
+
+    this.send({ p: PROTOCOL_VERSION, k: 'inventory' })
+  }
+
+  /**
+   * Give the IDE a moment to answer, and say so plainly if it does not.
+   *
+   * The socket stays open either way - the machine may be opened at any second, and the answer then
+   * arrives on this very connection with nothing to reconnect.
+   */
+  private waitForAgent(): void {
+    this.stopWaitingForAgent()
+
+    this.answering = window.setTimeout(() => {
+      this.answering = null
+      if (!this.keys && !this.closed) this.events.onState(this.longQuiet() ? 'silent' : 'asleep')
+    }, AGENT_SILENCE_MS)
+  }
+
+  private stopWaitingForAgent(): void {
+    if (this.answering === null) return
+    window.clearTimeout(this.answering)
+    this.answering = null
+  }
+
+  /** Ask to watch one conversation, from the number this device already has. */
+  watch(projectKey: string, sessionId: string, since: number): void {
+    this.send({ p: PROTOCOL_VERSION, k: 'subscribe', pj: projectKey, s: sessionId, q: since })
+  }
+
+  /**
+   * Ask for the list again, now.
+   *
+   * The IDE pushes it whenever it changes, so this is not how the screen keeps up - it is for the
+   * moment of walking back onto the list, where a frame in flight and a frame not yet sent look the
+   * same and neither is worth a person's doubt.
+   */
+  refreshInventory(): void {
+    this.send({ p: PROTOCOL_VERSION, k: 'inventory' })
+  }
+
+  /**
+   * Open a project this IDE has closed, and put a conversation in it.
+   *
+   * The project is named by the opaque key the inventory offered rather than by a path: where a
+   * project sits on disk never leaves the machine (see RemoteAgent.recentProjects).
+   *
+   * [resume] names a past conversation to carry on instead of starting a fresh one. It travels with
+   * this request rather than after it: opening a window takes seconds, and a phone that had to hold a
+   * second request until the laptop was ready would lose it the moment the screen went off.
+   */
+  openProject(
+    projectKey: string,
+    sessionId: string,
+    title: string,
+    launch: SessionLaunch,
+    resume?: { conversationId: string; titleSource: string },
+  ): void {
+    this.send({
+      p: PROTOCOL_VERSION,
+      k: 'openProject',
+      pj: projectKey,
+      s: sessionId,
+      title,
+      launch,
+      ...(resume ? { c: resume.conversationId, titleSource: resume.titleSource } : {}),
+    })
+  }
+
+  /**
+   * The past conversations of a project this IDE has closed.
+   *
+   * A kind of its own rather than the ordinary command, because a command is handed to a project's hub
+   * and a closed project has none. The IDE reads them off its disk without opening anything (see
+   * RemoteAgent.recentHistory) - the window comes when a conversation is picked.
+   */
+  recentHistory(projectKey: string): void {
+    this.send({ p: PROTOCOL_VERSION, k: 'recentHistory', pj: projectKey })
+  }
+
+  /** Anything the person does: a message, an answer, a stop. The agent decides what it will accept. */
+  command(projectKey: string, message: unknown): void {
+    this.send({ p: PROTOCOL_VERSION, k: 'cmd', pj: projectKey, b: message })
+  }
+
+  /**
+   * Send something to the IDE, sealed - and after everything already asked for.
+   *
+   * The queue is the point. Sealing is asynchronous, so two frames sent one line apart used to race
+   * each other to the socket and could arrive the wrong way round. Most of the time that is harmless,
+   * but not always: "open a conversation" followed by "watch it" arriving in the other order leaves the
+   * IDE watching something that does not exist yet, and the screen that was opened stays empty with
+   * nothing anywhere saying why.
+   */
+  private send(body: unknown): void {
+    const socket = this.socket
+    const keys = this.keys
+    if (!socket || !keys || socket.readyState !== WebSocket.OPEN) return
+
+    // Taken here rather than inside the queue, so the numbers follow the order the frames were asked
+    // for - which is the order they now go out in.
+    this.counter += 1n
+    const counter = this.counter
+
+    this.outgoing = this.outgoing
+      .then(async () => {
+        if (socket.readyState !== WebSocket.OPEN) return
+
+        const to = unbase64url(this.agent.agentId)
+        const from = unbase64url(this.agent.deviceId)
+        const header = headerOf(FRAME_SEALED, to, from, counter)
+        const sealed = await seal(keys.toAgent, keys.noncePrefixToAgent, counter, header, encode(body))
+
+        socket.send(buildFrame(FRAME_SEALED, to, from, counter, sealed) as BufferSource)
+      })
+      // One frame that could not be sealed must not stop every frame after it.
+      .catch(() => undefined)
+  }
+
+  /** Only the handshake goes in the open - there is no key yet, and it is what produces one. */
+  private sendPlain(body: unknown): void {
+    const socket = this.socket
+    if (!socket || socket.readyState !== WebSocket.OPEN) return
+
+    const to = unbase64url(this.agent.agentId)
+    const from = unbase64url(this.agent.deviceId)
+    socket.send(buildFrame(FRAME_SEALED, to, from, 0n, encode(body)) as BufferSource)
+  }
+
+  private parse(body: Uint8Array): unknown {
+    try {
+      return JSON.parse(new TextDecoder().decode(body))
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Whether this frame has been seen. A replayed "the permission was answered" is harmless; a replayed
+   * command is not, and the same window guards both directions for the same reason.
+   */
+  private accept(counter: bigint): boolean {
+    if (this.highest < 0n) {
+      this.highest = counter
+      this.seenBelow = 1n
+      return true
+    }
+
+    if (counter > this.highest) {
+      const step = counter - this.highest
+      this.seenBelow = step >= 64n ? 1n : (this.seenBelow << step) | 1n
+      this.highest = counter
+      return true
+    }
+
+    const behind = this.highest - counter
+    if (behind >= 64n) return false
+
+    const bit = 1n << behind
+    if ((this.seenBelow & bit) !== 0n) return false
+
+    this.seenBelow |= bit
+    return true
+  }
+}
+
+const encode = (body: unknown): Uint8Array => new TextEncoder().encode(JSON.stringify(body))
+
+/** What a frame sent in the open begins with - see the note in receive. */
+const OPEN_BRACE = 0x7b
+
+/**
+ * How long to wait before connecting again, or null for "do not".
+ *
+ * The whole rule in one place, because getting it wrong is not a small bug: every wrong answer here is
+ * a loop. Being displaced while out of sight is the one that has to answer "do not" - the relay allows
+ * one connection per device, so a copy in the background that reconnects takes the line from the copy
+ * being looked at, which takes it back, forever. An ordinary break is the opposite case: reconnect, and
+ * back off so that a relay which is genuinely down is not hammered by a phone in somebody's pocket.
+ */
+export const reconnectAfter = (code: number, visible: boolean, attempts: number): number | null => {
+  if (code === CLOSE_DISPLACED) return visible ? DISPLACED_PAUSE_MS : null
+
+  return Math.min(1000 * 2 ** attempts, 30_000)
+}
+
+/**
+ * Where the relay is.
+ *
+ * Wherever this app was served from, because the relay is what serves it - the two are the same host
+ * by construction. Deliberately not the address written down when the pairing was made: a relay that
+ * moves to another home would otherwise take every paired phone with it, since each of them would go
+ * on dialling an address that no longer answers, and pairing again is a QR code and two confirmations.
+ *
+ * `?relay=` overrides it for development, where the client runs on a Vite server and the relay does
+ * not. [known] is the last resort - the address a pairing was made against - for a client served from
+ * somewhere other than its relay.
+ */
+export const relayAddress = (known = ''): string => {
+  // Only where the client is being developed. A link is a thing anyone can send, and this one decides
+  // which server a phone talks to: on the real client it would be enough to open a link to the right
+  // host with the wrong query to move somebody's line onto somebody else's relay. Nothing inside it
+  // would be readable there - the keys are not the relay's - but who talks to whom, when, and how
+  // much, is exactly what this design promises the relay operator cannot choose to learn.
+  const override = import.meta.env.DEV ? new URLSearchParams(window.location.search).get('relay') : null
+  if (override) return override.replace(/\/$/, '')
+
+  const origin = window.location.origin.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:')
+
+  return (origin || known).replace(/\/$/, '')
+}
+
+/**
+ * Pairing with an IDE, from what the QR code carried.
+ *
+ * The secret lives in the fragment of the address - the part browsers never send to a server - so it
+ * cannot reach the relay's logs even in principle. It is read here, used, and never written down.
+ */
+export const pair = async (
+  relay: string,
+  agentId: string,
+  secret: Uint8Array,
+  expectedFingerprint: string,
+  label: string,
+  /**
+   * This device's own fingerprint, the moment it exists.
+   *
+   * The IDE shows it and asks a person to compare, so the phone has to show the same number - and it
+   * has to show it while the IDE is still asking, not after. It is known as soon as the key pair is
+   * made, well before anything is sent.
+   */
+  onIdentity?: (own: string) => void,
+): Promise<PairedAgent> => {
+  // One pair, and its private half is unextractable. The public half can still be exported - in
+  // WebCrypto that flag applies to the private key alone - so nothing is lost by keeping it that way,
+  // and the private key's bytes never exist anywhere JavaScript can reach them.
+  const deviceStatic = await generateKeyPair(false)
+  const ephemeral = await generateKeyPair(true)
+
+  const staticPublic = await exportPublic(deviceStatic.publicKey)
+  const ephemeralPub = await exportPublic(ephemeral.publicKey)
+
+  onIdentity?.(await fingerprint(staticPublic))
+  const deviceId = base64url(crypto.getRandomValues(new Uint8Array(16)))
+
+  const proof = await deviceProof(secret, agentId, staticPublic, ephemeralPub, deviceId)
+
+  const socket = new WebSocket(`${relay.replace(/\/$/, '')}/v1/device?id=${deviceId}`)
+  socket.binaryType = 'arraybuffer'
+
+  return new Promise<PairedAgent>((resolve, reject) => {
+    const give = window.setTimeout(() => {
+      socket.close()
+      reject(new Error('the IDE did not answer'))
+    }, 90_000)
+
+    socket.onopen = () => {
+      socket.send(
+        buildFrame(
+          FRAME_SEALED,
+          unbase64url(agentId),
+          unbase64url(deviceId),
+          0n,
+          encode({
+            p: PROTOCOL_VERSION,
+            k: 'pairInit',
+            deviceId,
+            label,
+            staticPub: staticPublic,
+            ephemeralPub,
+            proof: base64(proof),
+          }),
+        ) as BufferSource,
+      )
+    }
+
+    socket.onmessage = async (event) => {
+      const envelope = parseFrame(new Uint8Array(event.data as ArrayBuffer))
+      const payload = JSON.parse(new TextDecoder().decode(envelope.body)) as {
+        k?: string
+        staticPub?: string
+        ephemeralPub?: string
+        proof?: string
+        label?: string
+      }
+
+      if (payload.k !== 'pairAck' || !payload.staticPub || !payload.ephemeralPub || !payload.proof) return
+
+      // Two checks, either of which alone closes the substitution: the proof could only be made by
+      // someone who saw the code, and the fingerprint could only match the IDE the code came from.
+      const shown = await fingerprint(payload.staticPub)
+      if (shown.replace(/ /g, '') !== expectedFingerprint.replace(/ /g, '')) {
+        window.clearTimeout(give)
+        socket.close()
+        reject(new Error('the IDE that answered is not the one on the screen'))
+        return
+      }
+
+      const expected = await agentProof(secret, agentId, deviceId, payload.staticPub, payload.ephemeralPub)
+      if (!sameBytes(expected, unbase64(payload.proof))) {
+        window.clearTimeout(give)
+        socket.close()
+        reject(new Error('the answer did not prove it saw the code'))
+        return
+      }
+
+      // Nothing is derived here any more. The keys this connection would have used are never used: the
+      // pairing socket closes at the end of this function, and the line that follows starts with a
+      // handshake of its own. What pairing actually leaves behind is the static pair, which is what
+      // the long-lived key is worked out from every time (see longLivedAuth) - and the QR secret,
+      // whose whole job was to prove that these two ends are the two on the screen.
+      const paired: PairedAgent = {
+        agentId,
+        // What the IDE calls itself - "WebStorm on max-mbp". The name this device gave itself went the
+        // other way, in pairInit, and belongs in the IDE's list rather than in this one.
+        label: payload.label || label,
+        relay,
+        // The long-lived key is not written down: it is worked out from the static key on every
+        // reconnect (see longLivedAuth), so there is no copy of it here for anything to read.
+        staticPrivate: deviceStatic.privateKey,
+        staticPublic,
+        deviceId,
+        agentStaticPublic: payload.staticPub,
+        pairedAt: Date.now(),
+      }
+
+      await rememberAgent(paired)
+      window.clearTimeout(give)
+      socket.close()
+      resolve(paired)
+    }
+
+    socket.onerror = () => {
+      window.clearTimeout(give)
+      reject(new Error('the relay could not be reached'))
+    }
+  })
+}

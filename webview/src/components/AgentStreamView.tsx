@@ -1,0 +1,71 @@
+import { useLayoutEffect, useRef } from 'react'
+import type { TaskItem } from '../feed/types'
+import s from './feed.module.css'
+import { useT } from '../i18n'
+import { noteText } from './items/ToolCard'
+import { WorkflowRun } from './items/WorkflowRun'
+
+interface AgentStreamViewProps {
+  /** The agent currently opened by a chip - or nothing while no tab is chosen. */
+  item: TaskItem | undefined
+}
+
+/**
+ * The output area when a particular agent's chip is selected rather than main - simply its log, in the
+ * same plain text as an ordinary answer in the main feed. No card with a header, no percentage progress
+ * bar: in the real terminal Claude Code a subagent has nothing at all beyond a timer - the percentage is
+ * already an extension on top, and it is visible on the chip anyway, so duplicating it here serves
+ * nothing.
+ */
+export const AgentStreamView = ({ item }: AgentStreamViewProps) => {
+  const body = useRef<HTMLDivElement | null>(null)
+
+  // A live agent's growing log sticks to the bottom, like the main feed - otherwise watching a working
+  // agent would mean scrolling down by hand on every new step.
+  useLayoutEffect(() => {
+    const element = body.current
+    if (!element) return
+    element.scrollTop = element.scrollHeight
+  }, [item?.id, item?.log.length, item?.workflow])
+
+  if (!item) return null
+
+  return (
+    <div className={s.agentViewBody} ref={body}>
+      <AgentLog item={item} />
+    </div>
+  )
+}
+
+/**
+ * What an agent did, as lines - the whole of the screen above and the inside of its card in the feed
+ * (see TaskCard). One rendering for both: the card was added long after this screen, and a second copy
+ * of it would drift the moment either changed.
+ */
+export const AgentLog = ({ item }: { item: TaskItem }) => {
+  const t = useT()
+
+  return (
+    <>
+      {/* A workflow's fleet stands above its log: the log here is the CLI's own preamble about where the
+          transcripts went, while the agents are what one opened this screen for (see WorkflowRun). */}
+      {item.workflow ? <WorkflowRun run={item.workflow} id={item.id} live={item.pending} /> : null}
+
+      {item.log.map((line, index) => (
+        <div
+          key={index}
+          className={`${s.agentViewLine} ${line.tone === 'ok' ? s.agentViewOk : ''} ${line.tone === 'bad' ? s.agentViewBad : ''} ${line.tone === 'dim' ? s.agentViewDim : ''}`}
+        >
+          {/* A subagent returns rather than finishes - see noteText. */}
+          {line.note ? noteText(t, line.note, 'task') : line.text}
+        </div>
+      ))}
+      {/* It ticks by the same shared tick mechanism as this agent's chip in the header (see
+          tickDurations in feed/build.ts) - we simply show the same value here rather than only on the
+          chip. */}
+      {item.pending ? (
+        <div className={s.agentViewWorking}>{t.feed.agentWorking(item.duration || '0.0s')}</div>
+      ) : null}
+    </>
+  )
+}

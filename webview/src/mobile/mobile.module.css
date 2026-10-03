@@ -1,0 +1,4311 @@
+/**
+ * The phone's own layout.
+ *
+ * Only the shell is here: the screens, the header, the footer of buttons, the list. The conversation
+ * itself is drawn by the panel's own cards with the panel's own styles - what changes there is the
+ * spacing, and it changes through the density tokens rather than through a second stylesheet (see
+ * tokens.css and [data-acc-density='touch']).
+ *
+ * Two things run through all of it. Everything a thumb touches is at least 44 pixels tall, because
+ * below that a mistap here answers a question about somebody's files. And every fixed edge respects
+ * the safe area, because a button under the home indicator is a button that cannot be pressed.
+ */
+
+/* The keyframes live in every module that uses them: a CSS module renames animation names just as it
+   renames classes, so a reference to another file's keyframes silently turns into nothing and the
+   animation never runs at all (same note as in shell.module.css). */
+
+@keyframes acc-pulse {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+.screen {
+  display: flex;
+  flex-direction: column;
+  /* Dynamic rather than viewport height: Safari's toolbar slides away and 100vh is measured as though
+     it never existed, which leaves the footer of buttons below the bottom of the screen. */
+  height: 100dvh;
+  background: var(--acc-bg);
+  color: var(--acc-fg);
+}
+
+.dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  /* Unlit rather than absent: the space it takes is the same whichever way the answer goes, so the row
+     does not shift under a thumb the moment a laptop wakes. */
+  background: var(--acc-fg-fainter);
+}
+
+.dotLive {
+  background: var(--acc-ok);
+  /* A faint halo, so the lit state reads as lit on a phone held at arm's length in daylight. */
+  box-shadow: 0 0 0 3px var(--acc-ok-12);
+}
+
+/*
+ * The arrow on "Back" - see the Back component for why it is drawn rather than typed.
+ *
+ * Taller than the word it stands beside, as it is on every phone: the arrow is what the eye finds, and
+ * the word is what confirms it.
+ */
+.backIcon {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  /* Pulled back so the arrow, not the space around it, lines up with the screen's left edge. */
+  margin-left: -4px;
+}
+
+/* --- The list of what is happening ----------------------------------------- */
+
+.list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  /* No pull-to-refresh: there is nothing to refresh - the feed arrives on its own - and the gesture
+     would fight the scroll at the top of every list. */
+  overscroll-behavior-y: contain;
+  padding: var(--acc-sp-3) 0 calc(env(safe-area-inset-bottom) + var(--acc-sp-3));
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-3);
+  width: 100%;
+  min-height: 60px;
+  padding: var(--acc-sp-3) var(--acc-sp-5);
+  text-align: left;
+  background: none;
+  color: inherit;
+  position: relative;
+}
+
+/* The rule between rows starts where the words do rather than at the edge of the glass. A separator
+   running the full width is what makes a list look like it was poured in without a margin. */
+.row::after {
+  content: '';
+  position: absolute;
+  left: var(--acc-sp-5);
+  right: 0;
+  bottom: 0;
+  border-bottom: 1px solid var(--acc-line);
+}
+
+.row:last-child::after {
+  display: none;
+}
+
+.rowOffline {
+  opacity: 0.55;
+}
+
+.rowMain {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.rowTitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+}
+
+.rowMeta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--acc-fg-dim);
+}
+
+/* A word where a word is the whole point: the tag on one of the choices in a list (see NewSession). A
+   conversation's own state is a mark rather than a word - see .chatDot. */
+.badgeRunning {
+  flex: none;
+  padding: 3px 8px;
+  border: 1px solid var(--acc-line-strong);
+  border-radius: var(--acc-r-pill);
+  color: var(--acc-fg-dim);
+  font-size: 11px;
+}
+
+/* A statement of fact rather than an alarm: it explains the screen below it, and it goes away by
+   itself when the line comes back. */
+.reach {
+  margin: 0;
+  padding: var(--acc-sp-3) var(--acc-sp-5);
+  border-bottom: 1px solid var(--acc-line);
+  background: var(--acc-bg-raised);
+  color: var(--acc-fg-dim);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.empty {
+  padding: var(--acc-sp-6) var(--acc-sp-5);
+  color: var(--acc-fg-dim);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* --- A project and what can be started in it --------------------------------- */
+
+/*
+ * A project is a card, and the conversations in it are pills inside that card.
+ *
+ * The list used to be flat - a project's name, then its conversations, then the next project's name,
+ * all on one surface - and at a glance there was no telling which belonged to which. Nesting says it
+ * without a word: what is inside the card belongs to the card.
+ */
+.project {
+  margin: 0 var(--acc-sp-5) var(--acc-sp-3);
+  padding: var(--acc-sp-3);
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-card);
+  background: var(--acc-bg-raised);
+}
+
+/* Dimmed whole rather than per row: what is unreachable here is the machine, not one conversation. */
+.projectOffline {
+  opacity: 0.55;
+}
+
+.projectHead {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-3);
+}
+
+.projectMain {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.projectName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.projectMeta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--acc-fg-fainter);
+}
+
+/*
+ * The two ways out of a card, side by side at its foot.
+ *
+ * Going back to something is a sentence, starting something is a square: the wide one has to say which
+ * conversations it means, and the other needs no word at all once it is the only mark on the row. They
+ * are the same height because they stand next to each other - one target 44 tall beside one 52 tall is
+ * the kind of mismatch a hand notices before an eye does.
+ */
+
+/* What was put away. Quieter than anything it stands under: it is a way back, not an invitation. */
+.projectHidden {
+  width: 100%;
+  min-height: var(--acc-hit);
+  margin-top: var(--acc-sp-1);
+  padding: 0 var(--acc-sp-3);
+  border: none;
+  border-radius: var(--acc-r-pill);
+  color: var(--acc-fg-fainter);
+  font-size: 12px;
+  background: none;
+  text-align: left;
+}
+
+.projectQuiet {
+  margin: var(--acc-sp-3) 0 var(--acc-sp-1);
+  font-size: 13px;
+  color: var(--acc-fg-fainter);
+}
+
+.chats {
+  display: flex;
+  flex-direction: column;
+  gap: var(--acc-sp-1);
+  margin-top: var(--acc-sp-3);
+}
+
+/*
+ * A row and the button hiding behind it.
+ *
+ * The button is not drawn on top - it sits underneath, and the row slides off it. That is why the row
+ * needs a background of its own even though the card behind it has one: with a transparent row the
+ * word "Hide" would read through it the whole time.
+ */
+.chatSlot {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--acc-r-pill);
+}
+
+.chatHide {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 88px;
+  border: none;
+  /* Square on the side the row sits against, round on the outer one: two rounded edges meeting made a
+     notch between them, and the pair read as two controls rather than as one row with a button in it. */
+  border-radius: 0 var(--acc-r-pill) var(--acc-r-pill) 0;
+  background: var(--acc-neutral-16);
+  color: var(--acc-fg-dim);
+  font-size: 13px;
+}
+
+.chat {
+  position: relative;
+  /* Follows the finger while it is down, and settles when it lifts - short enough not to feel laggy. */
+  transition: width 0.16s ease-out, border-radius 0.16s ease-out;
+  /* The list scrolls under a finger going down; a finger going across belongs to this row. */
+  touch-action: pan-y;
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-3);
+  width: 100%;
+  min-height: var(--acc-tap);
+  padding: 0 var(--acc-sp-3);
+  border: 1px solid var(--acc-line-strong);
+  border-radius: var(--acc-r-pill);
+  /*
+   * A step up from the card it sits in, not down.
+   *
+   * Sunk into the card, the rows and the card were one grey slab with lines drawn on it: the darkest
+   * surface on the screen is the page, and a conversation - the thing this whole screen exists to be
+   * tapped - was painted in it. Raised and outlined, it reads as what it is: something to press,
+   * standing on the card that groups it.
+   */
+  background: var(--acc-bg-card);
+  color: inherit;
+  text-align: left;
+}
+
+.chat:active {
+  border-color: var(--acc-line-strong);
+}
+
+/* While the button behind it is uncovered - see the note on .chatHide. */
+.chatOpen {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+/* A past conversation: two lines rather than one, because the date is what tells them apart - the
+   titles of a project's conversations are all about the same project. */
+.past {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  min-height: var(--acc-tap);
+  padding: var(--acc-sp-2) var(--acc-sp-3);
+  border: 1px solid var(--acc-line-strong);
+  border-radius: var(--acc-r-pill);
+  /* The same surface a live conversation stands on - it is the same kind of thing to tap (see .chat). */
+  background: var(--acc-bg-card);
+  color: inherit;
+  text-align: left;
+}
+
+.past:active {
+  border-color: var(--acc-line-strong);
+}
+
+.pastTitle {
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+}
+
+.pastMeta {
+  font-size: 11px;
+  color: var(--acc-fg-fainter);
+}
+
+/*
+ * A conversation's state, in the panel's own marks and colours (see .dotRunning and friends in
+ * shell.module.css): the row is read from the left, and this is what it should say first.
+ *
+ * Larger than the panel's seven pixels: that one is read at a keyboard's distance on a lit screen, this
+ * one at arm's length, often outdoors.
+ */
+.chatDot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: var(--acc-r-round);
+  /* Unlit rather than absent, so every title on the list starts at the same place. */
+  background: var(--acc-fg-ghost);
+  transition: background 0.2s ease;
+}
+
+/* Only these two breathe, and only because each is a thing in progress: a still list with one moving
+   mark on it points at the row that wants something. */
+.dotRunning {
+  background: var(--acc-warn);
+  box-shadow: 0 0 0 3px var(--acc-warn-16);
+  animation: acc-pulse 1.5s ease-in-out infinite;
+}
+
+.dotAttention {
+  background: var(--acc-accent);
+  box-shadow: 0 0 0 3px var(--acc-accent-16);
+  animation: acc-pulse 1.5s ease-in-out infinite;
+}
+
+/* Still, both of them: one is work that is over, the other a fact about a process that is gone. Neither
+   is going to change on its own, and a mark that moves says the opposite. */
+.dotDone {
+  background: var(--acc-ok);
+}
+
+.dotCrashed {
+  background: var(--acc-bad-light);
+  box-shadow: 0 0 0 3px var(--acc-bad-16);
+}
+
+.chatTitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+}
+
+/* --- Choosing what a conversation starts on ---------------------------------- */
+
+/* One card holding the three choices, in the same shape a project is drawn in: on a screen this size,
+   two ways of grouping things is one too many. */
+.choices {
+  margin: 0 var(--acc-sp-5) var(--acc-sp-3);
+  padding: var(--acc-sp-3);
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-card);
+  background: var(--acc-bg-raised);
+}
+
+.choiceHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--acc-sp-3);
+  width: 100%;
+  min-height: var(--acc-tap);
+  padding: 0 var(--acc-sp-3);
+  border: 1px solid transparent;
+  border-radius: var(--acc-r-pill);
+  background: var(--acc-bg);
+  color: inherit;
+  text-align: left;
+}
+
+.choiceHeadOpen {
+  border-color: var(--acc-accent-line);
+}
+
+.choiceTitle {
+  flex: none;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--acc-fg-dim);
+}
+
+.choiceValue {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+}
+
+/* The options of the one that is open, indented under it so that a list of six reads as belonging to
+   the row above rather than as the page carrying on. */
+.choiceOptions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: var(--acc-sp-1) 0 var(--acc-sp-1) var(--acc-sp-3);
+}
+
+.choiceOption {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-3);
+  width: 100%;
+  min-height: var(--acc-hit);
+  padding: var(--acc-sp-2) var(--acc-sp-3);
+  border: 1px solid transparent;
+  border-radius: var(--acc-r-pill);
+  background: none;
+  color: inherit;
+  text-align: left;
+}
+
+.choiceOptionPicked {
+  border-color: var(--acc-accent-line);
+  background: var(--acc-accent-08);
+}
+
+.choiceOption:disabled {
+  opacity: 0.45;
+}
+
+.choiceDanger {
+  color: var(--acc-danger, #e06c75);
+}
+
+/* The gap between two rows of choices - enough that the open one does not run into the next. */
+.choiceGap {
+  height: var(--acc-sp-1);
+}
+
+.startError {
+  margin: 0;
+  padding: var(--acc-sp-4) var(--acc-sp-5);
+  color: var(--acc-danger, #e06c75);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* "The IDE is opening the project" over a list of past conversations - the same words the screen that
+   starts one uses, and the same measurements as the line above, so the two read as one kind of note. */
+.historyOpening {
+  margin: 0;
+  padding: var(--acc-sp-4) var(--acc-sp-5);
+  color: var(--acc-fg-dim);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* --- One conversation ------------------------------------------------------- */
+
+/*
+ * The conversation's room on the screen - and deliberately not a scroller itself.
+ *
+ * It used to scroll, and so did the feed inside it (see .feed in feed.module.css): two scrollers one
+ * inside the other, with the phone screen keeping itself at the bottom by a scrollIntoView of its own on
+ * every chunk of the arriving answer. Anything read further up was dragged back down within a fraction of
+ * a second, and the two scrollers fought each other into a shudder while the text was printing.
+ *
+ * A column that merely gives its height away leaves exactly one scroller - the feed's own, the panel's,
+ * with everything that comes with it: it sticks to the bottom until the person scrolls up, stops following
+ * the answer the moment they do, and offers the button back down. The very same behaviour as at the desk,
+ * from the very same code.
+ */
+.thread {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  /* The positioned box the search capsule sits in the corner of - the panel's .body, here (see
+     search.module.css). */
+  position: relative;
+}
+
+/* The one thing worth interrupting the reading for. It is a button rather than a banner because it
+   leads somewhere: the screen where the answer is two taps. */
+.waitingBanner {
+  width: 100%;
+  min-height: var(--acc-hit);
+  padding: var(--acc-sp-3) var(--acc-sp-5);
+  border: none;
+  background: var(--acc-accent);
+  color: var(--acc-bg);
+  font-size: 14px;
+  text-align: left;
+}
+
+/* What will fire, in order, once the run in progress ends - the phone's version of the panel's own
+   Queue (see Queue.tsx). No drag-to-reorder here: a list this short is read top to bottom in one
+   glance, and a reorder gesture would cost more thumb precision than it is worth on a small screen. */
+.queueList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--acc-sp-2) var(--acc-sp-5);
+  border-top: 1px solid var(--acc-line);
+  background: var(--acc-bg-raised);
+}
+
+.queueRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.queueBadge {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--acc-r-round);
+  background: var(--acc-bg-control);
+  font: 10.5px var(--acc-mono);
+  color: var(--acc-fg-dim);
+}
+
+.queueText {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--acc-fg-dim);
+}
+
+.queueRemove {
+  flex: none;
+  min-height: var(--acc-hit);
+  min-width: var(--acc-hit);
+  color: var(--acc-fg-faint);
+  font-size: 18px;
+  line-height: 1;
+  background: none;
+  border: none;
+}
+
+/*
+ * The composer: three rows, and the division between them is the whole idea. What is read never
+ * moves, and what is pressed is never where a thumb might brush it by accident.
+ */
+.composer {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--acc-line);
+  background: var(--acc-bg-raised);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* --- Row one: the windows, the branch, the pull request ---------------------- */
+
+/*
+ * Everything here is looked at rather than pressed - except the rings, which open what the panel keeps
+ * in a tooltip (see Limits), and the PR, which opens in this phone's own browser.
+ */
+/*
+ * A minimum rather than a fixed height, so the vertical padding is real: at a fixed height the row
+ * would swallow it and the meters would stand flat against the rules above and below.
+ */
+.strip {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-3);
+  min-height: 38px;
+  padding: var(--acc-sp-1) var(--acc-sp-5);
+  border-bottom: 1px solid var(--acc-line);
+}
+
+/* A ring, its percentage and the room around the pair to hit: the mark is twenty pixels, the target is a
+   thumb's worth of height. The wording - which window, when it resets - is still a tap away in Limits.
+   Its height no longer sets the row's: the row has padding of its own now (see .strip). */
+.meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  height: 34px;
+  padding: 0 var(--acc-sp-1);
+  border: none;
+  background: none;
+}
+
+/* The paint comes from the ring it belongs to, inline (see MeterValue) - it is the pace colour, and it
+   changes with the share. Digits of one width: otherwise every update jerks the branch along the row. */
+.meterValue {
+  flex: none;
+  font: var(--acc-fs-meta, 12px) / 1 var(--acc-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The two windows are one reading, so they stand nearer each other than to the branch beside them - the
+   same twelve pixels the panel's own pair keeps (see .meters in shell.module.css). Each meter's padding is
+   the hit area's and stays; what is taken back is the strip's gap between them. */
+.meter + .meter {
+  margin-left: calc(-1 * var(--acc-sp-3));
+}
+
+.meter:disabled {
+  opacity: 0.5;
+}
+
+.stripRule {
+  flex: none;
+  width: 1px;
+  height: 16px;
+  background: var(--acc-line);
+}
+
+/* --- The photos waiting to go with the message ------------------------------- */
+
+.attachRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--acc-sp-2);
+  padding: var(--acc-sp-2) var(--acc-sp-5) 0;
+}
+
+/* The same chip as the panel's, in the same iris as an image attachment there (see CHIP_STYLE in
+   composerDom.ts) - only bigger, because the field beside it is bigger. */
+.attachChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 6px 4px 4px;
+  border: 1px solid rgb(168 148 242 / 32%);
+  border-radius: var(--acc-r-sm);
+  background: rgb(168 148 242 / 12%);
+  color: var(--acc-agent-light);
+  font: 12px var(--acc-mono);
+  overflow: hidden;
+}
+
+.attachThumb {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--acc-r-xs);
+  object-fit: cover;
+}
+
+.attachRemove {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: none;
+  color: inherit;
+  opacity: 0.7;
+  font-size: 15px;
+  line-height: 1;
+}
+
+/* A photo too big to travel is the one failure here a person cannot see coming - the relay drops an
+   oversized frame whole rather than shortening it, so silence would look like a message that was sent. */
+.attachError {
+  margin: var(--acc-sp-2) var(--acc-sp-5) 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--acc-warn);
+}
+
+/* --- Row two: the field, full width ------------------------------------------ */
+
+.boxWrap {
+  padding: var(--acc-sp-2) var(--acc-sp-5) 0;
+}
+
+/* The field's background goes through a variable rather than directly: the same background paints the
+   context gauge's ticks (see .ctxTick), and those two have to change together. */
+.box {
+  --acc-field-bg: var(--acc-bg);
+  position: relative;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-pill);
+  background: var(--acc-field-bg);
+  overflow: hidden;
+}
+
+.boxFocused {
+  box-shadow: 0 0 0 1px var(--acc-accent);
+}
+
+/*
+ * The context bar is a detail of the field itself, exactly as in the panel: a row of its own above the
+ * text rather than a layer over its top padding, because that padding scrolls with the text and long
+ * messages drove under the gauge - which read as a strikethrough.
+ */
+.ctxRow {
+  display: flex;
+  align-items: center;
+  padding: 9px 11px 0;
+  pointer-events: none;
+}
+
+.ctxMeter {
+  position: relative;
+  flex: 1 1 auto;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--acc-meter-track);
+}
+
+.ctxFill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.2s;
+}
+
+/* A tick does not paint itself but cuts through whatever is under it, be that an empty track or an
+   already painted part - hence the field's own background rather than a colour of its own. */
+.ctxTick {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 4px;
+  border-radius: 999px;
+  background: var(--acc-field-bg);
+}
+
+
+.composerInput {
+  display: block;
+  width: 100%;
+  min-height: 66px;
+  /* Bounded so that a long message cannot push the feed off the screen. */
+  max-height: 40vh;
+  padding: 8px 12px 12px;
+  border: none;
+  outline: none;
+  resize: none;
+  background: none;
+  color: var(--acc-fg);
+  font-family: var(--acc-mono);
+  /* Sixteen exactly: below it iOS zooms the page on focus and never zooms back. */
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.composerInput::placeholder {
+  color: var(--acc-fg-ghost);
+}
+
+/* --- Row three: the actions --------------------------------------------------- */
+
+.tools {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-2);
+  padding: var(--acc-sp-2) var(--acc-sp-5) var(--acc-sp-4);
+}
+
+.iconBtn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--acc-hit);
+  height: var(--acc-hit);
+  border: none;
+  border-radius: var(--acc-r-2xl);
+  background: var(--acc-neutral-12);
+  color: var(--acc-fg-dim);
+}
+
+.iconBtnOn {
+  background: var(--acc-accent-16);
+  color: var(--acc-accent-light);
+}
+
+.iconSlash {
+  font: 500 17px/1 var(--acc-mono);
+}
+
+/*
+ * The microphone while it is listening. Red, because that is what recording means everywhere, and it
+ * has to be legible at arm's length on a phone in daylight - which is also why it is the fill that
+ * changes rather than an outline.
+ */
+.iconBtnLive {
+  background: var(--acc-bad-24);
+  color: var(--acc-bad-light);
+}
+
+/*
+ * The phrase being said, under the field rather than inside it.
+ *
+ * At the desk this is drawn beside the caret; here it is not, and deliberately. A phone's field is two
+ * lines tall with a keyboard under it, so a tail growing inside it pushes the whole conversation up the
+ * screen while somebody is still speaking.
+ */
+.voiceTail {
+  margin: var(--acc-sp-2) var(--acc-sp-5) 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--acc-fg-ghost);
+}
+
+.iconClip {
+  width: 17px;
+  height: 17px;
+  overflow: visible;
+  /* Drawn at an angle and stood upright, as in the panel. */
+  transform: rotate(-45deg);
+}
+
+/*
+ * The microphone beside it - the same size and nothing else.
+ *
+ * Its own rule rather than the paperclip's: that one turns its glyph upright, and the microphone
+ * arrived wearing it and stood leaning at 45 degrees.
+ */
+.iconMic {
+  width: 17px;
+  height: 17px;
+}
+
+/* The system's own file chooser is what this opens; the input itself is never seen. */
+.picker {
+  display: none;
+}
+
+.send {
+  flex: none;
+  height: var(--acc-hit);
+  padding: 0 20px;
+  border: none;
+  border-radius: var(--acc-r-2xl);
+  background: var(--acc-accent);
+  color: var(--acc-on-accent);
+  font: 600 15px var(--acc-font);
+}
+
+.send:disabled {
+  opacity: 0.4;
+}
+
+/*
+ * Queue and Stop stand beside Send rather than in place of it. While the agent works there are three
+ * different things one might mean - reach the turn now, wait it out, end it - and the phone used to
+ * offer only the middle one.
+ */
+.queue {
+  flex: none;
+  height: var(--acc-hit);
+  padding: 0 16px;
+  border: none;
+  border-radius: var(--acc-r-2xl);
+  background: var(--acc-bg-control);
+  color: var(--acc-fg);
+  font: 500 15px var(--acc-font);
+}
+
+.queue:disabled {
+  opacity: 0.4;
+}
+
+/*
+ * Stop: a thin pill of a word, not a thumb-sized square.
+ *
+ * It used to be a full hit target with the mark above the caption, and on a narrow screen the two
+ * stacked - which made the whole amber row as tall as a button plus a line of text, for a control that
+ * is one word long. The mark is gone with it: "Stop" already says the thing, and the square only
+ * repeated it while paying for the height.
+ *
+ * Below the usual target on purpose, and it is fine here: the row is its own, nothing sits within a
+ * thumb's width of the button, and a mis-tap costs a turn that is running rather than one that is not.
+ */
+.stop {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+  padding: 0 var(--acc-sp-3);
+  border: 1px solid rgb(var(--acc-ch-rose) / 34%);
+  border-radius: var(--acc-r-pill);
+  background: rgb(var(--acc-ch-rose) / 12%);
+  color: var(--acc-bad-light);
+  font: 12.5px/1 var(--acc-mono);
+  cursor: pointer;
+}
+
+/* --- The two hints, and the sheet they share ---------------------------------- */
+
+/*
+ * The command list and the file list live in the composer's own flow rather than floating over it: on
+ * a phone the keyboard owns the bottom of the screen, and a list anchored to the field would open
+ * underneath it. In flow the feed gives way instead - which is what a phone's own autocomplete does.
+ */
+.suggest {
+  display: flex;
+  flex-direction: column;
+  max-height: 42vh;
+  border-bottom: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-card) var(--acc-r-card) 0 0;
+  background: var(--acc-bg-panel);
+  box-shadow: 0 -14px 34px rgb(var(--acc-ch-shade) / 46%);
+}
+
+.sheetGrab {
+  flex: none;
+  width: 36px;
+  height: 4px;
+  margin: 8px auto 4px;
+  border-radius: 999px;
+  background: var(--acc-line-strong);
+}
+
+.sheetHead {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px var(--acc-sp-2) 4px var(--acc-sp-5);
+}
+
+.sheetTitle {
+  font: 600 13px var(--acc-font);
+  color: var(--acc-fg);
+}
+
+.sheetCount {
+  flex: 1 1 auto;
+  font: 11px var(--acc-mono);
+  color: var(--acc-fg-ghost);
+}
+
+.sheetClose {
+  flex: none;
+  width: var(--acc-hit);
+  height: var(--acc-hit);
+  border: none;
+  background: none;
+  color: var(--acc-fg-faint);
+  font-size: 20px;
+  line-height: 1;
+}
+
+.sheetBody {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 var(--acc-sp-2) var(--acc-sp-3);
+}
+
+/*
+ * Two lines per row rather than the panel's one. At 390 points a name, its explanation and its group
+ * on a single line leave the explanation about nine characters - and the explanation is the whole
+ * reason the list is worth reading.
+ */
+.suggestItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: var(--acc-hit);
+  padding: 7px 10px;
+  border: none;
+  border-radius: var(--acc-r-2xl);
+  background: none;
+  text-align: left;
+}
+
+.suggestText {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.suggestName {
+  font: 500 14px/1.25 var(--acc-mono);
+  color: var(--acc-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.suggestHint {
+  font: 11.5px/1.35 var(--acc-font);
+  color: var(--acc-fg-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The folder is what tells two files of the same name apart, so it is the second line rather than a
+   part of the first that would be clipped away. */
+.suggestPath {
+  font: 11.5px/1.35 var(--acc-mono);
+  color: var(--acc-fg-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.suggestGroup {
+  flex: none;
+  padding: 2px 6px;
+  border-radius: var(--acc-r-xs);
+  background: var(--acc-neutral-12);
+  color: var(--acc-fg-ghost);
+  font: 9.5px/13px var(--acc-mono);
+  letter-spacing: 0.04em;
+}
+
+/* --- The limits sheet --------------------------------------------------------- */
+
+.sheetScrim {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  background: rgb(var(--acc-ch-shade) / 46%);
+}
+
+.sheet {
+  display: flex;
+  flex-direction: column;
+  max-height: 82%;
+  padding-bottom: env(safe-area-inset-bottom);
+  border-top: 1px solid var(--acc-line-strong);
+  border-radius: var(--acc-r-card) var(--acc-r-card) 0 0;
+  background: var(--acc-bg-panel);
+  box-shadow: 0 -18px 44px rgb(var(--acc-ch-shade) / 62%);
+}
+
+.limBody {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: var(--acc-sp-3);
+}
+
+.limRow {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-4);
+  padding: 15px var(--acc-sp-5);
+}
+
+.limText {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.limName {
+  font: 500 14px var(--acc-font);
+  color: var(--acc-fg);
+}
+
+.limMeta {
+  font: 11.5px var(--acc-mono);
+  color: var(--acc-fg-faint);
+}
+
+.limValue {
+  flex: none;
+  font: 600 20px var(--acc-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.limDivider {
+  height: 1px;
+  margin: 0 var(--acc-sp-5);
+  background: var(--acc-line);
+}
+
+.limBlock {
+  padding: 15px var(--acc-sp-5);
+}
+
+.limHead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.limHead .limName {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.limHead .limValue {
+  font-size: 16px;
+}
+
+.limBar {
+  position: relative;
+  height: 6px;
+  margin-top: 12px;
+  border-radius: 999px;
+  background: var(--acc-meter-track);
+}
+
+.limBarFill {
+  height: 100%;
+  border-radius: 999px;
+}
+
+/* The dim arc is the one thing on either ring that cannot be guessed from looking at it. Said in full
+   width rather than beside a swatch: the sentence names the arc, so a colour chip only shortened it. */
+.limNote {
+  margin: 0;
+  padding: 0 var(--acc-sp-5) 15px;
+  font: 11.5px/1.5 var(--acc-font);
+  color: var(--acc-fg-faint);
+}
+
+.limEmpty {
+  margin: 0;
+  padding: var(--acc-sp-5);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--acc-fg-faint);
+}
+
+/* --- The decision ------------------------------------------------------------ */
+
+.decisionBody {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: var(--acc-sp-5) var(--acc-sp-5) var(--acc-sp-6);
+}
+
+.decisionContext {
+  display: block;
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: var(--acc-fg-dim);
+}
+
+/* Large, because this is the whole question: what is about to happen. Everything else on the screen
+   exists to save the person from having to read the conversation. */
+.decisionVerb {
+  margin: 0 0 var(--acc-sp-1);
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.decisionTarget {
+  margin: 0 0 14px;
+  font-family: var(--acc-mono);
+  font-size: 15px;
+  word-break: break-all;
+  color: var(--acc-fg);
+}
+
+.decisionCommand {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  max-height: 9lh;
+  overflow: hidden;
+  border-radius: var(--acc-r-sm);
+  background: var(--acc-bg-raised);
+  font-family: var(--acc-mono);
+  font-size: 13px;
+  line-height: 1.45;
+  /* Along rather than wrapped: a wrapped command reads as a different command. */
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  white-space: pre;
+}
+
+.decisionCommandOpen {
+  max-height: none;
+}
+
+.decisionReason,
+.decisionDoing {
+  margin: 0 0 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--acc-fg-dim);
+}
+
+.decisionLink {
+  min-height: var(--acc-hit);
+  padding: 0;
+  color: var(--acc-accent);
+  font-size: 14px;
+  background: none;
+}
+
+/* Fixed at the bottom, stacked, and spaced apart: reaching past a mistap here is not the same as
+   reaching past one anywhere else in this app. */
+.decisionFooter {
+  display: flex;
+  flex-direction: column;
+  gap: var(--acc-sp-3);
+  padding: var(--acc-sp-3) var(--acc-sp-5) calc(env(safe-area-inset-bottom) + var(--acc-sp-3));
+  border-top: 1px solid var(--acc-line);
+  background: var(--acc-bg-raised);
+}
+
+.buttonPrimary,
+.buttonSecondary,
+.buttonDanger {
+  min-height: var(--acc-tap);
+  padding: 0 16px;
+  border-radius: var(--acc-r-md, 8px);
+  font-size: 16px;
+}
+
+.buttonPrimary {
+  background: var(--acc-accent);
+  color: var(--acc-bg);
+}
+
+.buttonPrimary:disabled {
+  opacity: 0.4;
+}
+
+.buttonSecondary {
+  border: 1px solid var(--acc-line-strong);
+  color: var(--acc-fg);
+  background: none;
+}
+
+.buttonDanger {
+  border: 1px solid var(--acc-line-strong);
+  color: var(--acc-danger, #e06c75);
+  background: none;
+}
+
+/* An answer to a question with options: the label and, under it, the line that says what choosing it
+   means. Two lines rather than one, because that second line is the whole substance of the choice - a
+   phone that showed only the labels made a person open the conversation to find out what they were
+   picking between, which is exactly the trip this screen exists to save. */
+.buttonOption {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: var(--acc-tap);
+  padding: 10px 16px;
+  border: 1px solid var(--acc-line-strong);
+  border-radius: var(--acc-r-md, 8px);
+  background: none;
+  text-align: left;
+}
+
+.buttonOptionLabel {
+  font-size: 16px;
+  color: var(--acc-fg);
+}
+
+.buttonOptionHint {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--acc-fg-dim);
+}
+
+/* --- Pairing ------------------------------------------------------------------ */
+
+.pairingNote {
+  margin: 0 0 12px;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--acc-fg-dim);
+}
+
+.pairingInput {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-md, 8px);
+  background: var(--acc-bg-raised);
+  color: var(--acc-fg);
+  font-family: var(--acc-mono);
+  font-size: 16px;
+  resize: none;
+}
+
+/* Big and spaced, because it exists to be read off one screen and compared with another. */
+.pairingFingerprint {
+  margin: 0 0 var(--acc-sp-4);
+  font-family: var(--acc-mono);
+  font-size: 18px;
+  letter-spacing: 0.06em;
+  color: var(--acc-fg);
+}
+
+.pairingLink {
+  color: var(--acc-accent);
+}
+
+.pairingError {
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: var(--acc-danger, #e06c75);
+}
+
+/* ===========================================================================
+   The shell the rebuild added: a header of two lines, a strip of tabs, a side
+   menu, and the screens behind it.
+
+   Everything here paints with the panel's own tokens rather than with values of
+   its own (see tokens.css). The design these screens were drawn from is written
+   in raw hex, and every one of those colours turned out to be a token already -
+   which is the point: a phone that quietly drifts half a shade from the desk is
+   a phone that reads as a different product.
+   =========================================================================== */
+
+/* --- Headers ---------------------------------------------------------------
+   Two shapes, and they differ in what they are for. The home screen's carries a
+   title and, under it, which machines are reachable. A screen inside carries a
+   back arrow, a title with what it belongs to under it, and at most two actions.
+   Neither puts a title on the same line as anything that could squeeze it: that
+   was the fault the whole header was redrawn for. */
+
+.homeHeader,
+.threadHeader {
+  flex: none;
+  padding: calc(env(safe-area-inset-top) + var(--acc-sp-3)) var(--acc-sp-3) 0;
+  border-bottom: 1px solid var(--acc-line);
+  background: var(--acc-bg-raised);
+}
+
+.homeHeadRow,
+.threadHeadRow {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--acc-sp-1);
+}
+
+.homeHeadRow {
+  align-items: center;
+}
+
+.homeTitle {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* The title and what it belongs to, stacked. The second line is the one that used
+   to lose: a project with a long name ate the conversation's name beside it. */
+.threadTitles {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: var(--acc-sp-1) 0 var(--acc-sp-2);
+}
+
+.threadTitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15.5px;
+  font-weight: 600;
+}
+
+.threadWhere {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 11px/1.3 var(--acc-mono);
+  color: var(--acc-fg-faint);
+}
+
+/* A square the size of a thumb with a glyph in the middle - the target stays 44
+   wide however small the drawing inside it is. */
+.headerIcon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--acc-hit);
+  height: var(--acc-hit);
+  border: none;
+  border-radius: var(--acc-r-pill);
+  background: none;
+  color: var(--acc-fg-body);
+  cursor: pointer;
+}
+
+.headerIconGlyph {
+  width: 18px;
+  height: 18px;
+}
+
+/* The one header action that is a word rather than a shape: "refresh" has no
+   drawing everybody already knows. */
+.headerWord {
+  flex: none;
+  min-height: var(--acc-hit);
+  padding: 0 var(--acc-sp-2);
+  border: none;
+  background: none;
+  color: var(--acc-accent);
+  font: 13px var(--acc-font);
+  cursor: pointer;
+}
+
+.homeAgents {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--acc-sp-2) var(--acc-sp-4);
+  padding: 0 0 var(--acc-sp-3) calc(var(--acc-hit) - var(--acc-sp-3));
+}
+
+.homeAgent {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--acc-sp-2);
+  min-width: 0;
+}
+
+.homeAgentLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 11.5px/1 var(--acc-mono);
+  color: var(--acc-fg-faint);
+}
+
+.homeAgentState {
+  font: 11.5px/1 var(--acc-mono);
+  color: var(--acc-fg-ghost);
+}
+
+/* --- The band headings and the cards under them ---------------------------- */
+
+.bandTitle {
+  margin: var(--acc-sp-5) 0 var(--acc-sp-2);
+  font: 600 10px/1 var(--acc-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--acc-fg-fainter);
+}
+
+.bandTitle:first-child {
+  margin-top: 0;
+}
+
+/* The same caption on the list of projects, where the cards stand inset (see .project). A heading that
+   begins at the screen's edge over cards that begin eighteen pixels in reads as a heading of the screen
+   rather than of the list under it. Not put on .bandTitle itself: the task screen shares that class and
+   its cards do run to the wall. */
+.homeBand {
+  margin-left: var(--acc-sp-5);
+  margin-right: var(--acc-sp-5);
+}
+
+.bandHead {
+  display: flex;
+  align-items: baseline;
+  gap: var(--acc-sp-2);
+  margin: var(--acc-sp-5) 0 var(--acc-sp-2);
+}
+
+.bandHead:first-child {
+  margin-top: 0;
+}
+
+.bandTitleInline {
+  flex: 1 1 auto;
+  font: 600 10px/1 var(--acc-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--acc-fg-fainter);
+}
+
+.bandCount {
+  flex: none;
+  font: 11.5px var(--acc-mono);
+  color: var(--acc-c-mint-4);
+}
+
+/* The plain card every list on these screens is made of - a bordered box whose
+   children draw their own separators. */
+.card {
+  margin-bottom: var(--acc-sp-3);
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-card);
+  background: var(--acc-bg-raised);
+  overflow: hidden;
+}
+
+.screenNote {
+  margin: var(--acc-sp-3) 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--acc-fg-dim);
+}
+
+.noteOk,
+.noteBad {
+  margin: 0 0 var(--acc-sp-3);
+  padding: var(--acc-sp-3);
+  border-radius: var(--acc-r-pill);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.noteOk {
+  background: var(--acc-branch-10);
+  color: var(--acc-branch-light);
+}
+
+.noteBad {
+  background: rgb(var(--acc-ch-rose) / 12%);
+  color: var(--acc-c-rose-4);
+}
+
+/* --- The band of what is waiting, at the top of the first screen ------------ */
+
+.waitCard {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-3);
+  padding: var(--acc-sp-4);
+  /* Inset like the project cards below it, and by the same token: this band and they are one list, and
+     one list has one left edge. The width is left to the box - a full one plus these margins is a card
+     wider than the screen. */
+  margin: 0 var(--acc-sp-5) var(--acc-sp-2);
+  border: 1px solid var(--acc-accent-line);
+  border-radius: var(--acc-r-card);
+  background: var(--acc-accent-12);
+  text-align: left;
+  font-family: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.waitMain {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.waitKind {
+  font: 600 10px/1 var(--acc-mono);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--acc-accent-light);
+}
+
+.waitTitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--acc-fg);
+}
+
+.waitWhere {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--acc-fg-faint);
+}
+
+.waitAction {
+  flex: none;
+  display: grid;
+  place-items: center;
+  height: 36px;
+  padding: 0 var(--acc-sp-3);
+  border-radius: var(--acc-r-pill);
+  background: var(--acc-accent);
+  color: var(--acc-on-accent);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* --- A project's card ------------------------------------------------------ */
+
+.projectBranch {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-2);
+  min-width: 0;
+  font: 11px/1 var(--acc-mono);
+  color: var(--acc-c-mint-4);
+}
+
+.projectBranchIcon {
+  flex: none;
+  width: 11px;
+  height: 11px;
+}
+
+.projectBranchName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.projectPr {
+  flex: none;
+  color: var(--acc-branch-light);
+}
+
+.countWaiting,
+.countOpen {
+  flex: none;
+  padding: 4px var(--acc-sp-2);
+  border-radius: var(--acc-r-round);
+  font: 11px/1 var(--acc-mono);
+}
+
+.countWaiting {
+  background: var(--acc-accent-12);
+  color: var(--acc-accent-light);
+}
+
+.countOpen {
+  background: rgb(var(--acc-ch-mist) / 12%);
+  color: var(--acc-fg-dim);
+}
+
+/* The two ways out of a project's card, on one row at its foot. Equal halves
+   rather than a word and a square: at this width a square with a plus in it read
+   as the card's own title bar rather than as the way into a conversation. */
+.projectFoot {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--acc-sp-2);
+  /* No inset of its own: the card already has one, and the pair used to stand a step inside the chats
+     above them - two left edges a few pixels apart, which reads as sloppy rather than as dense. */
+  padding: var(--acc-sp-3) 0 0;
+  border-top: 1px solid var(--acc-bg-panel);
+}
+
+.projectFoot:only-child,
+.projectFoot > :only-child {
+  grid-column: 1 / -1;
+}
+
+.footButton {
+  min-width: 0;
+  min-height: var(--acc-hit);
+  padding: 0 var(--acc-sp-3);
+  border: 1px solid var(--acc-line-strong);
+  border-radius: var(--acc-r-pill);
+  background: var(--acc-bg-card);
+  color: var(--acc-fg-body);
+  font: 13px var(--acc-font);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.footButton:disabled {
+  opacity: 0.45;
+}
+
+.footButtonAccent {
+  border-color: var(--acc-accent-line);
+  background: var(--acc-accent-12);
+  color: var(--acc-accent);
+  font-weight: 600;
+}
+
+/* --- A conversation's row -------------------------------------------------- */
+
+.chatText {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chatState {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--acc-fg-faint);
+}
+
+.chatStateWaiting {
+  color: var(--acc-accent-light);
+}
+
+.chatChevron {
+  flex: none;
+  color: var(--acc-fg-ghost);
+  font-size: 15px;
+}
+
+/* --- The strip of tabs, under the thread's title --------------------------- */
+
+.tabStrip {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-2);
+  padding: 0 0 var(--acc-sp-2);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tabStrip::-webkit-scrollbar {
+  display: none;
+}
+
+.tab {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  max-width: 60vw;
+  padding: 0 var(--acc-sp-3);
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-pill);
+  background: var(--acc-bg-card);
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.tabOn {
+  border-color: var(--acc-accent-40);
+  background: var(--acc-accent-16);
+}
+
+/* The group's colour, as at the desk: a fork and its parent carry one bar. */
+.tabBar {
+  flex: none;
+  width: 2px;
+  height: 14px;
+  border-radius: 1px;
+}
+
+.tabDot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--acc-r-round);
+  background: var(--acc-fg-ghost);
+}
+
+.tabFork {
+  flex: none;
+  color: var(--acc-branch-light);
+  font-size: 12px;
+}
+
+.tabLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 12.5px/1 var(--acc-font);
+  color: var(--acc-fg-dim);
+}
+
+.tabOn .tabLabel {
+  color: var(--acc-fg);
+}
+
+.tabPlus {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px dashed var(--acc-line-strong);
+  border-radius: var(--acc-r-pill);
+  background: none;
+  color: var(--acc-fg-dim);
+  font-size: 15px;
+  cursor: pointer;
+}
+
+/* --- The banner that says something is waiting ----------------------------- */
+
+.waitingBannerText {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.waitingBannerChevron {
+  flex: none;
+  font-size: 15px;
+}
+
+/* --- The task-list row above the field ------------------------------------- */
+
+.taskRow {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-3);
+  width: 100%;
+  padding: var(--acc-sp-2) var(--acc-sp-4);
+  border: none;
+  border-bottom: 1px solid var(--acc-bg-panel);
+  background: none;
+  text-align: left;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.taskRowLabel {
+  flex: none;
+  font: 600 10px/1 var(--acc-mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--acc-fg-faint);
+}
+
+.taskRowText {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  color: var(--acc-fg-body);
+}
+
+.taskRowCount {
+  flex: none;
+  font: 11.5px/1 var(--acc-mono);
+  color: var(--acc-c-mint-4);
+}
+
+.taskRowChevron {
+  flex: none;
+  color: var(--acc-fg-ghost);
+  font-size: 14px;
+}
+
+/* --- How the turn runs: the chip in the meter row, and the row under it ----- */
+
+.runChip {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 var(--acc-sp-3);
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-pill);
+  background: var(--acc-bg-card);
+  cursor: pointer;
+}
+
+.runChipIcon {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  color: var(--acc-fg-fainter);
+}
+
+.runChipText {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  font: 12px/1 var(--acc-mono);
+  color: var(--acc-fg-body);
+}
+
+.runChipMode {
+  color: var(--acc-c-sand-4);
+}
+
+.runChipChevron {
+  flex: none;
+  color: var(--acc-fg-ghost);
+  font-size: 13px;
+}
+
+/* The turn in progress and the button that ends it - a row of its own, which is
+   what took Stop out of the row of actions and stopped Send being squeezed off
+   the edge of the screen. */
+/* The height is the pill's now, not a hit target's - see .stop. */
+.runRow {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-3);
+  padding: var(--acc-sp-1) var(--acc-sp-4);
+  border-bottom: 1px solid var(--acc-bg-panel);
+  background: rgb(var(--acc-ch-sand) / 6%);
+}
+
+.runRowText {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 12.5px/1 var(--acc-mono);
+  color: var(--acc-c-sand-4);
+}
+
+.runRowQueue {
+  flex: none;
+  padding: 0 var(--acc-sp-2);
+  min-height: 26px;
+  border: none;
+  background: none;
+  font: 12.5px/1 var(--acc-mono);
+  color: var(--acc-fg-dim);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+/* --- Quotes waiting above the field ---------------------------------------- */
+
+.quoteList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--acc-sp-2) var(--acc-sp-4) 0;
+}
+
+.quoteRow {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-2);
+  padding: var(--acc-sp-2) var(--acc-sp-3);
+  border-left: 2px solid var(--acc-c-orchid);
+  border-radius: 0 var(--acc-r-pill) var(--acc-r-pill) 0;
+  background: var(--acc-bg-card);
+}
+
+.quoteText {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  color: var(--acc-fg-dim);
+}
+
+/* --- The row of actions, as a grid that wraps ------------------------------ */
+
+.toolIcons {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.toolSend {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+}
+
+/* --- The side menu ---------------------------------------------------------
+   Over the screen rather than beside it: at this width a drawer that pushes the
+   content aside leaves neither of them readable. */
+
+.drawerScrim {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  background: rgb(var(--acc-ch-shade) / 55%);
+}
+
+.drawer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: min(314px, 86%);
+  display: flex;
+  flex-direction: column;
+  background: var(--acc-bg-raised);
+  border-right: 1px solid var(--acc-line);
+  box-shadow: 18px 0 44px rgb(var(--acc-ch-shade) / 62%);
+}
+
+.drawerHead {
+  flex: none;
+  padding: calc(env(safe-area-inset-top) + var(--acc-sp-3)) var(--acc-sp-4) var(--acc-sp-3);
+  border-bottom: 1px solid var(--acc-bg-panel);
+}
+
+.drawerBrand {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-3);
+  margin-bottom: var(--acc-sp-3);
+}
+
+.drawerLogo {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  display: block;
+}
+
+.drawerName {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14.5px;
+  font-weight: 600;
+}
+
+.drawerAgents {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.drawerAgent {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-2);
+  min-width: 0;
+}
+
+.drawerAgentLabel {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 12px var(--acc-mono);
+  color: var(--acc-fg-body);
+}
+
+.drawerAgentState {
+  flex: none;
+  font: 11px var(--acc-mono);
+  color: var(--acc-fg-ghost);
+}
+
+.drawerForget {
+  flex: none;
+  padding: 0 var(--acc-sp-2);
+  /* The target is a thumb's while the row stays the height of its text: the negative margin gives the
+     press its 44 pixels back without pushing the two status lines apart. */
+  min-height: var(--acc-hit);
+  margin-block: -8px;
+  border: none;
+  background: none;
+  font: 11px var(--acc-mono);
+  color: var(--acc-c-rose-4);
+  cursor: pointer;
+}
+
+.drawerNav {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--acc-sp-2) var(--acc-sp-2) var(--acc-sp-5);
+}
+
+.drawerRow {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-3);
+  width: 100%;
+  min-height: 48px;
+  padding: 0 var(--acc-sp-3);
+  border: none;
+  border-radius: var(--acc-r-pill);
+  background: none;
+  color: var(--acc-fg-body);
+  text-align: left;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.drawerRowOn {
+  background: var(--acc-accent-12);
+  color: var(--acc-fg);
+}
+
+.drawerIcon {
+  flex: none;
+  width: 18px;
+  text-align: center;
+  color: var(--acc-fg-fainter);
+}
+
+.drawerRowOn .drawerIcon {
+  color: var(--acc-accent);
+}
+
+.drawerLabel {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+}
+
+.drawerBadge {
+  flex: none;
+  padding: 2px 7px;
+  border-radius: var(--acc-r-round);
+  background: var(--acc-accent-20);
+  color: var(--acc-accent-light);
+  font: 10.5px var(--acc-mono);
+}
+
+.drawerValue,
+.drawerValueAgent {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 11px var(--acc-mono);
+}
+
+.drawerValue {
+  color: var(--acc-fg-fainter);
+}
+
+.drawerValueAgent {
+  color: var(--acc-agent-light);
+}
+
+.drawerRule {
+  height: 1px;
+  margin: var(--acc-sp-2) var(--acc-sp-3);
+  background: var(--acc-bg-panel);
+}
+
+.drawerFoot {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--acc-sp-2);
+  padding: var(--acc-sp-3) var(--acc-sp-4) calc(env(safe-area-inset-bottom) + var(--acc-sp-5));
+  border-top: 1px solid var(--acc-bg-panel);
+}
+
+.drawerFootLine {
+  font: 11px var(--acc-mono);
+  color: var(--acc-fg-ghost);
+}
+
+.drawerFootLink {
+  font-size: 12.5px;
+  color: var(--acc-accent);
+  text-decoration: none;
+}
+
+/* --- The sheets ------------------------------------------------------------ */
+
+.sheetTitleGroup {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sheetMeta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 11px var(--acc-mono);
+  color: var(--acc-fg-faint);
+}
+
+/* The row of buttons at a sheet's foot, inside the safe area. Equal halves where
+   there are two of them, full width where there is one. */
+.sheetFooter {
+  flex: none;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: var(--acc-sp-3);
+  padding: var(--acc-sp-3) var(--acc-sp-4) calc(env(safe-area-inset-bottom) + var(--acc-sp-5));
+}
+
+.sheetLabel {
+  margin: var(--acc-sp-3) 0 var(--acc-sp-2);
+  font: 600 10px/1 var(--acc-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--acc-fg-fainter);
+}
+
+.sheetLabelRow {
+  display: flex;
+  align-items: baseline;
+  gap: var(--acc-sp-2);
+  margin: var(--acc-sp-3) 0 var(--acc-sp-2);
+}
+
+.sheetLabelInline {
+  flex: 1 1 auto;
+  font: 600 10px/1 var(--acc-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--acc-fg-fainter);
+}
+
+.sheetNote {
+  margin: var(--acc-sp-2) 0 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--acc-fg-fainter);
+}
+
+/* One line of a menu inside a sheet: a glyph, a name, and a reason under it. */
+.sheetAction {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-3);
+  width: 100%;
+  min-height: var(--acc-tap);
+  padding: var(--acc-sp-2) var(--acc-sp-3);
+  border: none;
+  border-radius: var(--acc-r-pill);
+  background: none;
+  color: var(--acc-fg);
+  text-align: left;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.sheetActionOff {
+  opacity: 0.45;
+}
+
+.sheetActionGlyph {
+  flex: none;
+  width: 20px;
+  text-align: center;
+  color: var(--acc-fg-fainter);
+  font-size: 15px;
+}
+
+.sheetActionText {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sheetActionName {
+  font-size: 15.5px;
+}
+
+.sheetActionHint {
+  font-size: 12px;
+  color: var(--acc-fg-faint);
+}
+
+/* What the message sheet is about, quoted under its heading. */
+.selectedLine {
+  margin: 0 var(--acc-sp-3) var(--acc-sp-3);
+  padding-left: var(--acc-sp-3);
+  border-left: 2px solid var(--acc-accent);
+  font: 13px/1.5 var(--acc-mono);
+  color: var(--acc-fg-body);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* --- The tabs sheet -------------------------------------------------------- */
+
+.tabRow {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-3);
+  width: 100%;
+  min-height: var(--acc-tap);
+  padding: 0 var(--acc-sp-3);
+  margin-bottom: 2px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-pill);
+  background: var(--acc-bg-card);
+  text-align: left;
+  font-family: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.tabRowOn {
+  border-color: var(--acc-accent-40);
+  background: var(--acc-accent-16);
+}
+
+.tabRowBar {
+  flex: none;
+  width: 2px;
+  height: 24px;
+  border-radius: 1px;
+}
+
+.tabRowTitle {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14.5px;
+  color: var(--acc-fg-body);
+}
+
+.tabRowOn .tabRowTitle {
+  color: var(--acc-fg);
+}
+
+/* --- The run sheet --------------------------------------------------------- */
+
+.chipWrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--acc-sp-2);
+}
+
+.pickChip {
+  height: 42px;
+  padding: 0 var(--acc-sp-4);
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-pill);
+  background: var(--acc-bg-card);
+  color: var(--acc-fg-dim);
+  font: 13px var(--acc-mono);
+  cursor: pointer;
+}
+
+.pickChip:disabled {
+  opacity: 0.4;
+}
+
+.pickChipOn {
+  border-color: var(--acc-accent-40);
+  background: var(--acc-accent-16);
+  color: var(--acc-fg);
+}
+
+.lockedTag {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font: 10.5px var(--acc-mono);
+  color: var(--acc-c-sand-2);
+}
+
+.lockedRow {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-3);
+  padding: var(--acc-sp-3);
+  border: 1px solid rgb(var(--acc-ch-sand) / 35%);
+  border-radius: var(--acc-r-pill);
+  background: rgb(var(--acc-ch-sand) / 8%);
+}
+
+.lockedName {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14.5px;
+  color: var(--acc-c-sand-4);
+}
+
+.lockedNow {
+  flex: none;
+  font-size: 12px;
+  color: var(--acc-fg-faint);
+}
+
+/* --- Tasks, agents and background commands --------------------------------- */
+
+.todoRow {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-3);
+  padding: var(--acc-sp-3);
+  border-top: 1px solid var(--acc-bg-panel);
+}
+
+.todoRow:first-child {
+  border-top: none;
+}
+
+.todoRowActive {
+  background: rgb(var(--acc-ch-sand) / 6%);
+}
+
+.todoBox {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 19px;
+  height: 19px;
+  border: 1.5px solid var(--acc-line-strong);
+  border-radius: 5px;
+  color: var(--acc-on-accent);
+  font-size: 12px;
+}
+
+.todoBoxDone {
+  border-color: var(--acc-c-mint-2);
+  background: var(--acc-c-mint-2);
+}
+
+.todoBoxActive {
+  border-color: var(--acc-c-sand-2);
+}
+
+.todoText {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--acc-fg);
+}
+
+.todoTextDone {
+  color: var(--acc-fg-fainter);
+  text-decoration: line-through;
+}
+
+.todoRunning {
+  flex: none;
+  font: 600 9.5px/1 var(--acc-mono);
+  letter-spacing: 0.1em;
+  color: var(--acc-c-sand-2);
+}
+
+.agentRow {
+  display: flex;
+  align-items: stretch;
+  margin-bottom: var(--acc-sp-2);
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-card);
+  background: var(--acc-bg-raised);
+  overflow: hidden;
+}
+
+.agentRowLive {
+  border-color: var(--acc-agent-line);
+  background: var(--acc-agent-12);
+}
+
+.agentMain {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-3);
+  padding: var(--acc-sp-3);
+  border: none;
+  background: none;
+  text-align: left;
+  font-family: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.agentText {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.agentName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14.5px;
+  color: var(--acc-fg-body);
+}
+
+.agentRowLive .agentName {
+  color: var(--acc-agent-light);
+}
+
+.agentMeta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 11px var(--acc-mono);
+  color: var(--acc-fg-faint);
+}
+
+.agentStop {
+  flex: none;
+  width: var(--acc-hit);
+  border: none;
+  border-left: 1px solid var(--acc-bg-panel);
+  background: none;
+  color: var(--acc-c-rose-4);
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.agentStopWide {
+  flex: none;
+  height: 36px;
+  padding: 0 var(--acc-sp-3);
+  margin-top: var(--acc-sp-2);
+  border: 1px solid rgb(var(--acc-ch-rose) / 40%);
+  border-radius: var(--acc-r-pill);
+  background: none;
+  color: var(--acc-c-rose-4);
+  font: 12.5px var(--acc-font);
+  cursor: pointer;
+}
+
+.agentHeadName {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--acc-agent-light);
+}
+
+.dotAgentLive {
+  background: var(--acc-agent);
+  animation: acc-pulse 1.5s ease-in-out infinite;
+}
+
+.bgRow {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-3);
+  padding: var(--acc-sp-3);
+  margin-bottom: var(--acc-sp-2);
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-card);
+  background: var(--acc-bg-raised);
+}
+
+.bgChip {
+  flex: none;
+  padding: 1px 7px 2px;
+  border-radius: 4px;
+  background: rgb(var(--acc-ch-sand) / 16%);
+  color: var(--acc-c-sand-4);
+  font: 600 10.5px/1.5 var(--acc-mono);
+}
+
+.bgCommand {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 12.5px var(--acc-mono);
+  color: var(--acc-fg-body);
+}
+
+.bgTime {
+  flex: none;
+  font: 11px var(--acc-mono);
+  color: var(--acc-fg-faint);
+}
+
+.bgStop {
+  flex: none;
+  height: 34px;
+  padding: 0 var(--acc-sp-3);
+  border: 1px solid rgb(var(--acc-ch-rose) / 40%);
+  border-radius: var(--acc-r-pill);
+  background: none;
+  color: var(--acc-c-rose-4);
+  font: 12.5px var(--acc-font);
+  cursor: pointer;
+}
+
+/* --- MCP servers ----------------------------------------------------------- */
+
+.serverRow {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-3);
+  padding: var(--acc-sp-3);
+  border-top: 1px solid var(--acc-bg-panel);
+}
+
+.serverRow:first-child {
+  border-top: none;
+}
+
+/* A server somebody switched off is drawn as switched off rather than left out: absent, it reads as a
+   server that was never configured. */
+.serverRowOff {
+  opacity: 0.6;
+}
+
+.serverText {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.serverName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 14px var(--acc-mono);
+  color: var(--acc-fg);
+}
+
+.serverState {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 11px var(--acc-mono);
+  color: var(--acc-fg-fainter);
+}
+
+.serverStateWarn {
+  color: var(--acc-c-sand-2);
+}
+
+.serverStateBad {
+  color: var(--acc-c-rose-4);
+}
+
+/* An action that happens somewhere else, drawn as a fact rather than as a button:
+   a control that cannot work is worse than a sentence saying where it lives. */
+.atDesk {
+  flex: none;
+  display: grid;
+  place-items: center;
+  height: 34px;
+  padding: 0 var(--acc-sp-3);
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-pill);
+  color: var(--acc-fg-ghost);
+  font: 12.5px var(--acc-font);
+}
+
+.rowButton,
+.rowButtonPrimary,
+.rowButtonDanger {
+  flex: none;
+  min-height: 34px;
+  padding: 0 var(--acc-sp-3);
+  border: 1px solid var(--acc-line-strong);
+  border-radius: var(--acc-r-pill);
+  background: var(--acc-bg-card);
+  color: var(--acc-fg-body);
+  font: 12.5px var(--acc-font);
+  cursor: pointer;
+}
+
+.rowButtonPrimary {
+  border-color: transparent;
+  background: var(--acc-accent);
+  color: var(--acc-on-accent);
+  font-weight: 600;
+}
+
+.rowButtonDanger {
+  border-color: rgb(var(--acc-ch-rose) / 40%);
+  background: none;
+  color: var(--acc-c-rose-4);
+}
+
+.wideButton {
+  width: 100%;
+  min-height: var(--acc-tap);
+  margin-bottom: var(--acc-sp-3);
+  border: 1px solid var(--acc-line-strong);
+  border-radius: var(--acc-r-card);
+  background: var(--acc-bg-card);
+  color: var(--acc-fg-body);
+  font: 14px var(--acc-font);
+  cursor: pointer;
+}
+
+/* --- Forms ----------------------------------------------------------------- */
+
+.formRow {
+  padding: var(--acc-sp-3) var(--acc-sp-3) 0;
+}
+
+.input {
+  width: 100%;
+  min-height: var(--acc-hit);
+  padding: 0 var(--acc-sp-3);
+  border: 1px solid var(--acc-line-strong);
+  border-radius: var(--acc-r-pill);
+  background: var(--acc-bg);
+  color: var(--acc-fg);
+  /* Sixteen exactly, as in the composer: below it iOS zooms the page on focus and never zooms back. */
+  font: 16px var(--acc-mono);
+}
+
+.formNote {
+  margin: var(--acc-sp-3) var(--acc-sp-3) 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--acc-c-sand-4);
+}
+
+.formActions {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-2);
+  padding: var(--acc-sp-3);
+}
+
+.formActions > * {
+  flex: 1 1 auto;
+}
+
+.segmented {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 4px;
+  padding: 3px;
+  margin: var(--acc-sp-3);
+  border-radius: var(--acc-r-card);
+  background: var(--acc-bg-deep);
+}
+
+.segment {
+  min-width: 0;
+  min-height: 38px;
+  border: none;
+  border-radius: var(--acc-r-pill);
+  background: none;
+  color: var(--acc-fg-dim);
+  font: 13px var(--acc-font);
+  cursor: pointer;
+}
+
+.segmentOn {
+  background: var(--acc-bg-control);
+  color: var(--acc-fg);
+  font-weight: 600;
+}
+
+/* --- Plugins --------------------------------------------------------------- */
+
+.pluginRow {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--acc-sp-3);
+  padding: var(--acc-sp-3);
+  border-top: 1px solid var(--acc-bg-panel);
+}
+
+.pluginRow:first-child {
+  border-top: none;
+}
+
+.pluginRowOff {
+  opacity: 0.6;
+}
+
+.pluginText {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pluginName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 14px var(--acc-mono);
+  color: var(--acc-fg);
+}
+
+.pluginMeta {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--acc-fg-faint);
+}
+
+.pluginOn,
+.pluginOff {
+  flex: none;
+  padding: 3px var(--acc-sp-2);
+  border-radius: var(--acc-r-round);
+  font: 10.5px var(--acc-mono);
+}
+
+.pluginOn {
+  background: rgb(var(--acc-ch-mint) / 12%);
+  color: var(--acc-c-mint-4);
+}
+
+.pluginOff {
+  background: rgb(var(--acc-ch-mist) / 12%);
+  color: var(--acc-fg-fainter);
+}
+
+/* --- Claude accounts ------------------------------------------------------- */
+
+.payingCard {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--acc-sp-3);
+  margin-bottom: var(--acc-sp-3);
+  border: 1px solid var(--acc-accent-line);
+  border-radius: var(--acc-r-card);
+  background: var(--acc-accent-08);
+}
+
+.payingLabel {
+  font: 600 10px/1 var(--acc-mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--acc-accent-light);
+  margin-bottom: 5px;
+}
+
+.payingName {
+  font-size: 14.5px;
+  font-weight: 600;
+}
+
+.payingWhere {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 11.5px var(--acc-mono);
+  color: var(--acc-fg-faint);
+}
+
+.accountRow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--acc-sp-2);
+  padding: var(--acc-sp-3);
+  border-top: 1px solid var(--acc-bg-panel);
+}
+
+.accountRow:first-child {
+  border-top: none;
+}
+
+.accountHead {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-2);
+  min-width: 0;
+}
+
+.accountName {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14.5px;
+  font-weight: 600;
+}
+
+.accountCurrent,
+.accountPending {
+  flex: none;
+  padding: 2px 7px;
+  border-radius: var(--acc-r-round);
+  font: 10px var(--acc-mono);
+}
+
+.accountCurrent {
+  background: var(--acc-accent-16);
+  color: var(--acc-accent-light);
+}
+
+.accountPending {
+  background: rgb(var(--acc-ch-sand) / 16%);
+  color: var(--acc-c-sand-4);
+}
+
+/* The plan and the address, in that order and on every row - the shape that makes
+   two rows comparable without being read. */
+.accountFacts {
+  display: flex;
+  align-items: baseline;
+  gap: var(--acc-sp-2);
+  min-width: 0;
+  font: 11px var(--acc-mono);
+}
+
+.accountPlan {
+  flex: none;
+  color: var(--acc-fg-dim);
+}
+
+.accountAddress {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--acc-fg-fainter);
+}
+
+.accountMeters {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-4);
+}
+
+.accountMeter {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font: 11px var(--acc-mono);
+}
+
+.accountMeterName,
+.accountMeterEmpty {
+  color: var(--acc-fg-fainter);
+}
+
+.accountActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--acc-sp-2);
+}
+
+/* --- Scenarios: the rounds of work, and the one that may be going right now --- */
+
+/*
+ * The live run, on the list of scenarios: the whole card is the way into it.
+ *
+ * A card rather than a row, and above everything else on the screen, because it is the one thing on it
+ * that is happening: the shelves are a list of what exists, and what exists is not what somebody picked
+ * up a phone to look at.
+ */
+.runCard {
+  display: block;
+  width: 100%;
+  margin-bottom: var(--acc-sp-3);
+  padding: var(--acc-sp-4);
+  border: 1px solid var(--acc-accent-32);
+  border-radius: var(--acc-r-card);
+  background: var(--acc-bg-raised);
+  text-align: left;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.runCardHead {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-2);
+}
+
+.runCardName {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15.5px;
+  font-weight: 600;
+  color: var(--acc-fg);
+}
+
+/*
+ * The run's own figures, wrapping rather than scrolling sideways.
+ *
+ * Five of them - the state, how far, how long, the tokens, the money - and at 390 points they do not
+ * fit on one line however short the words are. Wrapped they take a second line and stay readable; kept
+ * on one they would either shrink below reading size or push the money off the edge.
+ */
+.runFacts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--acc-sp-2) var(--acc-sp-3);
+  margin-top: var(--acc-sp-3);
+}
+
+.runFact {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+  font: var(--acc-fs-meta) var(--acc-mono);
+  color: var(--acc-fg-body);
+}
+
+.runFactKey {
+  color: var(--acc-fg-ghost);
+}
+
+/* How far along, as a bar. The one figure on the card that is read without reading. */
+.runTrack {
+  height: 5px;
+  margin-top: var(--acc-sp-3);
+  border-radius: var(--acc-r-pill);
+  background: var(--acc-meter-track);
+  overflow: hidden;
+}
+
+.runFill {
+  height: 100%;
+  border-radius: var(--acc-r-pill);
+  background: var(--acc-accent);
+  transition: width 0.3s ease;
+}
+
+.runFillDone {
+  background: var(--acc-ok);
+}
+
+.runFillFailed {
+  background: var(--acc-bad);
+}
+
+/*
+ * A card has stopped to ask, said on the card rather than left to the pill.
+ *
+ * "Waiting for you" in a pill is a state; this is the sentence that says a person is what the run is
+ * waiting for, and it is the whole reason somebody would open this screen from a sofa.
+ */
+.runAsk {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-2);
+  margin-top: var(--acc-sp-3);
+  padding: var(--acc-sp-2) var(--acc-sp-3);
+  border-radius: var(--acc-r-md);
+  background: var(--acc-warn-16);
+  font-size: 13px;
+  color: var(--acc-warn);
+}
+
+.runAskText {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- The shelves: past runs, and the scenarios themselves -------------------- */
+
+.pastRun {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-3);
+  width: 100%;
+  min-height: var(--acc-hit);
+  padding: var(--acc-sp-3) var(--acc-sp-4);
+  border: none;
+  border-bottom: 1px solid var(--acc-bg-panel);
+  background: none;
+  text-align: left;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.pastRun:last-child {
+  border-bottom: none;
+}
+
+.pastRunText {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--acc-sp-1);
+}
+
+/*
+ * The state under the name rather than beside it.
+ *
+ * A failure with a name of its own is a phrase - "ran past its time" - and beside a scenario's name it
+ * took most of the row: the name, which is the only thing that tells one run from another, was cut to
+ * three words while the pill stood whole. On its own line neither has to give way.
+ */
+.pastRunFacts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--acc-sp-1) var(--acc-sp-2);
+}
+
+.pastRunName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14.5px;
+  color: var(--acc-fg);
+}
+
+.pastRunMeta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--acc-fs-meta) var(--acc-mono);
+  color: var(--acc-fg-faint);
+}
+
+/*
+ * A scenario on the shelf, and everything one does to it.
+ *
+ * It used to be a row that could not be pressed, because writing one, running one and putting one on a
+ * clock were all at the desk. None of that is true any more (see RemoteCommands): the two things done
+ * most often are buttons on the card, and everything else is behind the chevron, in a sheet of words.
+ *
+ * The rail down the side says which shelf it is on - aqua for the repository, iris for one's own - which
+ * matters here more than at the desk: this screen has no room for two headings.
+ */
+.scenarioCard {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--acc-sp-1);
+  /* Clear of the rail, which is drawn on the card's own edge rather than inside its padding. */
+  padding: var(--acc-sp-3) var(--acc-sp-4) var(--acc-sp-3) calc(var(--acc-sp-4) + 3px);
+  overflow: hidden;
+}
+
+.scenarioCard::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 3px;
+}
+
+.scenarioCard.railProject::before {
+  background: var(--acc-branch);
+}
+
+.scenarioCard.railUser::before {
+  background: var(--acc-agent);
+}
+
+.scenarioCardHead {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-2);
+  min-height: var(--acc-hit);
+  text-align: left;
+}
+
+.scenarioCardHead .scenarioName {
+  flex: 1;
+  min-width: 0;
+}
+
+.scenarioBroken {
+  color: var(--acc-warn);
+}
+
+.scenarioName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14.5px;
+  color: var(--acc-fg);
+}
+
+.scenarioMeta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--acc-fs-meta) var(--acc-mono);
+  color: var(--acc-fg-faint);
+}
+
+.scenarioWhen {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--acc-fs-meta) var(--acc-mono);
+  color: var(--acc-c-iris-2);
+}
+
+/* Not due any more and never made up for: the hour passed with the IDE closed (see ScenarioSchedule). */
+.scenarioMissed {
+  color: var(--acc-warn);
+}
+
+/* --- One run: the strip under the header, and the timeline ------------------- */
+
+/*
+ * The run's figures, under the two-line title and inside the header block.
+ *
+ * In the header rather than at the top of the list because they are about the run rather than a step
+ * of it: scrolled away, "how far along" and "how long" would be answers one has to scroll back for,
+ * and on a phone that is the pair of numbers the screen is opened with.
+ */
+.runStrip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--acc-sp-2) var(--acc-sp-3);
+  padding: 0 0 var(--acc-sp-3);
+}
+
+/* The danger of the two header words. Red standing rather than red on a press: it ends a run. */
+.headerWordDanger {
+  color: var(--acc-danger, #e06c75);
+}
+
+.timeline {
+  display: flex;
+  flex-direction: column;
+}
+
+/* The name of a stage, drawn only where there is more than one to tell apart (see timelineOf). */
+.stageRow {
+  display: flex;
+  align-items: baseline;
+  gap: var(--acc-sp-3);
+  margin: var(--acc-sp-5) 0 var(--acc-sp-2);
+  font: 600 var(--acc-fs-label) var(--acc-font);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--acc-fg-ghost);
+}
+
+/* The stage the run is standing in, told by its colour before its word is read. */
+.stageHere {
+  color: var(--acc-fg-soft);
+}
+
+.stageRow:first-child {
+  margin-top: 0;
+}
+
+.step {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--acc-sp-2);
+  padding: var(--acc-sp-3);
+  margin-bottom: var(--acc-sp-1);
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-md);
+  background: var(--acc-bg-raised);
+}
+
+/* A step nobody has reached yet is drawn, but drawn as a plan rather than as work. */
+.stepWaiting {
+  background: transparent;
+  border-style: dashed;
+  opacity: 0.72;
+}
+
+
+.stepRunning {
+  border-color: var(--acc-accent-32);
+}
+
+.stepFailed {
+  border-color: var(--acc-bad-32);
+}
+
+
+.stepText {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--acc-sp-1);
+}
+
+/*
+ * The title, the pill and the clock, wrapping.
+ *
+ * At the desk these three sit on one line with the clock pushed to the right end. Under a thumb the
+ * title alone can be the width of the screen, and a pill squeezed off the end of it says nothing -
+ * so the row wraps and the clock follows the pill rather than the far edge.
+ */
+.stepHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--acc-sp-1) var(--acc-sp-2);
+}
+
+.stepTitle {
+  flex: 1 1 100%;
+  min-width: 0;
+  font: var(--acc-fs-mono) var(--acc-mono);
+  color: var(--acc-fg);
+  overflow-wrap: anywhere;
+}
+
+.stepPass {
+  flex: none;
+  font: var(--acc-fs-label) var(--acc-mono);
+  color: var(--acc-fg-ghost);
+  white-space: nowrap;
+}
+
+.stepTime {
+  flex: none;
+  font: var(--acc-fs-label) var(--acc-mono);
+  color: var(--acc-fg-ghost);
+}
+
+.stepTimeGoing {
+  color: var(--acc-accent);
+}
+
+.stepLine {
+  font-family: var(--acc-mono);
+  font-size: var(--acc-fs-meta);
+  line-height: 1.5;
+  color: var(--acc-fg-faint);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.stepVerdict {
+  font-family: var(--acc-mono);
+  font-size: var(--acc-fs-meta);
+  line-height: 1.5;
+  color: var(--acc-ok-text);
+  overflow-wrap: anywhere;
+}
+
+.stepVerdictBad {
+  color: var(--acc-bad-text);
+}
+
+.stepSlots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--acc-sp-1);
+}
+
+.slot {
+  max-width: 100%;
+  padding: 2px var(--acc-sp-2);
+  border-radius: var(--acc-r-xs);
+  background: var(--acc-bg-control);
+  font: var(--acc-fs-label) var(--acc-mono);
+  color: var(--acc-fg-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/*
+ * What the main thread said, between the cards, where it said it.
+ *
+ * Not a card of its own: it is not a step of the round of work, and a block in the same clothes as a
+ * step would read as one. Its own left edge and its own tint instead.
+ */
+.note {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0 0 var(--acc-sp-2);
+  padding: var(--acc-sp-2) 0 var(--acc-sp-2) var(--acc-sp-3);
+  border-left: 2px solid var(--acc-c-iris-1);
+  font-family: var(--acc-mono);
+  font-size: var(--acc-fs-meta);
+  line-height: 1.55;
+  color: var(--acc-fg-faint);
+}
+
+.noteWho {
+  align-self: flex-start;
+  color: var(--acc-c-iris-2);
+}
+
+.noteText {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* --- The question a run is standing on --------------------------------------- */
+
+/*
+ * What is being asked, at the top of the list rather than in the footer with the answers.
+ *
+ * The footer is where a thumb is and holds one thing: the choice. What is being decided is read first
+ * and read once, so it goes where reading happens - and it scrolls, because a permission's arguments
+ * can be a paragraph and a fixed block of one would leave no timeline underneath it.
+ */
+/* What a finished run says first, and the two doors out of it - see the panel's .after. */
+.afterCard {
+  margin: 0 0 var(--acc-sp-4);
+  padding: var(--acc-sp-4);
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-card);
+  background: var(--acc-bg-raised);
+}
+
+.afterText {
+  margin: 0 0 var(--acc-sp-3);
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--acc-fg);
+  overflow-wrap: anywhere;
+}
+
+.afterButtons {
+  display: flex;
+  flex-direction: column;
+  gap: var(--acc-sp-2);
+}
+
+/* The door into the main thread's chat, lit: on a bordered box of two lines of text nobody saw a button,
+   and the way on from a finished run was reported missing while it stood on the screen. */
+.buttonOptionAccent {
+  border-color: var(--acc-accent-line);
+  background: var(--acc-accent-12);
+}
+
+.buttonOptionAccent .buttonOptionLabel {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-2);
+  color: var(--acc-accent);
+  font-weight: 600;
+}
+
+.buttonOptionAccent .buttonOptionLabel::after {
+  content: '›';
+  margin-left: auto;
+  font-size: 18px;
+  color: var(--acc-accent);
+}
+
+.askCard {
+  margin: 0 0 var(--acc-sp-4);
+  padding: var(--acc-sp-4);
+  border: 1px solid var(--acc-warn-16);
+  border-radius: var(--acc-r-card);
+  background: var(--acc-bg-raised);
+}
+
+.askTitle {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.4;
+  color: var(--acc-fg);
+  overflow-wrap: anywhere;
+}
+
+.askDetail {
+  margin: var(--acc-sp-3) 0 0;
+  font-family: var(--acc-mono);
+  font-size: var(--acc-fs-meta);
+  line-height: 1.5;
+  color: var(--acc-fg-dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  /* A command can be a screenful. Enough of it to recognise, and the rest at the desk. */
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+/* The field for an answer in one's own words, above the buttons that send it. */
+.askField {
+  width: 100%;
+  min-height: var(--acc-tap);
+  margin-top: var(--acc-sp-3);
+  padding: 0 var(--acc-sp-3);
+  border: 1px solid var(--acc-line-strong);
+  border-radius: var(--acc-r-md);
+  background: var(--acc-bg);
+  color: var(--acc-fg);
+  font: 16px var(--acc-font);
+}
+
+/*
+ * The round of work going in a project, on the project's own card.
+ *
+ * A scenario is the one kind of work in this plugin that goes on with nobody in front of it, so "is
+ * anything running here" is a question about the project rather than about a conversation - and the
+ * card is where the answer belongs. A row rather than a card of its own: what it says fits on one line,
+ * and it is not what most cards on this screen ever have.
+ */
+.projectRun {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-2);
+  width: 100%;
+  min-height: var(--acc-hit);
+  margin-top: var(--acc-sp-2);
+  padding: var(--acc-sp-1) var(--acc-sp-3);
+  border: 1px solid var(--acc-accent-32);
+  border-radius: var(--acc-r-pill);
+  background: none;
+  text-align: left;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+/* Standing on a question is the state this row exists for: it is the only one a person can end. */
+.projectRunAsking {
+  border-color: var(--acc-warn-16);
+}
+
+/*
+ * A round of work that is over: the same row, without the promise.
+ *
+ * The accent on the border is what makes a live row read as something happening, and last night's run is
+ * not. It keeps its place and its chevron - it is a door, and the door is the point - but it says so in
+ * the voice the rest of a quiet card is written in.
+ */
+.projectRunOver {
+  border-color: var(--acc-line-strong);
+}
+
+.projectRunOver .projectRunCount {
+  color: var(--acc-fg-dim);
+}
+
+.projectRunName {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13.5px;
+  color: var(--acc-fg-body);
+}
+
+.projectRunCount {
+  flex: none;
+  font: var(--acc-fs-meta) var(--acc-mono);
+  color: var(--acc-accent);
+}
+
+.projectRunWaiting {
+  color: var(--acc-warn);
+}
+
+/* ===========================================================================
+   The scenarios, as a phone drives them.
+
+   Everything the desk can do is here now (see RemoteCommands), so what is below is the shape that
+   gives to a thumb: three tabs in the header, cards instead of rows, sheets for the short forms and
+   screens for the two long ones. Every target is --acc-hit, which under [data-acc-density='touch'] is
+   forty-four points; nothing here has a hover state, because there is no pointer to have one.
+   =========================================================================== */
+
+/*
+ * The scenarios' own lists stand off the edges of the screen.
+ *
+ * Everywhere else here a card runs the full width, because a conversation is the screen. These are lists
+ * of things to choose between - a shelf, a table of nights, a timetable - and a card that runs into the
+ * edge reads as the screen itself rather than as one of several.
+ */
+.pageList {
+  composes: list;
+  padding-inline: var(--acc-feed-gutter);
+}
+
+/* The same three questions the desk asks, in the order a phone asks them: Runs first. */
+.bandTabs {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 2px;
+  margin-bottom: var(--acc-sp-2);
+  border-radius: var(--acc-r-lg);
+  background: var(--acc-bg-deep);
+}
+
+.bandTab {
+  flex: 1;
+  min-width: 0;
+  min-height: var(--acc-hit);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--acc-sp-1);
+  border-radius: var(--acc-r-md);
+  color: var(--acc-fg-faint);
+  font-size: var(--acc-fs-body);
+  white-space: nowrap;
+}
+
+.bandTabOn {
+  background: var(--acc-bg-card);
+  color: var(--acc-fg);
+}
+
+.bandTabCount {
+  font: var(--acc-fs-meta) var(--acc-mono);
+  color: var(--acc-fg-ghost);
+}
+
+/* Something is going, and the count is the only thing on the strip that says so. */
+.bandTabLive {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--acc-accent-light);
+}
+
+.bandTabLive::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--acc-accent);
+}
+
+/* A run standing on a question wears the warning tone before it is read. */
+.runCardAsks {
+  border-color: var(--acc-warn-32);
+}
+
+/* Which run of its scenario this is - a ticket, or the minute it started (see runMarks). */
+.runCardMark {
+  flex: none;
+  min-width: 0;
+  padding: 1px 6px;
+  border-radius: var(--acc-r-xs);
+  background: var(--acc-neutral-12);
+  color: var(--acc-fg-faint);
+  font: var(--acc-fs-meta) var(--acc-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The row of things to do about it, under the reading rather than over it. */
+.runCardButtons {
+  display: flex;
+  align-items: stretch;
+  gap: var(--acc-sp-2);
+  margin-top: var(--acc-sp-1);
+}
+
+.runCardButtons > * {
+  flex: 1;
+  justify-content: center;
+}
+
+/* --- The timetable ---------------------------------------------------------- */
+
+.hourRow {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-3);
+  width: 100%;
+  min-height: var(--acc-hit);
+  padding: var(--acc-sp-3) var(--acc-sp-4);
+  border-bottom: 1px solid var(--acc-bg-panel);
+  text-align: left;
+}
+
+.hourRow:last-child {
+  border-bottom: none;
+}
+
+.hourMissed .hourClock {
+  color: var(--acc-warn-light);
+}
+
+.hourMissed .hourAway {
+  color: var(--acc-warn);
+}
+
+/* The hour in a gutter of its own: the question a timetable answers before anything is read. Centred
+   both ways, as on the desk (see the panel's .hourGutter). */
+.hourGutter {
+  flex: none;
+  width: 58px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding-right: var(--acc-sp-3);
+  border-right: 1px solid var(--acc-bg-panel);
+  text-align: center;
+}
+
+.hourClock {
+  font: 15px var(--acc-mono);
+  color: var(--acc-fg);
+}
+
+.hourAway {
+  font-size: var(--acc-fs-meta);
+  color: var(--acc-fg-ghost);
+}
+
+.hourText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hourName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--acc-fs-body);
+  color: var(--acc-fg);
+}
+
+.hourFacts {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--acc-fs-meta);
+  color: var(--acc-fg-faint);
+}
+
+/* --- The sheets ------------------------------------------------------------- */
+
+/* The one irreversible action on a sheet says so before it is pressed, not after. */
+.sheetActionDanger .sheetActionName {
+  color: var(--acc-bad-light);
+}
+
+/* What is chosen right now, in a sheet of choices. */
+.sheetActionOn .sheetActionName {
+  color: var(--acc-accent-light);
+}
+
+.sheetActionTick {
+  flex: none;
+  color: var(--acc-accent);
+}
+
+.sheetRequired {
+  color: var(--acc-warn);
+  font-size: var(--acc-fs-meta);
+}
+
+.sheetArea {
+  min-height: 108px;
+  resize: none;
+  line-height: 1.5;
+}
+
+/* Two menus rather than a time field: the browser draws that one as a screen of its own. */
+.hourPickers {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-2);
+}
+
+.hourPickers > select {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  font: 17px var(--acc-mono);
+}
+
+.hourColon {
+  font: 17px var(--acc-mono);
+  color: var(--acc-fg-ghost);
+}
+
+/*
+ * While a model writes a scenario: a bar that admits it does not know how long, the words, and the
+ * seconds already spent. Half a minute of silence reads as a screen that has stopped.
+ */
+.draftRow {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-3);
+  flex-wrap: wrap;
+}
+
+.draftBar {
+  position: relative;
+  flex: 1 0 100%;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--acc-bg-control);
+  overflow: hidden;
+}
+
+.draftBar::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 34%;
+  border-radius: 1px;
+  background: var(--acc-accent);
+  animation: accDraftSlide 1.4s ease-in-out infinite;
+}
+
+@keyframes accDraftSlide {
+  0% {
+    left: -34%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+
+.draftGoing {
+  color: var(--acc-accent-light);
+  font-size: var(--acc-fs-meta);
+}
+
+.draftElapsed {
+  margin-left: auto;
+  font: var(--acc-fs-meta) var(--acc-mono);
+  color: var(--acc-fg-ghost);
+}
+
+/* --- The editor as a screen -------------------------------------------------- */
+
+/* What is worth tidying, above the outline rather than beside it: there is one column here. */
+.tidyNote {
+  display: flex;
+  flex-direction: column;
+  gap: var(--acc-sp-1);
+}
+
+.tidyCount {
+  font-weight: 600;
+}
+
+.tidyLine {
+  opacity: 0.85;
+}
+
+/*
+ * A row of the outline: what it is, what it says right now, and the whole of it when it opens.
+ *
+ * Folded rather than laid out flat, because the desk's outline needs a pane beside it and there is no
+ * beside on a phone. What is left is the same map, one line each.
+ */
+.foldRow {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-3);
+  width: 100%;
+  min-height: var(--acc-hit);
+  padding: var(--acc-sp-3) var(--acc-sp-4);
+  border-bottom: 1px solid var(--acc-bg-panel);
+  text-align: left;
+}
+
+.foldRow:last-child {
+  border-bottom: none;
+}
+
+.foldName {
+  flex: none;
+  font-size: var(--acc-fs-body);
+  color: var(--acc-fg);
+}
+
+.foldValue {
+  flex: 1;
+  min-width: 0;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--acc-fs-meta);
+  color: var(--acc-fg-faint);
+}
+
+.foldBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--acc-sp-2);
+  padding: var(--acc-sp-2) var(--acc-sp-4) var(--acc-sp-4);
+  border-bottom: 1px solid var(--acc-bg-panel);
+}
+
+/* Inside an opened row the forms drop their own insets: the row already has one. */
+.foldBody .formRow {
+  padding: 0;
+}
+
+.foldBody .segmented {
+  margin: 0;
+}
+
+.foldBody .wideButton {
+  margin-bottom: 0;
+}
+
+.foldBody .formNote {
+  margin: 0;
+}
+
+.stageFold {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-3);
+  width: 100%;
+  min-height: var(--acc-hit);
+  padding: var(--acc-sp-3) var(--acc-sp-4);
+  text-align: left;
+}
+
+.stageFoldNumber {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--acc-r-sm);
+  background: var(--acc-bg-control);
+  font: var(--acc-fs-meta) var(--acc-mono);
+  color: var(--acc-fg-faint);
+}
+
+.stageFoldText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.stageFoldTitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--acc-fs-body);
+  color: var(--acc-fg);
+}
+
+.stageFoldNote {
+  font: var(--acc-fs-meta) var(--acc-mono);
+  color: var(--acc-fg-ghost);
+}
+
+.stageFoldCount {
+  flex: none;
+  font-size: var(--acc-fs-meta);
+  color: var(--acc-fg-ghost);
+}
+
+/*
+ * What an open stage holds, at one inset.
+ *
+ * The name field, the repeat chips, the cards and the two buttons each used to bring their own margin -
+ * four left edges in one card, from the wall to eighteen pixels in - and a card whose contents do not
+ * line up reads as four things that happen to be near each other.
+ */
+.stageBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--acc-sp-3);
+  padding: 0 var(--acc-sp-4) var(--acc-sp-4);
+}
+
+.stageBody .wideButton {
+  margin-bottom: 0;
+}
+
+.stageCards {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-pill);
+  overflow: hidden;
+}
+
+.cardFold {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-2);
+  width: 100%;
+  min-height: var(--acc-hit);
+  padding: var(--acc-sp-3) var(--acc-sp-3);
+  border-top: 1px solid var(--acc-line);
+  background: var(--acc-bg-card);
+  text-align: left;
+}
+
+.cardFold:first-child {
+  border-top: none;
+}
+
+.cardFoldName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--acc-fs-body);
+  color: var(--acc-fg-body);
+}
+
+/* Taking a stage out: a word, and the one on this screen that is worth a colour. */
+.wideDanger {
+  color: var(--acc-bad-light);
+}
+
+/* A name written into a prompt as {{this}} or [[this]] - code, so it keeps the console font. */
+.inputMono {
+  font: var(--acc-fs-mono) var(--acc-mono);
+  color: var(--acc-branch);
+}
+
+/* --- One step's own conversation --------------------------------------------- */
+
+/*
+ * The main thread's verdict, above the conversation rather than at the foot of it: it is what somebody
+ * opened this for, and it is not something the card said.
+ */
+/*
+ * A step's screen under its header: a band that stays, and a conversation that scrolls.
+ *
+ * It used to be the ordinary padded list with the feed dropped inside it, and that one line cost three
+ * things at once. The gutter was paid twice - the list's and the row's - so a line of the answer wrapped
+ * at 266 points of 393 while the verdict above it ran the full width; that is what it looked like, and
+ * the other two were invisible. The feed's own scroller, which is where all of its manners live, never
+ * scrolled at all: the log opened at its beginning rather than at its end, the button back to the bottom
+ * led nowhere, and a page fetched above the reading position moved it. Here the feed is the scroller, the
+ * way it is in a conversation - which is what a step is.
+ */
+.stepBody {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* The one thing that does not scroll away: it is the answer the screen was opened for, and it cannot
+   grow to eat the screen - the wire cuts it at a couple of hundred characters (see RemoteFeed). */
+.stepVerdictBand {
+  flex: none;
+  padding: var(--acc-sp-3) var(--acc-feed-gutter) 0;
+}
+
+.stepVerdictCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--acc-sp-1);
+  padding: var(--acc-sp-3) var(--acc-sp-4);
+}
+
+.stepVerdictLabel {
+  font-size: var(--acc-fs-label);
+  letter-spacing: 0.09em;
+  color: var(--acc-fg-ghost);
+}
+
+/* The way into it, on the step's own row. */
+.stepLog {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-height: var(--acc-hit);
+  padding-left: var(--acc-sp-2);
+  font-size: var(--acc-fs-meta);
+  color: var(--acc-accent-light);
+}
+
+/* --- The run's own timeline -------------------------------------------------- */
+
+/* A stage carries its own verdict, so the rows under it need not be counted. */
+.stageRowTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stageRowVerdict {
+  flex: none;
+  letter-spacing: 0;
+  font-weight: 400;
+  color: var(--acc-fg-ghost);
+}
+
+.stageHere .stageRowVerdict {
+  color: var(--acc-accent-light);
+}
+
+/* Nothing is being spent while a question stands: the card's turn is open and its clock is not going. */
+.askNote {
+  margin: var(--acc-sp-1) 0 0;
+  font-size: var(--acc-fs-meta);
+  color: var(--acc-fg-ghost);
+}
+
+/* --- The queue: what is lined up, and what the queue is doing about it -------- */
+
+/* A queue that has stopped: the one thing on this screen that is waiting for a person, in the paint the
+   phone already uses for exactly that. */
+.queueHeld {
+  margin-bottom: var(--acc-sp-3);
+  padding: var(--acc-sp-3) var(--acc-sp-4);
+  border: 1px solid rgb(var(--acc-ch-sand) / 32%);
+  border-radius: var(--acc-r-lg);
+  background: rgb(var(--acc-ch-sand) / 10%);
+}
+
+.queueHeldTitle {
+  margin: 0 0 2px;
+  font-size: var(--acc-fs-body);
+  color: var(--acc-warn-light);
+}
+
+.queueHeldWhy {
+  margin: 0;
+  font-size: var(--acc-fs-meta);
+  line-height: 1.45;
+  color: var(--acc-fg-faint);
+}
+
+/* The sentence, pressable when there is a run to open. */
+.queueHeldOpen {
+  display: block;
+  width: 100%;
+  text-align: left;
+}
+
+.queueHeldButtons {
+  display: flex;
+  gap: var(--acc-sp-2);
+  margin-top: var(--acc-sp-3);
+}
+
+/* The turn the queue raised, while it is going - one line, because the run has a card of its own on the
+   band next door. */
+.queueGoingRow {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-3);
+  margin: 0;
+  padding: var(--acc-sp-3) var(--acc-sp-4);
+  width: 100%;
+  text-align: left;
+}
+
+.queueGoingDot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--acc-ok);
+}
+
+.queueGoingName {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--acc-fs-body);
+  color: var(--acc-fg);
+}
+
+.queueGoingFact {
+  flex: none;
+  font-size: var(--acc-fs-meta);
+  color: var(--acc-fg-faint);
+}
+
+/* A waiting turn, in the shape of an hour's row: they answer the same kind of question, and two lists on
+   one screen that read differently for no reason are two lists to learn. */
+.queueRow {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-3);
+  width: 100%;
+  min-height: var(--acc-hit);
+  padding: var(--acc-sp-3) var(--acc-sp-4);
+  border-bottom: 1px solid var(--acc-bg-panel);
+}
+
+.queueRow:last-child {
+  border-bottom: none;
+}
+
+.queueRowText {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+}
+
+.queueRowButtons {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-1);
+}
+
+/* Everything pressed on a phone is at least a finger wide - see --acc-hit in tokens.css. */
+.queueRowStep {
+  display: grid;
+  place-items: center;
+  min-width: var(--acc-hit);
+  min-height: var(--acc-hit);
+  border-radius: var(--acc-r-pill);
+  font-size: 16px;
+  color: var(--acc-fg-faint);
+}
+
+.queueRowStep:disabled {
+  opacity: 0.3;
+}

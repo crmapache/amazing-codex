@@ -1,0 +1,1170 @@
+package io.github.crmapache.amazingcodex.codex
+
+import com.intellij.openapi.Disposable
+import com.intellij.openapi.util.Disposer
+import com.intellij.util.concurrency.AppExecutorUtil
+import io.github.crmapache.amazingcodex.codex.accounts.CodexAccounts
+import io.github.crmapache.amazingcodex.feedback.DiagnosticsLog
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
+import kotlinx.serialization.json.JsonObject
+
+/**
+ * One panel's set of conversations.
+ *
+ * There are several of them for two reasons: session tabs and side branches. Each branch has a process
+ * of its own, so its context physically cannot leak into the main conversation - which is exactly what
+ * the panel promises the user.
+ */
+internal class CodexSessions(
+    private val workingDirectory: String?,
+    private val parentDisposable: Disposable,
+    private val onEvent: (sessionId: String, line: String) -> Unit,
+    private val onError: (sessionId: String, message: String) -> Unit,
+    /** The process said something past the event stream - see CodexSession.onDiagnostic. */
+    private val onDiagnostic: (sessionId: String, message: String) -> Unit = { _, _ -> },
+    private val onFinished: (sessionId: String) -> Unit,
+    /** A conversation's process died on its own - the panel has something to close and explain. */
+    private val onCrashed: (sessionId: String, exitCode: Int) -> Unit = { _, _ -> },
+    /** The agent asks the panel for permission: until someone answers, the turn stands still. */
+    private val onToolPermission: (sessionId: String, request: PermissionChannel.ToolPermission) -> Unit = { _, _ -> },
+    /** The agent took its question back - see CodexSession.onPermissionWithdrawn. */
+    private val onPermissionWithdrawn: (sessionId: String, requestId: String) -> Unit = { _, _ -> },
+    /** An LLM picked the conversation's name by its first message - see CodexSession.onTitle. */
+    private val onTitle: (sessionId: String, title: String) -> Unit = { _, _ -> },
+    /** Whether this conversation still needs a name of its own - see CodexSession.titleWanted. */
+    private val titleWanted: (sessionId: String) -> Boolean = { true },
+    /** The turn ended - the panel should clear its work; see CodexSession.onTurnEnded. */
+    private val onTurnEnded: (sessionId: String) -> Unit = {},
+    /** The turn started on its own, without a send from the panel; see CodexSession.onTurnStarted. */
+    private val onTurnStarted: (sessionId: String) -> Unit = {},
+    /**
+     * A conversation has just been born, and this is the effort it was born with.
+     *
+     * Said out loud because nobody else can say it later: the CLI never announces the effort and cannot
+     * be asked about it (see CodexSession.setEffort), so a tab whose effort nobody has touched would
+     * otherwise be drawn by whatever the setting holds NOW - that is, by a choice made in a neighbouring
+     * tab after this conversation had already started on something else.
+     */
+    private val onBorn: (sessionId: String, effort: String, model: String, accountId: String) -> Unit =
+        { _, _, _, _ -> },
+    /**
+     * A conversation is being stopped so that it can move to another account.
+     *
+     * Said out loud because the clients cannot tell: an interrupt the IDE issues looks to them exactly
+     * like a turn that finished by itself, so the feed captioned it "Worked 3s", the finished sound
+     * played and a push went to the phone about work nobody completed (see CodexSessionHub).
+     */
+    private val onMoveStopping: (sessionId: String) -> Unit = {},
+    /**
+     * The interrupt was not answered in time and the process is about to be taken down anyway.
+     *
+     * Everything it was holding dies with it: a permission card, a plan, a question with options. They
+     * are pinned above the input field and nothing else would ever take them off it.
+     */
+    private val onMoveForced: (sessionId: String) -> Unit = {},
+    /**
+     * A live process is about to be replaced while nothing is being said in it.
+     *
+     * The quiet half of a move, and the half that used to go unannounced. A tab whose turn is running is
+     * interrupted, and every client is told (see [onMoveStopping]); a tab standing idle is simply swapped,
+     * and nobody hears a word - which is right about the turn and wrong about everything else the process
+     * was holding. A workflow's fleet, a background subagent, a background command all outlive the turn
+     * that started them and none of them outlives the process: forty agents launched an hour ago die on
+     * the swap, and the cards for them went on ticking for the rest of the day, with a clock counting
+     * against a CLI that no longer existed. That is the complaint this exists for.
+     *
+     * Fired for a renewal too (see [relaunchOn]): the account is the same on both sides of it, but the
+     * process is not, and what dies is exactly the same.
+     *
+     * And for a restart (see [restart]), which is why it is no longer named after the move: adding an MCP
+     * server takes the process down and puts it back up, and what that costs is not one bit different -
+     * the same fleet, the same dev server, the same cards left ticking. It was announced on one road and
+     * not on the other, and the difference between the two roads is nothing a person could see.
+     */
+    private val onProcessDropping: (sessionId: String) -> Unit = {},
+    /**
+     * The conversation has been replaced and stands ready on the account now chosen.
+     *
+     * The tab is idle from this moment, and on the forced path there is nobody else to say it: a message
+     * queued while the old turn ran is waiting for exactly that word, and the only other thing that would
+     * have said it - the old process dying - is deliberately ignored while the swap is in progress (see
+     * [isMoving]). Every other way into a move has a caller that speaks a line later, so this is NOT
+     * fired there: said twice, the queue drains twice.
+     */
+    private val onMoved: (sessionId: String) -> Unit = {},
+    /** How full a conversation's context window is, by Codex's own count - see CodexSession.onContext. */
+    private val onContext: (sessionId: String, used: Int, max: Int) -> Unit = { _, _, _ -> },
+    /** The account's limits, told along the way by a conversation's process - see CodexSession.onRateLimits. */
+    private val onRateLimits: (sessionId: String, usage: JsonObject) -> Unit = { _, _ -> },
+    /** An MCP server of a conversation finished starting - see CodexSession.onMcpSettled. */
+    private val onMcpSettled: (sessionId: String) -> Unit = {},
+) : Disposable {
+
+    private val sessions = ConcurrentHashMap<String, CodexSession>()
+
+    /**
+     * What a conversation is to start on when it was not the settings that decided - see SessionLaunch.
+     *
+     * Written down when the tab is opened and read when its process is first raised, because those are
+     * two different moments: an empty tab starts nothing, and the choice made in the request has to
+     * survive until somebody writes into it.
+     */
+    private val launches = ConcurrentHashMap<String, SessionLaunch>()
+
+    /**
+     * The tabs holding a conversation that was a scenario run's main thread - see
+     * [CodexLaunch.AFTER_SCENARIO_HEAD].
+     *
+     * Per TAB rather than per process, because a process is not the life of this: a tab put to sleep by
+     * the idle sweep, a crash, a restart for an added MCP server and a move to another account all raise
+     * a new one over the same transcript, and the role would come back with every one of them.
+     */
+    private val afterScenarioHead = ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * The same tabs, until the role has been lifted IN the conversation - see [releasedRole].
+     *
+     * Two sets rather than one because they answer at different moments and stop at different ones. The
+     * system prompt above is said to every process this tab raises, for as long as it holds that
+     * conversation; this is said once, inside the conversation, and then the transcript carries it
+     * itself.
+     */
+    private val roleStillHeld = ConcurrentHashMap.newKeySet<String>()
+
+    /** A restart waiting for the turn that was running when it was asked for - see [restart]. */
+    private data class DeferredRestart(val processStartedAt: Long, val then: () -> Unit)
+
+    private val pendingRestarts = ConcurrentHashMap<String, DeferredRestart>()
+
+    init {
+        Disposer.register(parentDisposable, this)
+    }
+
+    fun prompt(sessionId: String, text: String, images: List<ImageAttachment> = emptyList()) {
+        // Before anything is said into it: a move this tab was asked to make and has not made yet
+        // happens now, so the words below are billed to the account the person chose (see
+        // [applyPendingAccount]).
+        applyPendingAccount(sessionId)
+        // And a restart it was asked for and has not made either - so that what is said below goes into
+        // a process holding the servers as they stand now (see [applyPendingRestart]).
+        applyPendingRestart(sessionId)
+        session(sessionId).sendPrompt(releasedRole(sessionId, text), images)
+    }
+
+    /**
+     * The first message into a tab continuing a run's main thread, with the role lifted above it.
+     *
+     * The system prompt alone does not do it, and that was measured rather than assumed: with
+     * CodexLaunch.AFTER_SCENARIO_HEAD in the launch and nothing else, the agent refused the same
+     * request three times over - "I do not write files in this role, a new run is needed". It is not
+     * stubbornness but arithmetic: the transcript it comes up over is hundreds of kilobytes of being
+     * told exactly that, every message ending in a demand for JSON, and one paragraph appended to the
+     * system prompt is outvoted. Said as the last thing in the conversation, it is the most recent
+     * instruction there, and it holds.
+     *
+     * Once. After this the transcript carries the release itself, so every later message - and every
+     * later process over this conversation, from any door - reads it as part of the conversation.
+     *
+     * Ahead of the person's words rather than instead of them: the turn they asked for is the turn they
+     * get. What the panel shows is their own message, because the echo has already gone out by now (see
+     * CodexSessionHub.prompt) - the frame belongs to the agent, not to the screen.
+     */
+    private fun releasedRole(sessionId: String, text: String): String =
+        if (roleStillHeld.remove(sessionId)) "${CodexLaunch.AFTER_SCENARIO_HEAD}\n\n$text" else text
+
+    /**
+     * A branch off another conversation: the branch gets its whole transcript and an identifier of its
+     * own. Continuing in the branch leaves the parent untouched, and if the parent has never answered
+     * yet, there is nothing to branch off - we start an ordinary conversation.
+     *
+     * It starts on what the PARENT runs on - its model, its effort, its permission mode - rather than on
+     * what the settings hold. The two disagree more often than it seems: every selector writes the
+     * machine's default as well as changing its own tab, so a model picked in a neighbouring tab decided
+     * what a fork made here started on. Carrying on the same conversation on another model and at another
+     * effort is not what "fork" says on the button.
+     *
+     * The mode travels along for the same reason and with the same limit as the rest: it applies to this
+     * conversation and writes nothing into the settings (see SessionLaunch), so an approved plan frees
+     * the fork of the conversation it continues without deciding anything about the next tab opened from
+     * "+".
+     */
+    fun branchFrom(parentId: String, branchId: String) {
+        if (sessions.containsKey(branchId)) return
+
+        val parent = sessions[parentId]
+        // Field by field rather than one or the other: a request that names a model is still a fork, and
+        // the effort and the mode it said nothing about are still the parent's. Written whole, the
+        // request's silence would have meant "the settings decide", which is the one answer neither side
+        // asked for. An empty field of the parent's means the same thing and is right there: that is what
+        // a tab nobody has touched is itself running on.
+        val chosen = launches[branchId] ?: SessionLaunch()
+        launches[branchId] = SessionLaunch(
+            model = chosen.model.ifEmpty { parent?.model.orEmpty() },
+            effort = chosen.effort.ifEmpty { parent?.effort.orEmpty() },
+            mode = chosen.mode.ifEmpty { parent?.permissionMode.orEmpty() },
+        )
+        // The account does NOT travel with it, unlike the three above. A fork starts on the account
+        // everything else on this machine is on: that is the whole of the rule now, and a fork of a tab
+        // launched last week was the last thing still quietly beating it.
+
+        sessions[branchId] = newSession(branchId, forkFrom = parent?.conversationId).also {
+            Disposer.register(this, it)
+        }
+    }
+
+    /**
+     * Continuing a past conversation: it comes up with its own transcript.
+     *
+     * A past conversation opens in the tab it was chosen from (see App.resume), and that tab may
+     * already hold a process of its own - with a transcript this tab no longer needs to continue.
+     * Continuing the chosen conversation inside it is impossible: a conversation is given to a process
+     * at launch. So the previous one is closed and a new one raised, exactly as when a tab is closed.
+     */
+    fun resume(sessionId: String, conversationId: String, wasScenarioHead: Boolean = false) {
+        // Taken across the close on purpose. `close` drops an unspent choice, which is right when a tab
+        // is abandoned and wrong here: this tab is being repurposed, and a choice made FOR this resume -
+        // a model, an effort, a mode - would otherwise be wiped a line before it is read.
+        val chosen = launches[sessionId]
+
+        close(sessionId)
+        chosen?.let { launches[sessionId] = it }
+        // Written AFTER the close, which clears it: what the tab held before this has nothing to do with
+        // what it is being given now, and a tab that once continued a head would otherwise go on lifting
+        // a role from every conversation opened in it afterwards.
+        if (wasScenarioHead) {
+            afterScenarioHead.add(sessionId)
+            roleStillHeld.add(sessionId)
+        }
+
+        sessions[sessionId] = newSession(sessionId, forkFrom = null, resumeFrom = conversationId).also {
+            Disposer.register(this, it)
+        }
+    }
+
+    /**
+     * Every conversation in this project onto another account - the whole point of choosing one.
+     *
+     * A conversation cannot be told to change account: the CLI reads its credentials once, when the
+     * process comes up. So each one is replaced the way a resume replaces it - a new process over the
+     * same transcript - and everything else about it is carried across by hand, or the new process would
+     * fall back to the machine's defaults and quietly change the model out from under the person.
+     *
+     * A tab whose turn is running is INTERRUPTED for it, the way Stop interrupts it, and moves on the
+     * result that follows (see [pendingAccounts] and CodexSessionHub, onTurnEnded). A turn runs for
+     * minutes, and a conversation billed all that time to the account the person has just left is not
+     * what pressing Select says. Nothing written is lost by it: the CLI closes the interrupted call and
+     * puts a "[Request interrupted by user]" line into the transcript, so the process raised on the new
+     * account resumes onto everything that was said.
+     *
+     * A tab with no process at all is left alone: it has nothing to move, and whenever it does start it
+     * reads the register itself - which by then says exactly this.
+     */
+    fun switchAllTo() {
+        sessions.keys.toList().forEach(::moveTo)
+    }
+
+    /**
+     * Every LIVE conversation of this account, raised again over its own transcript.
+     *
+     * Signing in a second time as an account already on the list does not double it: the new credential
+     * drawer becomes the live one and the old one is deleted (see CodexAccounts.completeSignIn). A
+     * process reads its credential once, at start, so the processes from before that go on pointing at a
+     * drawer that no longer exists. They work for exactly as long as the token they are already holding
+     * does, and then fail at a moment nobody connects with a sign-in that happened an hour ago.
+     *
+     * Only the live ones. A tab with no process has nothing pointing anywhere: it reads the register when
+     * it starts, which by then names the new drawer - and raising it here would cost a birth announcement
+     * to every client for a conversation that has not changed in any way.
+     *
+     * A turn in flight is NOT interrupted for this, and that is the difference from a move between
+     * accounts: the money is going to the same subscription either way, so the honest thing is to let the
+     * turn finish on the token it already holds and raise the process afterwards (see [moveTo] and
+     * [applyPendingAccount]).
+     */
+    fun relaunchOn(accountId: String) {
+        sessions.filterValues { it.accountId == accountId && it.isRunning }
+            .keys.toList()
+            .forEach { moveTo(it, renew = true) }
+    }
+
+    /**
+     * The tab's turn died because the sign-in did: the next message comes up on a fresh process.
+     *
+     * A process reads its credential once, when it starts, so the one that met a refused refresh will
+     * meet it again however the sign-in is repaired in the meantime - and repairing it is exactly what
+     * the person is being offered beside the refusal (see ErrorItem.signIn in the panel). Nothing here
+     * can tell whether they went through with it: `claude auth status` answers "signed in" for a token
+     * that merely lies in the store, which is the very state this refusal leaves behind. So the process
+     * is not renewed on a confirmation that cannot be had - it is renewed on the next message, which is
+     * the moment the fresh credential is actually needed.
+     *
+     * The renewal itself is the road a repeated sign-in already travels (see [relaunchOn]): the same
+     * account, the same transcript, a new process. Marked only while there is a session to mark - a tab
+     * whose process is already gone raises its own on the next message anyway.
+     */
+    fun renewAfterSignIn(sessionId: String) {
+        if (!sessions.containsKey(sessionId)) return
+        pendingRenewals.add(sessionId)
+    }
+
+    /**
+     * The account a conversation is to move onto once the turn it is in has been stopped.
+     *
+     * Kept beside the sessions rather than inside them: a session that is mid-turn is precisely the one
+     * that will be replaced, and a note held by the thing being thrown away is a note that is lost.
+     */
+    private val pendingAccounts = ConcurrentHashMap<String, String>()
+
+    /**
+     * The tabs whose process has to be raised again on the account it is ALREADY on - see [relaunchOn].
+     *
+     * Apart from [pendingAccounts] because it is not a move and must not be read as one: nothing about
+     * the subscription is changing, so there is no turn to interrupt and no deadline to arm. It only has
+     * to happen before the conversation says anything else.
+     */
+    private val pendingRenewals = ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * The deadline under a move that is waiting for a turn to stop.
+     *
+     * Keyed to the tab and checked against the account it was armed for: two switches in a row, or a
+     * switch racing a turn that ends by itself, would otherwise leave a timer that force-kills a live
+     * turn for a move nobody is making any more.
+     */
+    private val forcedMoves = ConcurrentHashMap<String, ScheduledFuture<*>>()
+
+    /**
+     * The tabs whose conversation is being replaced this instant.
+     *
+     * A move takes the old process down and puts a new one up, and the gap between those two is a real
+     * moment on a real thread. Taking the process down ends its turn, which tells the panel the tab is
+     * free, which sends whatever was queued into it - and there is nothing there to send it into: the
+     * old conversation is gone from the register and the new one is not in yet, so the queue would raise
+     * a bare third session of its own, on no transcript, and the message would go into that.
+     */
+    private val moving = ConcurrentHashMap.newKeySet<String>()
+
+    /** Whether this tab is between its two processes right now - see [moving]. */
+    fun isMoving(sessionId: String): Boolean = sessionId in moving
+
+    /**
+     * A conversation that was asked to move while it worked moves now.
+     *
+     * Called at the end of a turn (see CodexSessionHub, RESULT_MARKER) and again wherever a
+     * conversation is about to live: a prompt, a wake, a restart. The end of a turn alone was not
+     * enough, because a turn does not always end with one - a crashed process, a killed one, the
+     * restart that reconnects an MCP server all leave the last word unsaid, and the note then waited
+     * for a `result` that was never coming while the tab went on working, and being billed, on the
+     * account the person had just left.
+     */
+    fun applyPendingAccount(sessionId: String) {
+        forcedMoves.remove(sessionId)?.cancel(false)
+        // A renewal left waiting by a turn that was running (see [relaunchOn]). Both can be outstanding
+        // at once - a drawer replaced while a move was already waiting for the same turn - and one move
+        // settles both: what it does is raise the process on whatever the register says now.
+        val renew = pendingRenewals.remove(sessionId)
+        // A move that was waiting for a turn is a move the clients have already been told about: the turn
+        // was interrupted for it and [onMoveStopping] said so. A renewal has told them nothing - no turn
+        // was taken from anybody - so it still owes them the word about what dies with the process.
+        val told = pendingAccounts.remove(sessionId) != null
+        if (!told && !renew) return
+
+        moveTo(sessionId, renew = renew, told = told)
+    }
+
+    /**
+     * One conversation onto the account chosen now.
+     *
+     * The account is read here rather than handed in, and that is deliberate: [newSession] reads it too,
+     * a moment later, from the same place. Passed as an argument it would be a second opinion, and the
+     * window between the two is exactly where a sibling IDE's switch lands (see CodexAccounts).
+     */
+    private fun moveTo(
+        sessionId: String,
+        force: Boolean = false,
+        /**
+         * Raise the process again even though the account is not changing - its credential drawer has
+         * been replaced under it (see [relaunchOn]).
+         */
+        renew: Boolean = false,
+        /**
+         * The clients have already been told that this conversation is losing its process - because a
+         * turn was interrupted for the move (see [onMoveStopping] and [onMoveForced]). Said twice, the
+         * feed would carry two lines about one swap: an interrupted turn AND a dropped process.
+         */
+        told: Boolean = false,
+    ) {
+        val session = sessions[sessionId] ?: return
+        val accountId = CodexAccounts.getInstance().currentId
+
+        if (session.accountId == accountId && !renew) {
+            // Already where it should be, so any move still outstanding for it is void - and the deadline
+            // under that move has to go with it. Left armed, it fired eight seconds later against a turn
+            // that is still running: the cards it was holding were taken off the screen while the CLI
+            // went on waiting for an answer nothing could supply, and every client was told the turn had
+            // been stopped for a change that never happened. The way in is ordinary: press Select on
+            // another account, change your mind inside the eight seconds, press Select on this one.
+            forcedMoves.remove(sessionId)?.cancel(false)
+            pendingAccounts.remove(sessionId)
+            return
+        }
+
+        if (session.isBusy && !force) {
+            // A renewal waits for the turn instead of taking it away, and the test is the account rather
+            // than the flag: nothing is being billed anywhere it should not be - it is the same
+            // subscription on both sides of this - so a turn stopped mid-sentence would cost the person
+            // an answer to buy nothing at all. It runs on the token the process is already holding, and
+            // the new drawer is waiting for the process after it (see [relaunchOn]).
+            if (session.accountId == accountId) {
+                pendingRenewals.add(sessionId)
+                return
+            }
+
+            // Asked to stop rather than waited out. A turn can run for minutes, and a conversation going
+            // on being billed to the account the person has just left for that long is not what pressing
+            // Select says - so the turn is interrupted exactly as the Stop button interrupts it, and the
+            // move lands on the result that follows (see CodexSessionHub, onTurnEnded).
+            //
+            // The partial answer is not lost by it: the CLI closes the interrupted call and writes a
+            // "[Request interrupted by user]" line into the transcript, so the process raised on the new
+            // account resumes onto everything that was said.
+            if (pendingAccounts.put(sessionId, accountId) == accountId) return
+
+            onMoveStopping(sessionId)
+            session.interrupt()
+            armForcedMove(sessionId, accountId)
+            return
+        }
+
+        forcedMoves.remove(sessionId)?.cancel(false)
+
+        // The process is alive and about to be thrown away, and it is holding work that will not survive
+        // it - see [onProcessDropping]. Only a live one: a tab that never started a process, or whose
+        // process is already gone, has nothing to lose and nothing to announce. And only when nobody has
+        // said it yet - see [told].
+        if (session.isRunning && !told) onProcessDropping(sessionId)
+
+        // Continued only if there is something to continue. The CLI mints an identifier the moment a
+        // process comes up, before a single word has been said, and asking it to resume that identifier
+        // fails outright - "No conversation found with session ID", exit code 1, on the person's first
+        // message after choosing an account. The transcript on disk is what tells the two apart: a tab
+        // that has said nothing has no file, and moves as the empty tab it is.
+        val conversationId = session.conversationId
+            ?.takeIf { CodexHistory.transcriptFile(workingDirectory, it) != null }
+
+        // A fork nobody has spoken in yet has no transcript of its own, and everything it is about
+        // belongs to its parent: raised as an ordinary tab it would come up empty, which is the same
+        // loss as a fork starting on the machine's defaults.
+        val forkFrom = if (conversationId == null) session.forkFrom else null
+
+        val carried = SessionLaunch(
+            // Clamped to what the account it is moving ONTO can actually run - see [modelFor]. Carried
+            // whole, a tab left an account whose plan had the model and arrived at one whose plan does
+            // not, looking perfectly well and dying on the next message.
+            model = modelFor(accountId, session.model),
+            effort = session.effort,
+            mode = session.permissionMode.orEmpty(),
+        )
+
+        moving.add(sessionId)
+        try {
+            close(sessionId)
+            launches[sessionId] = carried
+
+            sessions[sessionId] = newSession(sessionId, forkFrom = forkFrom, resumeFrom = conversationId).also {
+                Disposer.register(this, it)
+            }
+        } finally {
+            moving.remove(sessionId)
+        }
+    }
+
+    /**
+     * What to do when the interrupt is never answered: take the process down and move anyway.
+     *
+     * A wall-clock deadline rather than the control request's own timeout, which measures something
+     * else - the CLI answering "yes, I will interrupt" is explicitly not "the turn is over". Eight
+     * seconds is the panel's own precedent for the same wait (STOP_GRACE_MS), and the wait exists at all
+     * because a tab that cannot be stopped is a tab left on a subscription the person has walked away
+     * from.
+     *
+     * Armed against the account it was asked for, so a second switch, or a turn that ends on its own in
+     * the meantime, cannot leave a kill standing for a move that no longer exists.
+     */
+    private fun armForcedMove(sessionId: String, accountId: String) {
+        forcedMoves.remove(sessionId)?.cancel(false)
+
+        forcedMoves[sessionId] = AppExecutorUtil.getAppScheduledExecutorService().schedule(
+            {
+                forcedMoves.remove(sessionId)
+                if (pendingAccounts[sessionId] != accountId) return@schedule
+                pendingAccounts.remove(sessionId)
+
+                DiagnosticsLog.note(DiagnosticsLog.AGENT, "a turn would not stop for an account change")
+                // Whatever it was holding is about to die with it, and only this says so.
+                onMoveForced(sessionId)
+                moveTo(sessionId, force = true, told = true)
+                // And only here: every other way into a move has a caller that speaks for the tab a line
+                // later - the end of a turn sends the status itself, a prompt sends the message. Said
+                // twice, the queue drains twice, and the second message is written into the turn the
+                // first one has just started.
+                onMoved(sessionId)
+            },
+            FORCED_MOVE_SECONDS,
+            TimeUnit.SECONDS,
+        )
+    }
+
+    /**
+     * The model to start on, given the account that will pay - the carried one when it may be run there,
+     * and that account's own otherwise.
+     *
+     * The CLI does not refuse a model an account has no access to at launch: the process comes up, says
+     * the model in its init event, replays the transcript and looks perfectly well, and then dies on the
+     * person's first message with an HTTP 404 (see CodexAccounts.canRun). Nothing on the screen names
+     * the account, and nothing puts it right by itself - so it is put right here, before the process is
+     * raised, and the panel is told the model it actually got.
+     *
+     * Only a definite NO replaces anything. Unknown leaves the model alone, and that way round is not a
+     * coin toss: an unasked catalogue is the ordinary state of the first seconds of a project, and
+     * treating it as a refusal would throw away the model of every conversation opened from the history -
+     * including the one this rule exists to protect, an old chat on a million-token model. The catalogue
+     * is asked for when a conversation is born on an account and again when the accounts screen opens
+     * (see AccountDesk.round), which is the screen a person has to visit to switch at all.
+     */
+    private fun modelFor(accountId: String, model: String): String {
+        val accounts = CodexAccounts.getInstance()
+        if (accounts.canRun(accountId, model) != false) return model
+
+        // The same model at its ordinary window comes before any other model. The window mark is the one
+        // thing the catalogue is strict about (see ModelNames.holds): an account served plain Opus and not
+        // the large window used to be handed `opus[1m]` all the same, and the process died on the first
+        // message - and since a resumed conversation now carries the mark its transcript was held on (see
+        // CodexHistory.modelIdentity), every resume of such a conversation under such an account would go
+        // the same way. Without the mark it is what it was before the mark was read at all: the
+        // conversation, on its own model, in the window this account has.
+        val unmarked = ModelNames.unmarked(model)
+        if (unmarked != model && accounts.canRun(accountId, unmarked) != false) return unmarked
+
+        val own = accounts.account(accountId)?.model.orEmpty()
+        if (own.isNotEmpty() && accounts.canRun(accountId, own) != false) return own
+
+        // The machine's default gets the same test as the other two, and it is the case that matters
+        // most: every applied pick writes that default, so choosing Opus on a Max account is exactly what
+        // leaves it standing when the move lands on a Pro one. Unchecked, this branch handed back the
+        // very model the first branch had just refused - and an account nobody has chosen a model for
+        // (the ordinary sign-in among them, which has no record at all) reaches it every time.
+        val preferred = CodexPreferences.model
+        if (accounts.canRun(accountId, preferred) != false) return preferred
+
+        // Everything this tab could have asked for is refused, so what is left is the account's own
+        // default - NAMED rather than left out. Leaving the flag out is not the same thing here: a move
+        // resumes the transcript, and the CLI resumed without `--model` carries on at the model written
+        // in it, which is very likely the one just refused. Naming it is only possible when the account
+        // has answered with a catalogue at all; without one there is nothing honest left to say.
+        return DEFAULT_MODEL.takeIf { accounts.canRun(accountId, it) == true }.orEmpty()
+    }
+
+    /**
+     * Which account this conversation's process runs on.
+     *
+     * A tab with no process yet answers with the account it WOULD start on rather than with the empty
+     * string. Empty is not "nothing yet" here - it names the CLI's ordinary sign-in - so an untouched
+     * tab used to claim the default account to every client, and the prompt-improve button and the
+     * model catalogue asked about it too.
+     */
+    fun accountOf(sessionId: String): String =
+        sessions[sessionId]?.accountId ?: CodexAccounts.getInstance().currentId
+
+    /**
+     * Bring a conversation up without sending anything into it - see [CodexSession.wake]. Needed by a
+     * resumed conversation: it has something to say about itself from the first second, and only a live
+     * process with its transcript can say it.
+     */
+    fun wake(sessionId: String) {
+        applyPendingAccount(sessionId)
+        applyPendingRestart(sessionId)
+        sessions[sessionId]?.wake()
+    }
+
+    /**
+     * The model a conversation opened from the history carries on at - its own, read off the transcript,
+     * rather than the setting (see CodexSessionHub.resumeConversation for why). Only before the process
+     * is up: a launch flag is all this is, and a running conversation changes its model by [setModel].
+     * The setting is left alone on purpose: this is what the conversation was on, not a choice anybody
+     * made for the next tab.
+     */
+    fun adoptModel(sessionId: String, model: String): String {
+        // Nothing said is nothing to adopt: a transcript whose model could not be read leaves the
+        // conversation on whatever it was born with, which is the setting's.
+        if (model.isEmpty()) return sessions[sessionId]?.model.orEmpty()
+
+        val session = sessions[sessionId] ?: return model
+        // Clamped to what the account paying for it can run, and the answer is what was ACTUALLY adopted
+        // so the caller tells the panel the truth. A transcript's model is a fact about the account it
+        // used to run on, and since everything now runs on the account chosen today, that is regularly a
+        // different one - a model it may have no access to at all (see [modelFor]).
+        val adopted = modelFor(session.accountId, model)
+
+        session.adoptModel(adopted)
+        return adopted
+    }
+
+    /**
+     * The person's answer to the agent's permission question. The conversation may already be gone -
+     * then there is nobody to answer, and the question died along with the process.
+     */
+    fun answerPermission(
+        sessionId: String,
+        requestId: String,
+        allow: Boolean,
+        message: String = "",
+        extraInput: JsonObject? = null,
+        remember: Boolean = false,
+    ) {
+        sessions[sessionId]?.answerPermission(requestId, allow, message, extraInput, remember)
+    }
+
+    /**
+     * Whether the conversation is waiting for an answer to this very request.
+     *
+     * A card in the feed outlives a process: the conversation may have been restarted (an MCP
+     * reconnect, a mode change), and then the old question died along with the previous process - the
+     * new one will not recognise an answer to it and will silently throw it away. We ask in advance, so
+     * that instead of a silent loss we take the fallback path.
+     */
+    fun isAwaitingPermission(sessionId: String, requestId: String): Boolean =
+        sessions[sessionId]?.isAwaitingPermission(requestId) == true
+
+    /** Kill one of the conversation's tasks - see [CodexSession.stopTask]. */
+    fun stopTask(sessionId: String, taskId: String, onFailure: (String) -> Unit = {}) {
+        if (taskId.isEmpty()) return
+        // The conversation is already gone - there is nothing to kill: its tasks went with it.
+        sessions[sessionId]?.stopTask(taskId, onFailure)
+    }
+
+    /**
+     * This conversation's MCP - status, sign-in, reconnect (see [CodexSession]).
+     *
+     * The conversation is brought up for this if it is still asleep: MCP servers live inside the
+     * process, and a sleeping one simply has none - no status, and nothing to connect to. The terminal
+     * behaves exactly the same way: `/mcp` there is asked of a running session.
+     *
+     * [ifRunning] is the exception, and the whole of it is about what raising one costs. A conversation
+     * is not one process but the agent plus a copy of every MCP server configured on the machine -
+     * measured in the sandbox: 8 processes and 554 MB for a tab nobody had written a word into, 16 and
+     * 1.58 GB for two. The panel asks for this list on the way in, so that the screen behind the menu
+     * opens on something ready; asked the ordinary way, that head start raised the entire conversation
+     * before a single message, in every window, every time. So the head start is taken only where it is
+     * free - out of a process that is already there - and everything that a person actually opens asks
+     * the ordinary way.
+     *
+     * Nothing is reported when there is no process: an answer would have to invent a status for servers
+     * that are genuinely not running. The panel's menu row then carries no count at all, which is the
+     * truth, and opening the screen asks for real.
+     */
+    fun mcpStatus(
+        sessionId: String,
+        onResult: (JsonObject) -> Unit,
+        onFailure: (String) -> Unit = {},
+        ifRunning: Boolean = false,
+    ) {
+        if (ifRunning && !isRunning(sessionId)) return
+
+        awake(sessionId).requestMcpStatus(onResult, onFailure)
+    }
+
+    fun mcpAuthenticate(
+        sessionId: String,
+        server: String,
+        onResult: (JsonObject) -> Unit,
+        onFailure: (String) -> Unit = {},
+    ) {
+        awake(sessionId).authenticateMcp(server, onResult, onFailure)
+    }
+
+    fun mcpReconnect(
+        sessionId: String,
+        server: String,
+        onResult: (JsonObject) -> Unit,
+        onFailure: (String) -> Unit = {},
+    ) {
+        awake(sessionId).reconnectMcp(server, onResult, onFailure)
+    }
+
+    /** A conversation that definitely has a process: we start one and wake it if need be. */
+    private fun awake(sessionId: String): CodexSession = session(sessionId).also { it.wake() }
+
+    /** Interrupting a turn: the conversation stays alive, unlike closing the session. */
+    fun interrupt(sessionId: String, onTimeout: () -> Unit = {}) {
+        // The conversation is already gone - the panel will show it as free anyway, nothing to explain.
+        sessions[sessionId]?.interrupt(onTimeout)
+    }
+
+    fun stop(sessionId: String) {
+        sessions[sessionId]?.stop()
+    }
+
+    /**
+     * Every conversation with a live process, and when that process came up.
+     *
+     * For the idle sweep (see IdleSleep): the moment is the fallback for a conversation whose status has
+     * never changed - a process raised to answer about MCP servers and left alone has no turn behind it
+     * and therefore no other moment to count from.
+     *
+     * Sessions the scenarios run are not here and cannot be: a run's head and its cards build their own
+     * CodexSession outright rather than through this register (see ScenarioEngine.openHead). A head
+     * spends a whole run silent between cards, so anything sweeping by "left alone" would have taken it -
+     * and the run with it.
+     */
+    fun liveSince(): Map<String, Long> =
+        sessions.filterValues { it.isRunning }.mapValues { (_, session) -> session.startedAt }
+
+    /**
+     * Give a conversation's process back, keeping the conversation.
+     *
+     * The same [stop] underneath, named apart because the two mean different things to everything that
+     * watches: a stop is a person ending a conversation, this is the machine tidying up behind one
+     * nobody is using. The transcript stays on disk and the identifier stays here, so the next message
+     * raises the process again with `--resume` and the whole of what it knew (see CodexSession.start).
+     *
+     * [stillIdle] is asked here, at the last moment, and it is the whole reason this is not a bare
+     * [stop]. The sweep reads the conversation on one thread and takes the process down on another, and
+     * between the two a turn can begin: a background task reporting back starts one of the CLI's own
+     * accord (see AgentStream.isTurnAnnouncement), and a message can arrive from a phone. Asking only
+     * "is the process alive" answers the wrong question - it is alive precisely because somebody has
+     * just spoken in it, and the turn would be killed on its first words with nothing said: the panel
+     * counts the death as requested, so there is no crash line and no sound, only an answer that never
+     * came.
+     *
+     * The turn is asked of the session itself rather than through the caller's picture of it: [isBusy]
+     * is raised by the write and by the CLI's own announcement, both of them before the status this
+     * conversation reports outwards. What remains after this is the moment between the last look and the
+     * kill, and what falls into it is a message that has not been written yet - and that raises the
+     * process again by itself (see CodexSession.sendPrompt, which starts one when the handler is gone).
+     *
+     * False means there was nothing to take: the process had already gone, or the conversation turned
+     * out not to be idle after all.
+     */
+    fun sleep(sessionId: String, stillIdle: () -> Boolean): Boolean {
+        val session = sessions[sessionId] ?: return false
+        if (!session.isRunning) return false
+        if (session.isBusy) return false
+        if (!stillIdle()) return false
+
+        session.stop()
+        return true
+    }
+
+    /**
+     * Restarting a conversation's process without losing the transcript - an added or removed MCP server
+     * is read at launch and reaches a conversation no other way (see ProjectCatalog.addMcp). False means
+     * there was no process: there is nothing to connect to yet.
+     *
+     * Announced exactly as a swap is, and for exactly the same reason (see [onProcessDropping]). A
+     * restart is a swap by another name: the old process is thrown away with everything living inside
+     * it - a review's fleet, a background subagent, the dev server the agent raised - and a person who
+     * added a server from the MCP screen has no way of knowing any of that happened. On the move's road
+     * this was fixed; on this one the same loss went on being silent, and silent in three ways at once:
+     * the cards kept ticking against a CLI that was gone, the counts of that work stayed standing in the
+     * conversation's snapshot for good (so the phone's "the work is done" fell quiet for that tab and the
+     * idle sweep stopped taking its process back - see SessionSnapshot.pendingAgents and pendingCommands),
+     * and a question card pinned over the input field went on promising an answer nobody could give.
+     */
+    fun restart(sessionId: String, then: () -> Unit = {}): Boolean {
+        // A restart takes the process down and puts it back up, which is what a move does as well - so
+        // an outstanding move is honoured here rather than undone by a process coming back on the
+        // account it was asked to leave. Nothing to bring up afterwards is an honest "false": the
+        // servers connect by themselves with the first message.
+        applyPendingAccount(sessionId)
+
+        // Nothing to restart, and the one who asked still wants their answer: the MCP screen questions
+        // the process next, and a tab with none raises one for that question anyway - holding the word
+        // back here would leave the screen showing the list from before the change.
+        val session = sessions[sessionId] ?: run { then(); return false }
+
+        // A turn is running: it waits. Taking the process now costs the answer being written, and
+        // nothing about an added server asks for that - a server is read at launch, so the turn already
+        // running could not have used it however fast we were. The same reasoning as a renewal on the
+        // account already in use (see [relaunchOn]), and the same waiting room next to it.
+        if (session.isBusy) {
+            pendingRestarts[sessionId] = DeferredRestart(session.startedAt, then)
+            return true
+        }
+
+        return restartNow(sessionId, session, then)
+    }
+
+    /**
+     * The restart a running turn was holding - see [restart].
+     *
+     * Applied at the end of a turn and wherever a conversation is about to live, exactly as a waiting
+     * move is (see [applyPendingAccount]), because a turn does not always end by saying so: a process
+     * that crashes or is killed leaves the last word unsaid.
+     *
+     * Which process was waited for is part of the note, and that is what keeps a stale one harmless.
+     * The process may be gone by now - it crashed, it was stopped, an account was chosen - and whatever
+     * came up in its place read the config when it started, so there is nothing left to restart. Fired
+     * blindly, the note would take down a process that had done nothing wrong, and with it a fleet or a
+     * dev server raised long after the server was added.
+     */
+    fun applyPendingRestart(sessionId: String) {
+        val waiting = pendingRestarts.remove(sessionId) ?: return
+        val session = sessions[sessionId]
+        val owed = session != null &&
+            stillOwed(session.isRunning, session.startedAt, waiting.processStartedAt)
+
+        if (!owed || session == null) {
+            waiting.then()
+            return
+        }
+
+        restartNow(sessionId, session, waiting.then)
+    }
+
+    private fun restartNow(sessionId: String, session: CodexSession, then: () -> Unit): Boolean {
+        // Asked after the move above, not before: that one may have replaced the process already and
+        // said so, and the process standing here now is the one about to be thrown away.
+        if (session.isRunning) onProcessDropping(sessionId)
+
+        val raised = session.restart()
+        // Whoever asked for the restart is told at the moment it happens rather than at the moment it
+        // was asked for: the MCP screen questions the process next, and questioning the one that is
+        // being replaced answers with the very list the person has just changed.
+        then()
+
+        return raised
+    }
+
+    /** Whether the process is alive right now - without creating one, unlike [session]. */
+    fun isRunning(sessionId: String): Boolean = sessions[sessionId]?.isRunning == true
+
+    /**
+     * A conversation with a turn running right now - any of the tabs.
+     *
+     * This is for the subscription usage: it is shared across the whole account, and any process will
+     * answer about it, but only a working one answers meaningfully - a process learns the fresh share
+     * from the server's answers to its own requests. Asking the main tab specifically would be a miss:
+     * the work may be happening in any of them.
+     */
+    fun busySession(): String? = sessions.entries.firstOrNull { it.value.isBusy }?.key
+
+    /**
+     * The mode applies at once, to the very next tool calls, and to THIS conversation alone. The
+     * conversation is started for this even if it does not exist yet: a chosen mode must survive the
+     * moment before the first question, or the process would come up with the ordinary one.
+     *
+     * Nothing is saved here, on purpose. "What I work in right now" and "what new tabs start in" are
+     * two different questions, and one control cannot answer both: a mode picked for one tab would
+     * become the starting mode everywhere - every other tab, every other project, every launch from
+     * then on - with nothing said about it. The second question has a control of its own now, in the
+     * header's menu (see CodexPanel's "setDefaultMode").
+     */
+    fun setPermissionMode(sessionId: String, mode: String, onApplied: (CodexSession.ModeChange) -> Unit) {
+        session(sessionId).setPermissionMode(mode, onApplied)
+    }
+
+    /**
+     * The mode this conversation is genuinely in right now - null when it has no process and no chosen
+     * mode of its own yet.
+     *
+     * Asked rather than taken from the saved preference, because the two are allowed to disagree: after
+     * a plan is approved, the tab it was approved in works without questions while the setting stays as
+     * the person left it (see [setPermissionMode]). Without creating a conversation, unlike [session]:
+     * this is a question about one, not a reason to start one.
+     */
+    fun permissionMode(sessionId: String): String? = sessions[sessionId]?.permissionMode
+
+    /** The transcript this conversation is filed under, once the CLI has named one - see CodexHistory. */
+    fun conversationIdOf(sessionId: String): String? = sessions[sessionId]?.conversationId
+
+    /**
+     * The model and the effort. The choice is remembered: new conversations will start with it.
+     *
+     * The conversation is started for this even if it does not exist yet - as with the permission mode:
+     * a choice made on an empty panel, before the first message, has to survive the launch rather than
+     * be lost silently just because the process is not up. No process needs raising for it: a sleeping
+     * conversation simply remembers the choice and starts with it (see CodexSession.setModel).
+     */
+    fun setModel(
+        sessionId: String,
+        model: String,
+        /**
+         * Whether this also becomes what the NEXT tab starts on.
+         *
+         * False for a choice made over the wire (see SessionCommands): from a phone the promise is
+         * about the conversation on screen and nothing else, and writing the machine's settings from a
+         * sofa would decide the shape of work somebody is about to begin at the keyboard.
+         */
+        remember: Boolean = true,
+        onApplied: (CodexSession.ModelChange) -> Unit = {},
+    ) {
+        session(sessionId).setModel(model) { change ->
+            // We remember only what the agent genuinely took - as with the permission mode. Writing the
+            // wish down straight away would leave a rejected model in the settings forever: every next
+            // tab would go into its launch with a flag the CLI refuses before the first turn.
+            //
+            // Against the account as well as the machine, and the account is the one that matters: plans
+            // differ in which models they have, so a pick made on one account must not decide what a tab
+            // on another starts with (see newSession).
+            if (remember && change.applied) {
+                CodexPreferences.model = change.model
+                CodexAccounts.getInstance().rememberChoice(accountOf(sessionId), model = change.model)
+            }
+            onApplied(change)
+        }
+    }
+
+    /**
+     * The effort, and unlike the model the setting is written straight away: this channel never refuses
+     * (see CodexSession.setEffort), so there is nothing to hold it back for.
+     *
+     * [remember] is the same switch [setModel] carries, and for the same reason.
+     */
+    fun setEffort(sessionId: String, effort: String, remember: Boolean = true) {
+        if (remember) {
+            CodexPreferences.effort = effort
+            CodexAccounts.getInstance().rememberChoice(accountOf(sessionId), effort = effort)
+        }
+        session(sessionId).setEffort(effort)
+    }
+
+    /**
+     * What effort this conversation works at - null when there is no conversation yet, and then the
+     * saved setting is the honest answer (that is what such a tab will start on).
+     *
+     * Asked of the conversation for the same reason as the permission mode: the setting is one for the
+     * whole application, while every open tab keeps what it was started with. And unlike the model and
+     * the mode there is nobody else to ask at all - the CLI neither announces the effort nor answers
+     * questions about it (see CodexSession.setEffort).
+     */
+    fun effort(sessionId: String): String? = sessions[sessionId]?.effort
+
+    /**
+     * The model this conversation runs on, or null when there is no such conversation - then the saved
+     * setting is the honest answer, exactly as with the effort above.
+     *
+     * Asked for the same reason: the setting is one for the whole application, while a tab keeps what it
+     * was started with, and a fork has to be started on its parent's model rather than on a choice made
+     * in some third tab (see [branchFrom]).
+     */
+    fun model(sessionId: String): String? = sessions[sessionId]?.model
+
+    /**
+     * This conversation starts on what was chosen for it rather than on what the settings hold.
+     *
+     * Only before it has begun: past that the process is up on flags already given, and the ordinary
+     * ways of changing them ([setModel], [setEffort], [setPermissionMode]) are the ones that reach it.
+     */
+    fun rememberLaunch(sessionId: String, launch: SessionLaunch) {
+        if (launch.isEmpty || sessions.containsKey(sessionId)) return
+
+        launches[sessionId] = launch
+    }
+
+    /**
+     * The model catalogue from a live conversation. Asking a sleeping one is pointless: the answer
+     * comes from the process itself, and raising one for a list is not worth it - there is a one-off
+     * lightweight ping for that (see CodexControlPing).
+     */
+    fun requestModels(sessionId: String, onResult: (JsonObject) -> Unit, onFailure: (String) -> Unit = {}) {
+        val session = sessions[sessionId]
+        if (session == null || !session.isRunning) {
+            onFailure("no live session")
+            return
+        }
+        session.requestModels(onResult, onFailure)
+    }
+
+    /** A live conversation's context window usage - a sleeping one's is empty by definition. */
+    fun requestContextUsage(
+        sessionId: String,
+        onResult: (JsonObject) -> Unit,
+        onFailure: (String) -> Unit = {},
+    ) {
+        val session = sessions[sessionId]
+        if (session == null || !session.isRunning) {
+            onFailure("no live session")
+            return
+        }
+        session.requestContextUsage(onResult, onFailure)
+    }
+
+    /**
+     * Usage is asked of the conversation, raising it if need be: otherwise the figures would appear
+     * only after the first message, while one wants to see them right away.
+     */
+    fun requestUsage(
+        sessionId: String,
+        onUsage: (JsonObject) -> Unit,
+        onFailure: (String) -> Unit = {},
+    ) {
+        session(sessionId).requestUsage(onUsage, onFailure)
+    }
+
+    fun close(sessionId: String) {
+        // A tab closed before anything was written into it takes its unspent choice with it.
+        launches.remove(sessionId)
+        // And what its conversation used to be: the next one opened here is somebody else's (see
+        // [afterScenarioHead]).
+        afterScenarioHead.remove(sessionId)
+        roleStillHeld.remove(sessionId)
+        // And an outstanding move: there is nothing left to move it to. Kept, the note would be found
+        // by a tab that happens to be opened under the same id later, and its deadline would take down
+        // whatever is running there by then.
+        pendingAccounts.remove(sessionId)
+        pendingRenewals.remove(sessionId)
+        forcedMoves.remove(sessionId)?.cancel(false)
+
+        sessions.remove(sessionId)?.let { session ->
+            session.stop()
+            Disposer.dispose(session)
+        }
+    }
+
+    override fun dispose() {
+        sessions.keys.toList().forEach(::close)
+    }
+
+    /** The process comes up lazily: an empty tab should start nothing. */
+    private fun session(sessionId: String): CodexSession = sessions.getOrPut(sessionId) {
+        newSession(sessionId, forkFrom = null).also { Disposer.register(this, it) }
+    }
+
+    private fun newSession(
+        sessionId: String,
+        forkFrom: String?,
+        resumeFrom: String? = null,
+    ): CodexSession {
+        /*
+         * Whether the conversation raising this callback is still the one the tab holds.
+         *
+         * A move replaces the conversation and takes the old process down, and a process does not die at
+         * once: its termination arrives afterwards, on another thread, still carrying this tab's id. Left
+         * unguarded it announced the tab idle over the turn the NEW conversation had meanwhile started -
+         * and an idle drains the queue, so the message after it went into a turn already running.
+         *
+         * Only the callbacks that speak about the tab's STATE are held to this. What the dying process
+         * still has to say - its last lines, its crash - is said: it happened, and the feed is a record.
+         */
+        val slot = arrayOfNulls<CodexSession>(1)
+        val current = { sessions[sessionId] === slot[0] }
+        // Chosen for this conversation alone, or nothing at all - the usual case, in which the settings
+        // decide (see SessionLaunch).
+        val launch = launches.remove(sessionId) ?: SessionLaunch()
+
+        val accounts = CodexAccounts.getInstance()
+
+        /*
+         * Which account pays: the one chosen for this machine, and nothing else.
+         *
+         * There used to be a chain here - the transcript's own account, then the request's, then the
+         * machine's - so that a conversation came back on the subscription it had been billed to. It is
+         * gone deliberately. Choosing an account now means "everything I do is on this one", history and
+         * forks included, and a chain of exceptions is the same thing as not having chosen.
+         */
+        val account = accounts.currentId
+
+        // Per account rather than machine-wide, and that is not symmetry for its own sake. Every
+        // successful pick writes the machine's default, so a model chosen on a Max account decided what
+        // a tab on a Pro account launched with - and a plan that has no Opus cannot run one. An account
+        // nobody has chosen for falls back to the default.
+        val remembered = accounts.account(account)
+
+        // The pin stands above the account's memory and below the request, and that order is the whole
+        // of the setting: "start every new tab on this" is a decision somebody made in words, while what
+        // the account was last left on is a decision nothing was ever said about. Empty - the default -
+        // and the chain is exactly the one it has always been (see CodexPreferences.newTabEffort).
+        val effort = launch.effort
+            .ifEmpty { CodexPreferences.newTabEffort }
+            .ifEmpty { remembered?.effort.orEmpty() }
+            .ifEmpty { CodexPreferences.effort }
+        // A new conversation starts with whatever is chosen now: re-picking the model in every tab is
+        // work over nothing. A conversation opened from the history is the exception, and it is told
+        // its own model a moment later, once its transcript has been read (see adoptModel).
+        val model = modelFor(
+            account,
+            launch.model
+                .ifEmpty { CodexPreferences.newTabModel }
+                .ifEmpty { remembered?.model.orEmpty() }
+                .ifEmpty { CodexPreferences.model },
+        )
+
+        onBorn(sessionId, effort, model, account)
+
+        return CodexSession(
+            workingDirectory = workingDirectory,
+            forkFrom = forkFrom,
+            resumeFrom = resumeFrom,
+            model = model,
+            effort = effort,
+            accountId = account,
+            // A tab is told where it is running; one continuing a finished run's main thread is told one
+            // thing more - that the role the transcript keeps insisting on is over (see
+            // CodexLaunch.AFTER_SCENARIO_HEAD).
+            briefing = CodexLaunch.panelBriefing(afterScenarioHead = sessionId in afterScenarioHead),
+            // Never chosen at all - we start in the same mode a terminal would start in this directory (see
+            // PermissionDefaultMode).
+            permissionMode = PermissionModes.resolve(
+                launch.mode.ifEmpty { CodexPreferences.mode },
+                fallback = PermissionDefaultMode.of(workingDirectory),
+            ),
+            onEvent = { line -> onEvent(sessionId, line) },
+            onError = { message -> onError(sessionId, message) },
+            onDiagnostic = { message -> onDiagnostic(sessionId, message) },
+            onFinished = { if (current()) onFinished(sessionId) },
+            onCrashed = { exitCode -> onCrashed(sessionId, exitCode) },
+            onToolPermission = { request -> onToolPermission(sessionId, request) },
+            onPermissionWithdrawn = { requestId -> onPermissionWithdrawn(sessionId, requestId) },
+            onTitle = { title -> onTitle(sessionId, title) },
+            titleWanted = { titleWanted(sessionId) },
+            onTurnEnded = { if (current()) onTurnEnded(sessionId) },
+            onTurnStarted = { if (current()) onTurnStarted(sessionId) },
+            onContext = { used, max -> if (current()) onContext(sessionId, used, max) },
+            onRateLimits = { usage -> onRateLimits(sessionId, usage) },
+            onMcpSettled = { if (current()) onMcpSettled(sessionId) },
+        ).also { slot[0] = it }
+    }
+
+    companion object {
+        /**
+         * The identifier of the tab a panel opens with, and the one a message with no conversation named
+         * in it belongs to.
+         *
+         * Declared once and here rather than beside each of its users: the panel routes incoming
+         * messages by it while the permission cards send answers back by it, and the two agreeing is the
+         * whole point. Kept apart, a change in one place would quietly send permission cards into a tab
+         * the interface has never heard of - and neither the build nor the tests would notice.
+         */
+        const val MAIN_SESSION = "main"
+
+        /** How long a turn is given to stop of its own accord before it is taken down - see [armForcedMove]. */
+        private const val FORCED_MOVE_SECONDS = 8L
+
+        /**
+         * Whether a restart that waited for a turn still has anything to take down - see
+         * [applyPendingRestart].
+         *
+         * The note names the process it was waiting for, and the answer is "only if that very one is
+         * still standing". A turn does not always end by saying so, so the note outlives the process it
+         * was written about more often than one would think: a crash, a Stop, an account chosen. Whatever
+         * came up afterwards read the config when it started, so it owes nothing - and taken down anyway
+         * it would cost a fleet or a dev server raised long after somebody added a server.
+         *
+         * Kept apart from the taking, and tested, because it breaks in the direction nobody looks: the
+         * restart still happens, on the wrong process, and what dies with it dies quietly.
+         */
+        fun stillOwed(running: Boolean, startedAt: Long, waitedFor: Long): Boolean =
+            running && startedAt == waitedFor
+
+        /**
+         * The CLI's own name for "whatever this account's default is" - the one model every plan can run.
+         *
+         * Its own word rather than ours: it is what the CLI lists in the model catalogue and what the
+         * panel's own menu sends when a person picks the first entry (see DEFAULT_MODEL in catalog.ts).
+         */
+        private const val DEFAULT_MODEL = "default"
+    }
+}

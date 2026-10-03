@@ -1,0 +1,417 @@
+import { isInsideIde, send } from './bridge'
+import { EMPTY_CLIPBOARD, isEmptyClipboard, pickPasted, type ClipboardContent } from './clipboardContent'
+import { isPasteShortcut, isTyping, servesPaste, typedNothing, type LastKey } from './clipboardKeys'
+import type { ShellMessage } from './protocol'
+
+/**
+ * The clipboard bridge between the page and the IDE.
+ *
+ * The panel is an embedded browser, and its clipboard is its own. On Linux it is besides connected to
+ * nothing: the browser renders without a window of its own, while there the system clipboard is owned
+ * precisely by a window - having got no ownership, the browser silently starts an internal clipboard and
+ * lives with it. From outside that looks as though copying works only inside the input field: cut and
+ * paste in the same place and it works, copy in a code tab and paste into the panel and it is empty, and
+ * the other way round too. That is exactly what the first report was about.
+ *
+ * We fix it not by replacing everything but by going around the broken place: the real clipboard is
+ * available to the shell (it is the same one the whole IDE uses), so a copy is duplicated into it and a
+ * paste is taken out of it. Where the native route works (macOS, Windows) we do not touch it at all: the
+ * bridge is Linux-only, and there the native clipboard can do more than ours.
+ *
+ * **On the bridge the browser's own clipboard is not believed at all**, and that is the second report.
+ * At first a paste was filled in only where the browser handed over emptiness - which held right up to
+ * the first copy made inside the panel: that fills the private clipboard for good, it is refreshed by
+ * nothing afterwards, and every later paste got that one snapshot back instead of what had since been
+ * copied in the editor. Why the system clipboard is the one to ask, and what the browser's snapshot is
+ * still kept for, is in clipboardContent.
+ */
+
+/**
+ * How long the shell's answer is waited for before the clipboard counts as empty.
+ *
+ * Reading the clipboard on X11 is a request to another application that owns it, and it is free to stay
+ * silent. A paste that did nothing is unpleasant but survivable; a paste after which the panel stops
+ * answering the keyboard is not.
+ */
+const READ_TIMEOUT_MS = 1500
+
+let lastRequest = 0
+const pending = new Map<string, (content: ClipboardContent) => void>()
+
+/**
+ * This breaks only on Linux, so we step in only there: on the other systems the native route can do more
+ * than ours (files from a file manager, formats we know nothing about), and replacing it with ourselves
+ * would mean fixing one thing while breaking another. The check is lazy - in tests and in the harness
+ * there may be no browser at all.
+ */
+const isLinux = (): boolean => typeof navigator !== 'undefined' && /linux/i.test(navigator.userAgent)
+
+/** The bridge is needed and meaningful only inside the IDE: in the harness the browser's clipboard is real. */
+const bridged = (): boolean => isLinux() && isInsideIde()
+
+/**
+ * Put what was copied in the panel into the IDE's system clipboard. Returns whether it got as far as the
+ * shell: for those who would otherwise not learn about success (the "copy" button), that is the only
+ * honest sign.
+ */
+export const writeClipboard = (text: string, html = ''): boolean => {
+  if (!bridged()) return false
+  if (!text && !html) return false
+
+  send({ type: 'clipboardWrite', text, html })
+  return true
+}
+
+/** Ask the shell what is in the system clipboard right now. */
+export const readClipboard = (): Promise<ClipboardContent> => {
+  if (!bridged()) return Promise.resolve(EMPTY_CLIPBOARD)
+
+  lastRequest += 1
+  const id = `clip-${lastRequest}`
+
+  return new Promise<ClipboardContent>((resolve) => {
+    const finish = (content: ClipboardContent) => {
+      if (!pending.delete(id)) return
+      clearTimeout(timeout)
+      resolve(content)
+    }
+
+    const timeout = setTimeout(() => finish(EMPTY_CLIPBOARD), READ_TIMEOUT_MS)
+
+    pending.set(id, finish)
+    send({ type: 'clipboardRead', id })
+  })
+}
+
+/** The shell's answer to readClipboard - called from the shared message handling. */
+export const resolveClipboard = (message: Extract<ShellMessage, { type: 'clipboard' }>): void => {
+  pending.get(message.id)?.({
+    text: message.text ?? '',
+    html: message.html ?? '',
+    image: message.image ?? '',
+    // The shell carries an image as a data URL and no files of its own - see WebviewClipboard.
+    files: [],
+  })
+}
+
+/**
+ * Install the bridge on the page. Returns the teardown - the subscriptions live exactly as long as the
+ * panel does.
+ */
+export const installClipboardBridge = (): (() => void) => {
+  document.addEventListener('copy', onCopy)
+  document.addEventListener('cut', onCopy)
+  // Intercepted before everyone: on the bridge this event must not reach the input field at all - what
+  // it carries is either nothing or the browser's own stale snapshot, and both are answered elsewhere.
+  document.addEventListener('paste', onPaste, true)
+  window.addEventListener('keydown', onKeyDown, true)
+  // What the keyboard actually typed - the one witness that tells a press meant for the field from a
+  // press the browser turned into a paste (see clipboardKeys).
+  document.addEventListener('beforeinput', onBeforeInput, true)
+
+  return () => {
+    document.removeEventListener('copy', onCopy)
+    document.removeEventListener('cut', onCopy)
+    document.removeEventListener('paste', onPaste, true)
+    window.removeEventListener('keydown', onKeyDown, true)
+    document.removeEventListener('beforeinput', onBeforeInput, true)
+  }
+}
+
+/**
+ * Copying and cutting are duplicated into the IDE's clipboard.
+ *
+ * We listen on the bubble phase, that is, after the panel's own handlers: the input field puts its own
+ * thing into the clipboard (the text plus a description of the attachments, see Composer), and what has
+ * to be taken is exactly what was put there. When nobody put anything - a selection in the feed is being
+ * copied - we take it ourselves.
+ */
+const onCopy = (event: ClipboardEvent): void => {
+  if (!bridged()) return
+
+  const own = selection()
+  const text = event.clipboardData?.getData('text/plain') || own.text
+  const html = event.clipboardData?.getData('text/html') || own.html
+
+  writeClipboard(text, html)
+}
+
+/**
+ * Every paste on the bridge, whatever the browser brought with it.
+ *
+ * The event is suppressed entirely and one just like it is sent instead, carrying the contents of the
+ * real clipboard: that way the whole paste handling - images, attachments, sheets of text - stays where
+ * it was, and no second copy of it is started. What the browser did bring is taken along as a spare and
+ * used only if the system clipboard answered with nothing (see clipboardContent).
+ */
+const onPaste = (event: ClipboardEvent): void => {
+  awaitingPaste = false
+  if (!bridged()) return
+  // Our own, sent from deliverPaste below. It travels this same capture phase, and taken for somebody
+  // else's it would send us round for the clipboard again, and again after that.
+  if (ours.has(event)) return
+
+  // Nobody asked for this one: an ordinary key press arrived across the browser boundary carrying
+  // modifiers that were never held, and the browser read it as a paste. Filling it in would be putting
+  // the clipboard into a message under the hands of somebody typing a capital letter.
+  if (!servesPaste(lastKey, Date.now())) {
+    restoreTyped(lastKey, event)
+    return
+  }
+
+  const spare = snapshot(event.clipboardData)
+
+  event.preventDefault()
+  event.stopImmediatePropagation()
+
+  const target = event.target instanceof Element ? event.target : document.activeElement
+  void readClipboard().then((content) => deliverPaste(target, pickPasted(content, spare)))
+}
+
+/** The pastes we sent ourselves - the one thing that tells them from a person's own. */
+const ours = new WeakSet<Event>()
+
+/**
+ * What the browser handed over, copied out while it still can be.
+ *
+ * An event's DataTransfer lives exactly as long as its handler, and the system clipboard is asked for
+ * across a whole round trip to the shell - so the spare is taken here or not at all. Files survive that
+ * on their own; the strings have to be read out now.
+ */
+const snapshot = (data: DataTransfer | null): ClipboardContent => {
+  if (!data) return EMPTY_CLIPBOARD
+
+  return {
+    text: data.getData('text/plain'),
+    html: data.getData('text/html'),
+    // Bytes come as files here, not as a data URL: that shape belongs to the shell's answer alone.
+    image: '',
+    files: Array.from(data.files),
+  }
+}
+
+/**
+ * Put back the character whose press the browser turned into a paste.
+ *
+ * Only if nothing else typed it: where the browser both inserted the character and invented the paste
+ * beside it, there is nothing to restore, and restoring anyway would write the letter twice. So the
+ * event is stopped either way - it is not a paste, and letting it through means the field either
+ * swallows the keystroke over an empty paste or, worse, pastes the browser's own stale snapshot in the
+ * middle of a word - and the decision is taken one task later, once the browser has done whatever it
+ * was going to do.
+ */
+const restoreTyped = (last: LastKey | null, event: ClipboardEvent): void => {
+  if (!last?.text) return
+
+  const target = event.target instanceof Element ? event.target : document.activeElement
+  if (!isEditable(target)) return
+
+  event.preventDefault()
+  event.stopImmediatePropagation()
+
+  const { at, text } = last
+  setTimeout(() => {
+    if (!typedNothing(at, typedAt)) return
+
+    insertText(target, text)
+  }, 0)
+}
+
+/**
+ * Whether we are waiting for a paste that has been pressed but has not arrived as an event yet.
+ *
+ * Needed because the event may not arrive at all: a browser that got no system clipboard is free to
+ * consider a paste impossible and never wake the page. Then we do it on its behalf - but only after
+ * making sure it genuinely did not arrive by its own route.
+ */
+let awaitingPaste = false
+
+/** The last press and whether it was a real paste shortcut - see servesPaste. */
+let lastKey: LastKey | null = null
+
+/** When the keyboard last typed a character into a field - see typedNothing. */
+let typedAt: number | null = null
+
+const onBeforeInput = (event: InputEvent): void => {
+  if (!bridged() || !isTyping(event.inputType)) return
+
+  typedAt = Date.now()
+}
+
+const onKeyDown = (event: KeyboardEvent): void => {
+  if (!bridged()) return
+
+  const shortcut = isPasteShortcut(event)
+  const at = Date.now()
+  // A single character is what a press writes; "Shift", "Enter" and the rest name themselves and write
+  // nothing, and there is nothing to put back for them.
+  lastKey = { at, shortcut, text: event.key.length === 1 ? event.key : '' }
+  if (!shortcut) return
+
+  const target = document.activeElement
+  if (!isEditable(target)) return
+
+  awaitingPaste = true
+  // The browser will dispatch its own event inside this same task, right after the key handlers - so
+  // checking makes sense already in the next one.
+  setTimeout(() => {
+    if (!awaitingPaste) return
+    awaitingPaste = false
+    // The press typed a character, so it was typing: the modifiers it claimed to carry were not the
+    // ones held down, and this is the same misreading servesPaste refuses above.
+    if (!typedNothing(at, typedAt)) return
+
+    void readClipboard().then((content) => {
+      if (!typedNothing(at, typedAt)) return
+      deliverPaste(target, content)
+    })
+  }, 0)
+}
+
+/**
+ * Dispatch the paste anew - this time with the contents of the IDE's clipboard.
+ *
+ * If it was accepted (the input field suppresses the event itself), there is nothing more to do. If
+ * nobody accepted it - and those are the ordinary fields such as an MCP server's address, which have no
+ * paste handling of their own - we insert the text by hand: without that they would stay on Linux as
+ * broken as they were before the bridge.
+ */
+const deliverPaste = (target: Element | null, content: ClipboardContent): void => {
+  if (!isEditable(target)) return
+  if (isEmptyClipboard(content)) return
+
+  const data = new DataTransfer()
+  if (content.text) data.setData('text/plain', content.text)
+  if (content.html) data.setData('text/html', content.html)
+
+  const image = fileFromDataUrl(content.image)
+  if (image) data.items.add(image)
+  // The spare carries its bytes as files - a screenshot, a document out of a file manager.
+  for (const file of content.files) data.items.add(file)
+
+  const paste = new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true })
+  ours.add(paste)
+
+  const accepted = !target.dispatchEvent(paste)
+
+  if (!accepted && content.text) insertText(target, content.text)
+}
+
+const isEditable = (node: Element | null): node is HTMLElement => {
+  if (!(node instanceof HTMLElement)) return false
+
+  return node.isContentEditable || node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement
+}
+
+/**
+ * A paste by hand - for fields that have no handling of their own.
+ *
+ * An ordinary field's value is set through the element's own setter rather than through the property:
+ * React replaces the property with one of its own, remembers the last known value in it and decides by
+ * that whether a change happened. An assignment bypassing that memory it will not notice - the field
+ * would show what was pasted while the component's state stayed as it was, and the old value would be
+ * sent.
+ */
+const insertText = (target: HTMLElement, text: string): void => {
+  if (!(target instanceof HTMLInputElement) && !(target instanceof HTMLTextAreaElement)) {
+    document.execCommand('insertText', false, text)
+    return
+  }
+
+  const start = target.selectionStart ?? target.value.length
+  const end = target.selectionEnd ?? start
+  const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(target), 'value')?.set
+
+  setter?.call(target, target.value.slice(0, start) + text + target.value.slice(end))
+  target.setSelectionRange(start + text.length, start + text.length)
+  target.dispatchEvent(new Event('input', { bubbles: true }))
+}
+
+/**
+ * What is selected right now - for the case where nobody put anything into the clipboard themselves.
+ *
+ * Ordinary fields (an MCP server's address, the history search) keep their selection apart from the
+ * page's: the shared getSelection knows nothing about their text at all and would return emptiness - and
+ * with it "nothing" would travel into the IDE's clipboard, which would then keep its previous contents
+ * while the browser thinks it has copied.
+ */
+const selection = (): { text: string; html: string } => {
+  const active = document.activeElement
+  if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) {
+    return { text: active.value.slice(active.selectionStart ?? 0, active.selectionEnd ?? 0), html: '' }
+  }
+
+  const picked = window.getSelection()
+  if (!picked || picked.rangeCount === 0 || picked.isCollapsed) return { text: '', html: '' }
+
+  const holder = document.createElement('div')
+  holder.appendChild(picked.getRangeAt(0).cloneContents())
+
+  return { text: picked.toString(), html: holder.innerHTML }
+}
+
+/** Parsing a data URL: the type and the bytes. Split out because it is easy to get wrong silently. */
+const decodeDataUrl = (url: string): { type: string; bytes: Uint8Array<ArrayBuffer> } | null => {
+  const match = url.match(/^data:([^;,]+);base64,(.*)$/s)
+  if (!match?.[1] || !match[2]) return null
+
+  try {
+    const binary = atob(match[2])
+    const bytes = new Uint8Array(new ArrayBuffer(binary.length))
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
+
+    return { type: match[1], bytes }
+  } catch {
+    return null
+  }
+}
+
+const fileFromDataUrl = (url: string): File | null => {
+  const decoded = url ? decodeDataUrl(url) : null
+  if (!decoded) return null
+
+  const extension = decoded.type.split('/')[1] || 'png'
+  return new File([decoded.bytes], `clipboard.${extension}`, { type: decoded.type })
+}
+
+/** How long the modern Clipboard API is waited for before it counts as unavailable. */
+const CLIPBOARD_API_TIMEOUT_MS = 300
+
+/**
+ * navigator.clipboard is not always present in the IDE's embedded browser (JCEF) - and, worse than an
+ * ordinary refusal, it may not reject with an error but hang without an answer for good (verified live:
+ * a plain await never sees either success or refusal). The button meanwhile reported success (the tick)
+ * at once, waiting for nothing at all. document.execCommand is already used in the panel for other
+ * operations and works reliably there, so it is an honest fallback when the modern API is unavailable,
+ * failed, or stays silent longer than is reasonable. "Success" now means exactly success rather than
+ * merely a call.
+ */
+export const copyToClipboard = async (text: string): Promise<boolean> => {
+  // Apart from both browser routes: on Linux the embedded browser's clipboard is connected to nothing,
+  // and both of them put the text where nobody can reach it afterwards - neither the editor nor a
+  // neighbouring application (see clipboard.ts). This button slips past the shared copy interception
+  // because the modern Clipboard API raises no copy event.
+  const bridged = writeClipboard(text)
+
+  if (navigator.clipboard?.writeText) {
+    // .catch straight on the promise itself - otherwise, rejecting later than the timeout has already
+    // won the race, it surfaces as an uncaught (in promise) in the console.
+    const write = navigator.clipboard
+      .writeText(text)
+      .then(() => 'done' as const)
+      .catch(() => 'failed' as const)
+    const timeout = new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), CLIPBOARD_API_TIMEOUT_MS))
+
+    if ((await Promise.race([write, timeout])) === 'done') return true
+  }
+
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  textarea.select()
+  const ok = document.execCommand('copy')
+  document.body.removeChild(textarea)
+  return ok || bridged
+}

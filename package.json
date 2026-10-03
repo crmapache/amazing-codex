@@ -1,0 +1,17 @@
+{
+  "name": "amazing-codex",
+  "private": true,
+  "license": "Elastic-2.0",
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "build:webview": "pnpm --filter amazing-codex-webview build",
+    "build:mobile": "pnpm --filter amazing-codex-webview build:mobile",
+    "build:relay": "pnpm --filter amazing-codex-relay build",
+    "build:feedback": "pnpm --filter amazing-codex-feedback build",
+    "dev": "pnpm --filter amazing-codex-webview dev",
+    "dev:relay": "pnpm --filter amazing-codex-relay dev",
+    "dev:feedback": "pnpm --filter amazing-codex-feedback dev"
+  }
+}

@@ -1,0 +1,281 @@
+import { reducePanel } from '../feed/build'
+import { initialPanelState, type PanelAction, type PanelState } from '../feed/panelState'
+import type { ShellMessage } from '../protocol'
+import type { UserToken } from '../feed/types'
+
+/**
+ * Turning the shell's messages into a conversation, on the phone.
+ *
+ * The same reducer the panel uses, fed the same messages. That is the whole point of the journal being
+ * a list of ready messages rather than a format of its own: a second client does not need a second
+ * understanding of what a conversation is, and two understandings would disagree the first week.
+ *
+ * What is not here is everything the panel does around the feed - the composer's draft, the sound
+ * watch, the tabs. Those belong to a screen rather than to a conversation.
+ */
+
+export interface MobileFeed {
+  state: PanelState
+  /** The last journal number applied, which is what a reconnect asks to continue from. */
+  seq: number
+  /** True between restoreStarted and restoreFinished: the entries are collected, then applied at once. */
+  restoring: boolean
+  /**
+   * When the last piece of that restore arrived, on the IDE's clock - what stops it lasting for ever.
+   *
+   * A restore shows nothing until its closing half arrives, and that half is one frame like any other:
+   * a queue that gave up on this device, a frame over the relay's ceiling, a send the socket refused
+   * mid-batch. Lost, it used to leave the conversation blank on this phone with no sign anywhere of
+   * why, until somebody thought to leave the screen and come back. So the restore ends by itself when
+   * nothing more comes - which costs nothing when it was merely slow, because the pieces are held and
+   * applied together either way.
+   */
+  restoringSince: number
+  /**
+   * Whether the IDE has said anything about this conversation yet.
+   *
+   * An empty feed means two different things - "this conversation is empty" and "nothing has arrived
+   * yet" - and a screen that shows them alike sends someone looking for a bug that is not there. It
+   * did exactly that: a conversation whose journal never made it across came up looking like a fresh
+   * one, with an invitation to say something.
+   */
+  loaded: boolean
+  pending: Array<{ action: PanelAction; at?: number }>
+}
+
+/**
+ * How long a restore may go without a word before it is treated as over - see MobileFeed.restoringSince.
+ *
+ * Generous, because the pieces of one arrive back to back and being early would mean drawing half a
+ * conversation; short next to the alternative, which is a screen that never draws it at all.
+ */
+const RESTORE_PATIENCE_MS = 20_000
+
+export const emptyFeed = (): MobileFeed => ({
+  state: initialPanelState,
+  seq: 0,
+  restoring: false,
+  restoringSince: 0,
+  loaded: false,
+  pending: [],
+})
+
+/**
+ * Whether anything in this feed is measured against the clock and so has to be moved once a second.
+ *
+ * The same question the panel asks before its own tick (see the interval in App.tsx): a turn under way,
+ * calls still running, a chain of retries counting down to the next attempt. Asked at all because the
+ * answer is usually "no" - a phone spends most of its time looking at a conversation that has finished,
+ * and a timer waking a React tree every second over a still picture is a battery bill for nothing.
+ */
+export const feedTicks = (feed: MobileFeed): boolean =>
+  !feed.restoring &&
+  (feed.state.turnStartedAt !== undefined ||
+    feed.state.retry !== undefined ||
+    Object.keys(feed.state.startedAt).length > 0)
+
+/**
+ * Move every running counter to `now`.
+ *
+ * Without this the phone had no tick at all: the durations of the calls and the counter beside "Claude
+ * is thinking" only ever moved when the next message happened to arrive, so a long call sat at the
+ * figure it had when it started and a quiet turn looked frozen. `now` is the IDE's time rather than the
+ * device's - everything being counted from was stamped by that machine (see clock.ts).
+ *
+ * Returns the same feed when nothing moved, so a screen renders only on the seconds that changed
+ * something.
+ */
+export const tickFeed = (feed: MobileFeed, now: number): MobileFeed => {
+  const state = reducePanel(feed.state, { kind: 'tick' }, now)
+  return state === feed.state ? feed : { ...feed, state }
+}
+
+/**
+ * Apply one message from the shell.
+ *
+ * Returns the same feed when nothing changed, so a screen can skip a render on the many messages that
+ * are about other conversations or about the project rather than the feed.
+ *
+ * `now` is what the IDE's clock is thought to say at this moment (see clock.ts) and stands in for the
+ * messages that carry no time of their own - the answer being printed, a page of older messages fetched
+ * on request. It matters that it is the IDE's rather than the device's: the whole of this state is
+ * measured in the IDE's time, and a single moment let in off the local clock is a duration counted
+ * across two of them.
+ */
+export const applyMessage = (feed: MobileFeed, message: ShellMessage, now: number = Date.now()): MobileFeed => {
+  const at = message.at ?? now
+  const seq = message.seq ?? feed.seq
+
+  const restored = (feed: MobileFeed): PanelState =>
+    feed.pending.reduce((panel, entry) => reducePanel(panel, entry.action, entry.at ?? now), feed.state)
+
+  const collect = (action: PanelAction): MobileFeed => {
+    if (feed.restoring) {
+      // Still arriving: held with the rest, and the clock of the wait moves with it.
+      if (now - feed.restoringSince <= RESTORE_PATIENCE_MS) {
+        return { ...feed, seq, restoringSince: now, pending: [...feed.pending, { action, at }] }
+      }
+
+      // Nothing came for long enough that the closing half is not coming at all - see restoringSince.
+      return {
+        ...feed,
+        seq,
+        loaded: true,
+        restoring: false,
+        restoringSince: 0,
+        pending: [],
+        state: reducePanel(restored(feed), action, at),
+      }
+    }
+
+    return { ...feed, seq, loaded: true, state: reducePanel(feed.state, action, at) }
+  }
+
+  switch (message.type) {
+    case 'restoreStarted': {
+      // `from` of zero means this client had nothing, so whatever is on screen is not a shorter version
+      // of what is coming - it is a different conversation's remains.
+      const state = message.from === 0 ? initialPanelState : feed.state
+      // Worded differently from the panel's mark on purpose: at the desk the beginning is genuinely
+      // gone, while here it usually still exists on the machine and simply was not sent - a phone is
+      // handed the end of a conversation rather than a working day of it (see ClaudeSessionHub.CatchUp).
+      const pending: Array<{ action: PanelAction; at?: number }> = message.truncated
+        ? [
+            {
+              action: {
+                kind: 'checkpoint',
+                chip: 'EARLIER',
+                target: '',
+                targetKey: 'notOnPhone',
+              },
+            },
+          ]
+        : []
+
+      return { ...feed, state, restoring: true, restoringSince: now, pending }
+    }
+
+    case 'restoreFinished': {
+      return {
+        ...feed,
+        state: restored(feed),
+        seq: message.upTo,
+        restoring: false,
+        restoringSince: 0,
+        loaded: true,
+        pending: [],
+      }
+    }
+
+    case 'agent':
+      return collect({ kind: 'agent', event: message.event, replay: message.replay })
+
+    /**
+     * A page of older messages. Applied by the shared reducer, boundary and all (see historyPage in
+     * build.ts): the panel turns the same pages, and two understandings of "what is above this" would
+     * disagree the first week.
+     */
+    case 'historyPage':
+      return collect({
+        kind: 'historyPage',
+        entries: message.entries,
+        cursor: message.cursor,
+        before: message.before,
+      })
+
+    case 'promptEcho':
+      return collect({
+        kind: 'prompt',
+        tokens: (message.tokens ?? []) as UserToken[],
+        quotes: message.quotes ?? [],
+        steering: message.steering,
+      })
+
+    case 'status':
+      return collect({ kind: 'status', status: message.state })
+
+    /*
+     * The IDE stopped this turn to move the conversation to another account (see turnStopped).
+     *
+     * The phone needs it as much as the desk does, and rather more: the switch was made somewhere it
+     * cannot see. Without it the turn is captioned as one that worked through and the tool cards it was
+     * in the middle of keep their clocks running against a process that is gone.
+     */
+    case 'turnStopped':
+      return collect({ kind: 'stoppedForAccount' })
+
+    case 'error':
+      return collect({ kind: 'error', message: message.message })
+
+    case 'permission':
+      return collect({
+        kind: 'permission',
+        id: message.id,
+        target: message.target,
+        command: message.command,
+        mode: message.mode,
+        reason: message.reason,
+        rememberable: message.rememberable,
+        taskId: message.agentId,
+      })
+
+    case 'permissionResolved':
+      return collect({ kind: 'permissionResolved', id: message.id, decision: message.decision })
+
+    // A model chosen by hand - at the desk, or as the model a conversation of one's own is started on.
+    // The phone has no model button, so there is nothing here for it to show; what it needs is to know
+    // that the change was somebody's doing. Without this the tab's memory of what the stream last named
+    // stays on the old model, and the first answer signed with the new one is announced in the feed as a
+    // swap made behind one's back (see noteStreamModel).
+    case 'model':
+      return collect({ kind: 'modelApplied', model: message.model, error: message.error })
+
+    /*
+     * What this conversation works at (see ClaudeSessionHub.sendEffort). Nobody but the IDE knows it -
+     * the CLI says nothing about the effort anywhere - so a phone that does not take this message shows
+     * a sheet with none of the seven marked, which reads as "this conversation runs at nothing".
+     *
+     * Live rather than journalled, like the queue below it: it is what the conversation runs at now, not
+     * something it said. A phone joining is handed it in the catch-up batch (see the attach in the hub).
+     */
+    case 'effort':
+      return collect({ kind: 'effortApplied', effort: message.effort })
+
+    // What this conversation is waiting to say. Held and fired by the IDE, so both screens show the same
+    // list and a phone put back in a pocket does not take it along (see SessionQueue.kt).
+    case 'queue':
+      return collect({ kind: 'queue', items: message.items })
+
+    case 'context':
+      return collect({ kind: 'context', used: message.used, max: message.max })
+
+    case 'processExited':
+      return collect({ kind: 'processExited', exitCode: message.exitCode })
+
+    /*
+     * The tab's process was replaced while the tab was idle (see processReplaced). The phone needs this
+     * for the same reason as the desk and rather more: a workflow's fleet is the one thing here that
+     * runs for half an hour with nobody looking, and the switch that killed it was made somewhere this
+     * screen cannot see.
+     */
+    case 'processReplaced':
+      return collect({ kind: 'processReplaced' })
+
+    case 'replayFinished':
+      return collect({ kind: 'replayFinished' })
+
+    case 'streamingText':
+      return collect({ kind: 'streamPrimed', text: message.text, thinking: message.thinking })
+
+    case 'sessionReset':
+      // Still loaded: the conversation was wiped rather than never heard about, and saying "loading"
+      // over a tab that is genuinely empty now would wait for something that is not coming.
+      return { ...emptyFeed(), seq, loaded: feed.loaded }
+
+    default:
+      // Everything else is about the project or about a screen the phone does not have. Skipped rather
+      // than mishandled: the protocol grows, and a client that guesses at what it does not know is a
+      // client that breaks on the next release.
+      return feed
+  }
+}

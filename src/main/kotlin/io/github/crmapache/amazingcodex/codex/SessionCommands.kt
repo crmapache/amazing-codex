@@ -1,0 +1,623 @@
+package io.github.crmapache.amazingcodex.codex
+
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.diagnostic.thisLogger
+import io.github.crmapache.amazingcodex.codex.CodexSessions.Companion.MAIN_SESSION
+import io.github.crmapache.amazingcodex.remote.RemoteAgent
+import io.github.crmapache.amazingcodex.remote.RemoteCommands
+import io.github.crmapache.amazingcodex.voice.VoiceGrant
+import io.github.crmapache.amazingcodex.remote.RemoteLimits
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
+
+/**
+ * The one door a request from a client goes through.
+ *
+ * Until now this was a `when` inside the panel over forty-odd kinds of message, and while the browser
+ * was the only client that was fine: whatever could reach it was already inside the IDE. It stops
+ * being fine the moment a second client may sit on a phone across the city, because the difference
+ * between "read the feed" and "run a shell command" then becomes the difference between watching and
+ * remote code execution.
+ *
+ * So execution moves out of the panel and behind a single entrance. The panel calls it directly - it
+ * is the IDE, and what it may do the person at the keyboard may do. Anything arriving over a network
+ * will be filtered before it gets here (phase 2), and having one entrance is what makes that filter
+ * possible to write at all: a second path around it would be a hole nobody would notice.
+ *
+ * What stays with the panel is what only an IDE window can do: the file chooser, the clipboard, the
+ * cursor, the sounds, the dock. Those are not commands about a conversation, and a phone has no
+ * business asking for them.
+ */
+internal class SessionCommands(private val hub: CodexSessionHub) {
+
+    /** How often a client that is not this IDE may ask for things - see RemoteLimits. */
+    private val limits = RemoteLimits()
+
+    /**
+     * Handle a message from [clientId]. False means it is not about the conversations at all - the
+     * caller deals with it itself.
+     *
+     * [asker] is who is doing the asking, when that is somebody narrower than the client itself: behind
+     * the relay's single client sit all the phones paired with this IDE, and counting their requests
+     * together means one of them running out of allowance stops the others (see RemoteLimits).
+     */
+    fun handle(clientId: String, payload: JsonObject, asker: String = clientId): Boolean {
+        val field = { name: String -> payload[name]?.jsonPrimitive?.contentOrNull.orEmpty() }
+        val sessionId = field("sessionId").ifEmpty { MAIN_SESSION }
+        val type = field("type")
+        val local = hub.isLocal(clientId)
+
+        /**
+         * The lock on the single door. Everything that is not this IDE plays by the list (see
+         * RemoteCommands), including a message type nobody has heard of - that is what keeps a new
+         * protocol message from becoming remotely reachable just because this file was not updated.
+         */
+        if (!local && !RemoteCommands.allows(type)) {
+            thisLogger().warn("A client that is not this IDE asked for something it may not: $type ($clientId)")
+            return true
+        }
+
+        // And how often. The list above answers "may it", this answers "may it again" - a phone in
+        // somebody else's hands is allowed the same things as one in yours, just not a thousand times a
+        // minute (see RemoteLimits).
+        if (!local && !limits.allow(asker, type)) {
+            thisLogger().warn("A client is going too fast: $type ($asker)")
+            return true
+        }
+
+        when (type) {
+            /**
+             * The client has mounted and says what it already has. The panel answers this one itself
+             * (it has a window's worth of its own to send along with it); a browser page over the local
+             * channel comes through here.
+             */
+            "ready" -> hub.attach(clientId, seen(payload))
+
+            "prompt" -> hub.prompt(sessionId, field("text"), images(payload), echo = echo(payload), remote = !local)
+
+            /**
+             * A message written while the agent was busy. It waits beside the conversation rather than
+             * in the window that typed it, so a phone put back in a pocket does not take it along (see
+             * SessionQueue).
+             */
+            "queuePrompt" -> hub.queuePrompt(
+                sessionId,
+                id = field("id"),
+                text = field("text"),
+                attach = field("attach"),
+                images = images(payload),
+                echo = echo(payload),
+                remote = !local,
+            )
+
+            "unqueuePrompt" -> hub.unqueuePrompt(sessionId, field("id"))
+
+            "reorderQueue" -> hub.reorderQueue(
+                sessionId,
+                payload["ids"]?.jsonArray.orEmpty().mapNotNull { it.jsonPrimitive.contentOrNull },
+            )
+
+            /**
+             * The statistics tab's figures - an answer to whoever asked, like the history: they are about
+             * the machine rather than about any one conversation, so a subscription has nowhere to put
+             * them. Built off the interface thread: a year of days is a fair amount of JSON.
+             */
+            "statistics" -> ApplicationManager.getApplication().executeOnPooledThread {
+                runCatching { hub.emitTo(clientId, hub.stats.payload()) }
+                    .onFailure { thisLogger().warn("Could not build the statistics", it) }
+            }
+
+            // What only the interface can count - a hand on the keyboard, the chips in a message, the
+            // heart pressed - reported by it (see the stat message in protocol.ts).
+            "stat" -> hub.stats.noteClientEvent(payload)
+
+            /**
+             * The sparkle button beside the paperclip: the draft in the input field, rewritten.
+             *
+             * It runs a `claude -p` of its own rather than a turn in this conversation - the reasons are
+             * written out in PromptImprover - and the answer goes back to whoever pressed the button.
+             */
+            "improvePrompt" -> hub.catalog.improvePrompt(
+                clientId,
+                sessionId,
+                id = field("id"),
+                draft = field("draft"),
+                attachments = strings(payload, "attachments"),
+                rejected = strings(payload, "rejected"),
+            )
+
+            /**
+             * What that button asks for, in the person's own words. Empty puts the built-in text back in
+             * force (see PromptImprover.instructions).
+             *
+             * Another window of the same project keeps showing the text it was opened with until it is
+             * reloaded - what is in force is read here, at the moment of the press, so every window
+             * rewrites by the new text at once even while one of them still displays the old.
+             */
+            "setImproveInstructions" -> CodexPreferences.improveInstructions = field("text")
+
+            // A command through "!" - the panel's bash mode.
+            "bash" -> hub.catalog.runShellCommand(clientId, sessionId, field("id"), field("command"))
+
+            "stop" -> hub.interrupt(sessionId)
+
+            "kill" -> hub.kill(sessionId)
+
+            // The cross on a chip: we kill one task - a subagent or a background command - while the
+            // turn carries on. No answer of our own is needed: about the task's end the CLI reports
+            // with an ordinary notification.
+            "stopTask" -> hub.stopTask(sessionId, field("taskId"))
+
+            "newSession" -> hub.openSession(
+                id = sessionId,
+                // A branch inherits the transcript of the conversation it was opened from.
+                parentId = if (field("kind") == "branch") field("parentId").ifEmpty { MAIN_SESSION } else null,
+                title = field("title"),
+                quote = field("quote"),
+                // Chosen in the request rather than taken from the settings - which is what a client
+                // with no selectors of its own has to do (see SessionLaunch). The panel sends none of
+                // these and behaves exactly as it did.
+                launch = SessionLaunch(
+                    model = field("model"),
+                    effort = field("effort"),
+                    mode = PermissionModes.normalize(field("mode")).takeIf { it in PermissionModes.KNOWN }.orEmpty(),
+                ),
+            )
+
+            "closeSession" -> hub.closeSession(sessionId)
+
+            /**
+             * The name the interface guessed from the first message. It is worked out there rather than
+             * here on purpose: the rule already exists in the interface, both clients have to use the
+             * same one, and a copy of it in another language would drift.
+             */
+            "renameSession" -> hub.renameSession(sessionId, field("title"))
+
+            "reorderGroups" -> hub.reorderGroups(field("groupId"), field("beforeGroupId").ifEmpty { null })
+
+            "reorderTabs" -> hub.reorderTabs(sessionId, field("beforeSessionId").ifEmpty { null })
+
+            // "Always" from a distance is served as a "once": it would otherwise write a permanent rule
+            // into this machine's settings, which is a different act from unblocking one step.
+            "permissionDecision" -> hub.permissions.decide(
+                field("id"),
+                if (local) field("decision") else RemoteCommands.soften(type, field("decision")),
+            )
+
+            "planDecision" -> hub.permissions.decidePlan(
+                sessionId,
+                itemId = field("id"),
+                decision = field("decision"),
+                message = field("message"),
+            )
+
+            "askAnswer" -> hub.permissions.answerAsk(
+                sessionId,
+                itemId = field("id"),
+                answers = payload["answers"]?.jsonObject ?: JsonObject(emptyMap()),
+                fallbackText = field("text"),
+            )
+
+            "askDismiss" -> hub.permissions.dismissAsk(field("id"))
+
+            "setMode" -> hub.changeMode(sessionId, field("mode"))
+
+            /**
+             * What new tabs start in - the only thing that writes the saved mode. Deliberately apart
+             * from "setMode": that one answers "how do I work in this tab right now", and a person who
+             * wants one tab out of ten in plan mode is not saying anything about the other nine.
+             *
+             * No conversation is touched here, not even the open one: changing the default is a
+             * decision about the future, and reaching into a running turn to apply it would be the very
+             * surprise this separation exists to remove.
+             */
+            "setDefaultMode" -> {
+                CodexPreferences.mode = PermissionModes.normalize(field("mode"))
+                announceNewTabDefaults()
+            }
+
+            /*
+             * And what a new tab starts ON, beside what it starts IN - the other two thirds of the same
+             * screen (see CodexPreferences.newTabModel).
+             *
+             * An empty value is the value here rather than a missing one: it means "whatever was last
+             * chosen", which is what the panel did before the setting existed and what the first entry of
+             * each list sets. So there is nothing to guard an empty string against - the guarding is over
+             * the SHAPE of the name, and it lives where the setting is stored, because what is on disk
+             * was written by an earlier version of this screen.
+             */
+            "setDefaultModel" -> {
+                CodexPreferences.newTabModel = field("model")
+                announceNewTabDefaults()
+            }
+
+            "setDefaultEffort" -> {
+                CodexPreferences.newTabEffort = field("effort")
+                announceNewTabDefaults()
+            }
+
+            /*
+             * The model and the effort of this conversation.
+             *
+             * `remember` is what separates the two doors, and it is the whole reason a phone may send
+             * these at all. At the desk each of them is two decisions in one press: this conversation
+             * changes, and the next tab opened here starts on the choice. From a sofa only the first of
+             * those is anybody's business - the second would settle the shape of work somebody may be
+             * about to begin at the keyboard, which is exactly what `setDefaultMode` is refused for.
+             *
+             * Another model's context window has a size of its own, so we ask for it again without
+             * waiting for the next turn to end.
+             */
+            "setModel" -> hub.changeModel(sessionId, field("model"), remember = local)
+
+            "setEffort" -> hub.changeEffort(sessionId, field("effort"), remember = local)
+
+            /*
+             * The accounts screen, bar the two halves that end in a terminal on that machine (see
+             * CodexPanel, which keeps `accountAdd` and `accountCancel`).
+             *
+             * Here rather than at the window's door because a phone drives this screen now, and because
+             * of where the desk lives: it belongs to the hub, so a project a phone attached to without
+             * anybody opening a tool window in it can still answer about accounts (see
+             * CodexSessionHub.accounts).
+             */
+            "accountList" -> hub.accounts.sendList()
+
+            "accountUse" -> hub.accounts.use(field("id"))
+
+            "accountForget" -> hub.accounts.forget(field("id"))
+
+            "accountLogout" -> hub.accounts.logout(field("id"))
+
+            "accountRename" -> hub.accounts.rename(field("id"), field("alias"))
+
+            "refreshUsage" -> hub.usage.refreshAll()
+
+            /**
+             * Remote access, turned on and off by hand. The connection follows immediately rather than
+             * at the next start: a person who has just switched it on is looking at the screen.
+             */
+            "setRemoteEnabled" -> {
+                CodexPreferences.remoteEnabled = payload["enabled"]?.jsonPrimitive?.booleanOrNull == true
+                RemoteAgent.getInstance().refresh()
+                hub.broadcastRemoteState()
+            }
+
+            /**
+             * Pairing, from the panel and only from the panel. A device asking to start one would be a
+             * device asking to be trusted, which is the one question it cannot be allowed to answer.
+             */
+            "startPairing" -> {
+                RemoteAgent.getInstance().offerPairing()
+                hub.broadcastRemoteState()
+            }
+
+            "cancelPairing" -> {
+                RemoteAgent.getInstance().cancelPairing()
+                hub.broadcastRemoteState()
+            }
+
+            "approvePairing" -> RemoteAgent.getInstance().approvePairing()
+
+            "refusePairing" -> RemoteAgent.getInstance().refusePairing()
+
+            "revokeDevice" -> RemoteAgent.getInstance().revoke(field("deviceId"))
+
+            "revokeAllDevices" -> RemoteAgent.getInstance().revokeAll()
+
+            "setRelayUrl" -> {
+                CodexPreferences.remoteRelayUrl = field("url")
+                // The address changed under a live connection: it has to be dropped and raised again,
+                // or the switch would appear to do nothing until the next restart.
+                RemoteAgent.getInstance().stop()
+                RemoteAgent.getInstance().refresh()
+                hub.broadcastRemoteState()
+            }
+
+            "login" -> hub.auth.login()
+
+            "logout" -> hub.auth.logout()
+
+            "checkAuth" -> hub.auth.check()
+
+            "history" -> hub.catalog.sendHistory(clientId)
+
+            /**
+             * The search over this project's conversations (see SearchDesk). Answered to whoever asked,
+             * like the history: what somebody is looking for is theirs alone. The tab's identifier names
+             * the conversation a "this chat" search is scoped to - the client knows the tab, this side
+             * knows what conversation it holds.
+             */
+            "search" -> hub.search.find(
+                clientId,
+                asker,
+                id = field("id"),
+                sessionId = sessionId,
+                scope = field("scope"),
+                query = field("query"),
+                // The field's two switches, off unless the client says so (see TextIndex.search).
+                matchCase = payload["matchCase"]?.jsonPrimitive?.booleanOrNull == true,
+                wholeWords = payload["wholeWords"]?.jsonPrimitive?.booleanOrNull == true,
+            )
+
+            // The same, described in words to a model rather than typed as words to match (see AiSearch).
+            "searchAi" -> hub.search.ask(clientId, asker, id = field("id"), query = field("query"))
+
+            "searchCancel" -> hub.search.cancel(field("id"))
+
+            /*
+             * The scenarios: the two shelves, the runs, the hours, and the ones that are going (see
+             * ScenarioDesk).
+             *
+             * All of it is open to a paired device now, and the argument is in RemoteCommands: `prompt`
+             * has handed that same person a shell through the agent since the first day, so refusing them
+             * a JSON file under `.claude/` bought nothing but a screen that could watch a round of work go
+             * wrong at three in the morning and do nothing about it.
+             */
+            "scenarios" -> hub.scenarios.sendList()
+
+            // One scenario with every word of it - what an editor away from this machine opens on. The
+            // shelves travel with their prose cut out, and this is the road back to it.
+            "scenarioFetch" -> hub.scenarios.sendScenario(clientId, field("id"), field("scope"))
+
+            "scenarioSave" -> hub.scenarios.save(clientId, payload)
+
+            "scenarioDelete" -> hub.scenarios.delete(clientId, field("id"), field("scope"))
+
+            "scenarioDuplicate" -> hub.scenarios.duplicate(clientId, field("id"), field("scope"))
+
+            // A model writes one out of a sentence, and the answer goes to whoever asked rather than to
+            // the project: nothing has been saved yet (see ScenarioDesk.draft).
+            "scenarioDraft" -> hub.scenarios.draft(clientId, field("id"), field("description"))
+
+            "scenarioDraftCancel" -> hub.scenarios.cancelDraft(field("id"))
+
+            "scenarioRun" -> hub.scenarios.start(clientId, field("id"), field("scope"), values(payload["inputs"]))
+
+            /*
+             * The queue: rounds of work taken one at a time over one working copy (see ScenarioQueue).
+             *
+             * `afterSuccess` is read as "anything but an explicit false", so an older client that does not
+             * send the field at all gets the careful half of the choice: a turn that waits for the one
+             * before it to have finished well. Read the other way round, a page one version behind would
+             * quietly turn a whole queue into "start regardless", which is the version of this feature
+             * nobody asked for.
+             */
+            "scenarioQueue" -> hub.scenarios.enqueue(
+                clientId,
+                id = field("id"),
+                scope = field("scope"),
+                inputs = values(payload["inputs"]),
+                afterSuccess = payload["afterSuccess"]?.jsonPrimitive?.booleanOrNull != false,
+            )
+
+            "scenarioQueueRemove" -> hub.scenarios.dequeue(clientId, field("entryId"))
+
+            // One step at a time, and by identifier: two windows and a phone draw this list, and an index
+            // is a place in whatever the sender last saw (see QueueRules.move).
+            "scenarioQueueMove" -> hub.scenarios.moveQueued(clientId, field("entryId"), by = number(payload["by"]))
+
+            "scenarioQueueMode" -> hub.scenarios.queueMode(
+                clientId,
+                entryId = field("entryId"),
+                afterSuccess = payload["afterSuccess"]?.jsonPrimitive?.booleanOrNull != false,
+            )
+
+            // The two answers to a queue that has stopped: carry on from here, or drop what is left.
+            "scenarioQueueGoOn" -> hub.scenarios.letGoQueue(clientId)
+
+            "scenarioQueueClear" -> hub.scenarios.clearQueue(clientId)
+
+            /*
+             * A scheduled run, and taking one back (see ScenarioSchedule).
+             *
+             * Two identifiers, named apart on purpose. A scenario may have as many arrangements as
+             * somebody wants, so the scenario has to be named to check what is being scheduled against,
+             * and the arrangement has to be named to say which of them is being changed. Both are read off
+             * the wire BY NAME, and a missing name reads as an empty string - so one of them called `id`
+             * would compile perfectly while quietly editing the wrong thing.
+             */
+            "scenarioSchedule" -> hub.scenarios.schedule(
+                clientId,
+                scenarioId = field("scenarioId"),
+                scope = field("scope"),
+                scheduleId = field("scheduleId"),
+                at = number(payload["at"]),
+                repeat = field("repeat"),
+                weekday = number(payload["weekday"]),
+                inputs = values(payload["inputs"]),
+            )
+
+            "scenarioUnschedule" -> hub.scenarios.unschedule(clientId, field("scheduleId"))
+
+            "scenarioPause" -> hub.scenarios.pause(field("runId"))
+
+            "scenarioResume" -> hub.scenarios.resume(field("runId"))
+
+            "scenarioContinue" -> hub.scenarios.carryOn(clientId, field("runId"))
+
+            "scenarioStop" -> hub.scenarios.stop(field("runId"))
+
+            "scenarioAnswer" -> hub.scenarios.answer(
+                field("runId"),
+                allow = payload["allow"]?.jsonPrimitive?.booleanOrNull != false,
+                text = field("text"),
+            )
+
+            "scenarioOpen" -> hub.scenarios.sendRun(clientId, field("runId"))
+
+            "scenarioRunDelete" -> hub.scenarios.deleteRun(clientId, field("runId"))
+
+            // What one step of a run said, read off the conversation it said it in - see ScenarioDesk.
+            "scenarioLog" -> hub.scenarios.sendLog(
+                clientId,
+                runId = field("runId"),
+                key = field("key"),
+                conversationId = field("conversationId"),
+                before = field("before").ifEmpty { null },
+            )
+
+            /*
+             * A phone asking to dictate (see VoiceGrant).
+             *
+             * Handled here rather than by the panel's window, unlike every other voice message: this is
+             * the one of them a remote client may send, and the panel's own door is deliberately shut to
+             * remote clients altogether (see CodexPanel). What travels back is a token that expires in a
+             * minute, never the key.
+             */
+            "voiceToken" -> VoiceGrant.send(field("id")) { answer ->
+                hub.emitTo(clientId, answer.toString(), asker)
+            }
+
+            // What one agent of a workflow said, read off its own transcript when its line is
+            // unfolded - see WorkflowAgents.
+            "agentTranscript" -> hub.catalog.sendAgentTranscript(clientId, sessionId, field("agentId"))
+
+            // A page further back than what the journal's own catch-up handed over - see
+            // CodexHistory.page. "before" absent asks for the transcript's own last page.
+            "historyPage" -> hub.catalog.sendHistoryPage(clientId, sessionId, field("before").ifEmpty { null })
+
+            // The name comes along with the request: the tab is about to lose the one it wears, and only
+            // whoever chose the conversation knows what it is called (see CodexSessionHub.resumeConversation).
+            "resumeSession" -> hub.resumeConversation(
+                sessionId = sessionId,
+                conversationId = field("conversationId"),
+                title = field("title"),
+                titleSource = if (field("titleSource") == SessionSnapshot.TITLE_LLM) {
+                    SessionSnapshot.TITLE_LLM
+                } else {
+                    SessionSnapshot.TITLE_HEURISTIC
+                },
+                // Which conversation this is cannot be worked out from the identifier - see the note on
+                // the parameter itself.
+                wasScenarioHead = payload["wasScenarioHead"]?.jsonPrimitive?.booleanOrNull == true,
+            )
+
+            // The automatic search missed - the person pointed at the file themselves.
+            "setExecutablePath" -> {
+                CodexPreferences.executablePath = field("path").trim()
+                hub.auth.check()
+            }
+
+            // `ifRunning` is the panel's head start on the way in: answer only where a process is already
+            // up, because raising one costs the agent plus a copy of every MCP server (see
+            // CodexSessions.mcpStatus). Absent means the ordinary ask - somebody opened the screen.
+            "mcpList" -> hub.catalog.refreshMcp(
+                sessionId,
+                ifRunning = payload["ifRunning"]?.jsonPrimitive?.booleanOrNull == true,
+            )
+
+            "mcpAdd" -> hub.catalog.addMcp(
+                sessionId,
+                name = field("name"),
+                command = field("command"),
+                transport = field("transport").ifBlank { null },
+            )
+
+            "mcpReconnect" -> hub.catalog.reconnectMcp(sessionId, field("name"))
+
+            // Who asked travels with it: a sign-in that has to end in a browser on this machine is opened
+            // here for the panel and refused for a phone, while one that ends on claude.ai is handed to
+            // whoever asked as an address (see ProjectCatalog.authenticateMcp).
+            "mcpAuthenticate" -> hub.catalog.authenticateMcp(sessionId, field("name"), clientId, asker)
+
+            "mcpRemove" -> hub.catalog.removeMcp(sessionId, field("name"))
+
+            "pluginList" -> hub.catalog.listPlugins()
+
+            "pluginInstall" -> hub.catalog.pluginAction(field("plugin"), CodexPlugin::install)
+
+            "pluginUninstall" -> hub.catalog.pluginAction(field("plugin"), CodexPlugin::uninstall)
+
+            "pluginEnable" -> hub.catalog.pluginAction(field("plugin"), CodexPlugin::enable)
+
+            "pluginDisable" -> hub.catalog.pluginAction(field("plugin"), CodexPlugin::disable)
+
+            "marketplaceList" -> hub.catalog.listMarketplaces()
+
+            "marketplaceAdd" -> hub.catalog.marketplaceAction(field("source"), CodexPlugin::addMarketplace)
+
+            "marketplaceRemove" -> hub.catalog.marketplaceAction(field("name"), CodexPlugin::removeMarketplace)
+
+            else -> return false
+        }
+
+        return true
+    }
+
+    /**
+     * What a new tab starts with, told to every window of every project.
+     *
+     * To all of them rather than to whoever asked, exactly like the colour mode and the hand-added
+     * models (see setCustomModels in CodexPanel): the setting belongs to the machine, and a second
+     * window still drawing an empty tab with yesterday's model is a window showing something that is no
+     * longer true. The permission mode goes along with the other two because it is answered per project
+     * - Claude Code's own default is read from the settings that apply in that directory (see
+     * PermissionDefaultMode) - so each catalogue has to say it for itself.
+     */
+    private fun announceNewTabDefaults() {
+        CodexSessionHub.everyHub {
+            it.catalog.sendNewTabDefaults()
+            // And the phone, which learns this from its inventory rather than from a project fact: it
+            // names the model in the request that opens a conversation, so a stale one there would walk
+            // straight past a model just pinned here.
+            it.inventoryChanged()
+        }
+    }
+
+    /**
+     * The parts of the message the feed draws it from, taken out of the request as they are. We do not
+     * look inside: it is the interface that knows what a chip or a quote is, and a copy of that
+     * knowledge here would be a second thing to keep in step with it.
+     */
+    private fun echo(payload: JsonObject): JsonObject? {
+        val fields = ECHOED.mapNotNull { name -> payload[name]?.let { name to it } }
+        return if (fields.isEmpty()) null else JsonObject(fields.toMap())
+    }
+
+    /** What the client says it already has, by conversation - see CodexSessionHub.attach. */
+    private fun seen(payload: JsonObject): Map<String, Long> =
+        payload["since"]?.jsonObject.orEmpty()
+            .mapNotNull { (sessionId, value) -> value.jsonPrimitive.longOrNull?.let { sessionId to it } }
+            .toMap()
+
+    /** The answers to a scenario's inputs: a flat object of name to what was typed (see ScenarioDesk). */
+    private fun values(element: JsonElement?): Map<String, String> =
+        (element as? JsonObject).orEmpty()
+            .mapNotNull { (name, value) -> value.jsonPrimitive.contentOrNull?.let { name to it } }
+            .toMap()
+
+    /**
+     * A whole number out of the request - an hour of the day, a day of the week (see ScenarioSchedule).
+     *
+     * Zero for anything that is not one: what a number means is decided where it is used, and every user
+     * of this clamps its own range. A page can say anything.
+     */
+    private fun number(element: JsonElement?): Int =
+        (element as? JsonPrimitive)?.let { it.intOrNull ?: it.contentOrNull?.toIntOrNull() } ?: 0
+
+    /** A plain list of strings out of the request - the markers' legend, for one (see improvePrompt). */
+    private fun strings(payload: JsonObject, name: String): List<String> =
+        payload[name]?.jsonArray.orEmpty().mapNotNull { it.jsonPrimitive.contentOrNull }
+
+    private fun images(payload: JsonObject): List<ImageAttachment> =
+        payload["images"]?.jsonArray.orEmpty().mapNotNull { element ->
+            val image = element as? JsonObject ?: return@mapNotNull null
+            val mediaType = image["mediaType"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+            val data = image["data"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+            ImageAttachment(mediaType, data)
+        }
+
+    private companion object {
+        /** What a message's echo carries besides its text - see [echo]. */
+        val ECHOED = listOf("id", "tokens", "quotes", "steering")
+    }
+}

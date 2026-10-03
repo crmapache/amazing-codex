@@ -1,0 +1,25 @@
+/* The same width as the IDE editor's own native scrollbar (see base.css) - beside it ours must not look
+   like a toy or hide away entirely. */
+.thumb {
+  position: absolute;
+  right: 0;
+  width: 12px;
+  border-radius: var(--acc-r-lg);
+  background: var(--acc-line-strong);
+  background-clip: content-box;
+  border: 2px solid transparent;
+  opacity: 0.7;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+@media (hover: hover) {
+  .thumb:hover {
+    background: var(--acc-line-hover);
+    opacity: 1;
+  }
+}
+
+.thumbDragging {
+  background: var(--acc-line-hover);
+  opacity: 1;
+}

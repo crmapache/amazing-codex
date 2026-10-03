@@ -1,0 +1,2053 @@
+/*
+ * The menu behind the burger: one panel down the right-hand edge, with a screen of its own behind every
+ * entry.
+ *
+ * It used to be a dropdown that opened five different overlays, each with a head, a scrim and a width of
+ * its own, each covering the header it was opened from. They shared nothing but the scrim - so remote
+ * access, which has the most to say, got the same cramped popover as a list of six sounds.
+ *
+ * Here there is one surface. The root list stays where it was, a chosen entry slides its screen over it,
+ * and the head keeps the way back. What each screen holds is its own business; the frame is this file.
+ */
+
+.scrim {
+  position: absolute;
+  /* The whole panel, header included: the menu covers the tabs it was opened above rather than squeezing
+     itself under them. Nothing behind it is clickable while it is open - that is what the scrim is for. */
+  inset: 0;
+  z-index: 40;
+  background: rgb(var(--acc-ch-shade) / 55%);
+  transition: opacity 0.22s ease;
+}
+
+.scrimOpen {
+  opacity: 1;
+}
+
+/* Closed it is not merely invisible: a transparent sheet over the whole panel would swallow every click
+   on the feed. */
+.scrimShut {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.sheet {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 41;
+  display: flex;
+  flex-direction: column;
+  /* In the IDE the tool window is often narrower than the menu - then it takes what there is rather than
+     hanging off the edge. */
+  width: min(350px, 100%);
+  background: var(--acc-bg-panel);
+  border-left: 1px solid var(--acc-line-strong);
+  transition:
+    transform 0.26s cubic-bezier(0.2, 0.8, 0.2, 1),
+    box-shadow 0.26s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* The shadow belongs to the open state rather than to the sheet, and that is not tidiness. Shut, the
+   sheet is parked just past the panel's right edge - but a shadow travels with the thing that casts it,
+   and this one reaches 18px back with 44 more of blur, so it lay across the right edge of the feed all
+   day long, in every panel, including the ones whose menu was never opened. It read as an inner shadow
+   down the side of the conversation and there was nothing on screen it could have been cast by. It fades
+   on the same curve as the slide, so opening still looks like a sheet coming over the panel. */
+.sheetOpen {
+  transform: translateX(0);
+  box-shadow: -18px 0 44px rgb(var(--acc-ch-shade) / 62%);
+}
+
+.sheetShut {
+  transform: translateX(100%);
+  box-shadow: none;
+}
+
+/* --- The head: the way back, where one is, and the way out ------------------ */
+
+.head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 6px 0 8px;
+  border-bottom: 1px solid var(--acc-line);
+}
+
+.headButton {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--acc-r-sm);
+  color: var(--acc-fg-soft);
+}
+
+.headButton:hover,
+.headButton[data-hover] {
+  background: var(--acc-bg-menu-hover);
+  color: var(--acc-fg);
+}
+
+.headClose {
+  color: var(--acc-fg-faint);
+}
+
+.headTitles {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: 3px;
+}
+
+.title {
+  font: 600 9.5px/1 var(--acc-mono);
+  letter-spacing: 0.09em;
+  color: var(--acc-fg-soft);
+}
+
+/* One line, always: a hint that wrapped would push the head's height about as one moved between screens. */
+.hint {
+  font: 10.5px var(--acc-mono);
+  color: var(--acc-fg-ghost);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.headSpace {
+  flex: 1;
+  min-width: 4px;
+}
+
+/* --- The two levels -------------------------------------------------------- */
+
+.stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.level {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  /* The wheel stops at this panel rather than carrying on into the feed underneath it once the list
+     reaches its end. */
+  overscroll-behavior: contain;
+  transition: transform 0.26s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/*
+ * The root does not leave the screen whole - it slides a little way left and stays under the detail.
+ * That is what tells the eye the screen came from here rather than from nowhere, and it is why the way
+ * back is a step rather than a fresh start.
+ */
+/* The top gap used to come from the first group's caption. With the captions gone the list would
+   otherwise start flush against the header. */
+.levelRoot {
+  padding-top: 13px;
+  padding-bottom: 14px;
+}
+
+.levelRootHeld {
+  transform: translateX(-22%);
+  overflow-y: hidden;
+}
+
+.levelRootShown {
+  transform: translateX(0);
+}
+
+/* The detail is opaque: the root is still underneath it, and through a transparent screen the two lists
+   would read as one. */
+.levelDetail {
+  background: var(--acc-bg-panel);
+}
+
+.levelDetailShown {
+  transform: translateX(0);
+}
+
+.levelDetailHidden {
+  transform: translateX(100%);
+  overflow-y: hidden;
+}
+
+/* --- The root list --------------------------------------------------------- */
+
+/* A hair of space between the rows: each lights up as a rounded block of its own, and flush against
+   its neighbour that block reads as a seam rather than as a row. */
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 6px;
+}
+
+/* The break between the list and the advertisement at its foot. It used to be given by the caption
+   standing over the card ("FROM THE AUTHOR"), and the caption is gone: the card has its own border and
+   its own background, so it names itself as something other than a row without a word above it. The gap
+   has to be written here because two .rows in a row leave none - the 2px belongs to the container, not
+   to the seam between two of them. */
+.authorRows {
+  margin-top: 16px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 9px 8px;
+  border-radius: var(--acc-r-lg);
+  text-align: left;
+  transition: background-color 80ms linear;
+}
+
+.row:hover,
+.row[data-hover] {
+  background: var(--acc-bg-menu-hover);
+}
+
+/*
+ * The icon's tint says which of the panel's worlds the screen belongs to - the same colours the feed
+ * already speaks in, rather than a fresh palette for the menu.
+ */
+.rowIcon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--acc-r-xl);
+  background: var(--acc-neutral-12);
+  color: var(--acc-fg-dim);
+}
+
+.rowIconHistory {
+  background: var(--acc-accent-12);
+  color: var(--acc-accent);
+}
+
+/* The statistics wear the mint of "done": they are about what got finished. */
+.rowIconStatistics {
+  background: var(--acc-ok-12);
+  color: var(--acc-ok);
+}
+
+.rowIconMcp {
+  background: var(--acc-branch-12);
+  color: var(--acc-branch);
+}
+
+.rowIconPlugins {
+  background: var(--acc-agent-12);
+  color: var(--acc-agent);
+}
+
+.rowIconSounds {
+  background: var(--acc-warn-12);
+  color: var(--acc-warn);
+}
+
+/* The gauges keep the neutral even when the mode is off: the icon is a picture of an instrument, and an
+   instrument painted red in a list would be the very thing the row exists to take away. */
+.rowIconCalm {
+  background: var(--acc-neutral-12);
+  color: var(--acc-fg-dim);
+}
+
+/* The one row here that leads to a screen of its own rather than to a value takes the accent: what a
+   new tab starts with is the thing on this list people come back to, and the shield below is one of the
+   three answers behind it rather than the whole of it. */
+.rowIconNewChat {
+  background: var(--acc-accent-12);
+  color: var(--acc-accent);
+}
+
+/* The bars share the chip's neutral: the effort is a level, and a colour of its own would read as one of
+   the levels being flagged. */
+.rowIconEffort {
+  background: var(--acc-neutral-12);
+  color: var(--acc-fg-dim);
+}
+
+.rowIconMode {
+  background: rgb(var(--acc-ch-copper) / 12%);
+  color: var(--acc-orange);
+}
+
+.rowIconLayout {
+  background: var(--acc-neutral-12);
+  color: var(--acc-fg-dim);
+}
+
+/* The clipboard shares the layout row's neutral: both are about the shape of the input field rather than
+   about a feature of its own. */
+.rowIconPaste {
+  background: var(--acc-neutral-12);
+  color: var(--acc-fg-dim);
+}
+
+/* The key shares that same neutral: which key sends is about the input field's behaviour, exactly as the
+   two rows above it are. */
+.rowIconSend {
+  background: var(--acc-neutral-12);
+  color: var(--acc-fg-dim);
+}
+
+/* The same rose as the heart in the status row: both entries lead to the same person, and the colour is
+   what says so without a word of explanation. */
+.rowIconImprove {
+  background: var(--acc-agent-12);
+  color: var(--acc-agent-light);
+}
+
+.rowIconFeedback {
+  background: var(--acc-heart-16);
+  color: var(--acc-heart);
+}
+
+/* The gear stands for the whole group that moved behind it, so it takes the neutral of the interface
+   itself rather than borrowing the colour of any one setting inside. */
+.rowIconSettings {
+  background: var(--acc-neutral-12);
+  color: var(--acc-fg-dim);
+}
+
+/* The chip takes the neutral of the interface, like the send key above it: the row is about a list, and
+   a colour of its own would promise that something on it is switched on. */
+.rowIconModels {
+  background: var(--acc-neutral-12);
+  color: var(--acc-fg-dim);
+}
+
+/* The globe wears the same branch blue as the MCP row: both are about reaching somewhere else. */
+.rowIconLanguage {
+  background: var(--acc-branch-12);
+  color: var(--acc-branch);
+}
+
+.rowText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/*
+ * One line each, always - the same rule the head's hint follows, and for the same reason.
+ *
+ * The value on the right is as wide as the state it names, and "Relay unreachable" beside "Remote access"
+ * pushed that row's description onto a second line: a list of rows where one row is taller than the rest
+ * reads as a row that has gone wrong, and it went wrong in exactly the state one is looking at it in. A
+ * narrow tool window did the same thing to "History". What is cut here is a description of what is behind
+ * the row, and the row is still the way to find out.
+ */
+.rowLabel {
+  font: 500 12.5px var(--acc-font);
+  color: var(--acc-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.rowSub {
+  font-size: 11px;
+  color: var(--acc-fg-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* What the screen would say if one opened it - the count of servers, which mode is the default. Saves the
+   trip in the cases where the answer is the whole question. */
+.rowValue {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font: 10.5px var(--acc-mono);
+  color: var(--acc-fg-ghost);
+}
+
+/* Coloured from the component, not from here: the colour is the state, and the states are known there.
+   Two rows raise one - MCP when every server is up, remote access whenever the line has a state at all. */
+/* The same measured pixel as .cardDot, for the same reason: the row centres the dot on the line box,
+   the eye centres it on the letters, and this mono face sits low in its box. Checked against the
+   x-height rather than against one word's ink - "Connected" has no descender and "you" does, and
+   fitting the dot to whichever word happens to be there moves it about between rows. */
+.rowValueDot {
+  position: relative;
+  top: 1px;
+  width: 6px;
+  height: 6px;
+  border-radius: 9px;
+}
+
+.rowChevron {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  color: var(--acc-fg-ghost);
+}
+
+/* --- The author's card: the one advertisement in the panel ------------------ */
+
+/* Not a row and deliberately not shaped like one. Every other entry in this list leads somewhere inside
+   the panel, and a promotion wearing the same clothes as "History" would be a promotion pretending to be
+   part of the plugin. This one is a card that says its piece and offers one way out - to the browser. */
+.author {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 11px 10px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-2xl);
+  background: var(--acc-bg-card);
+}
+
+.authorWords {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.authorBody {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--acc-fg-faint);
+  /* Three lines of thanks in a 350px sheet break where the wrapping happens to fall - a last line of one
+     word reads as a mistake in a card whose whole job is to sound like a person. */
+  text-wrap: pretty;
+}
+
+/* Inline with the last word rather than on a line of its own: it ends the sentence, it is not a mark
+   beside it. Rose at three quarters - a full-strength heart in this palette is the colour of an error. */
+.authorHeart {
+  display: inline-block;
+  vertical-align: -3px;
+  margin-left: 6px;
+  width: 13px;
+  height: 13px;
+  color: rgb(var(--acc-ch-rose) / 75%);
+}
+
+.authorSite {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 5px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-xl);
+  background: var(--acc-bg-raised);
+  text-align: left;
+  transition:
+    border-color 80ms linear,
+    background-color 80ms linear;
+}
+
+.authorSite:hover,
+.authorSite[data-hover] {
+  border-color: var(--acc-warn-40);
+  background: var(--acc-bg-card);
+}
+
+/* A fixed height with the picture cropped into it, not a picture left to set the height itself: the file
+   is a wide banner, and letting it keep its own proportions would hand a third of the menu's last screen
+   to an advertisement. */
+.authorShot {
+  display: block;
+  width: 100%;
+  height: 88px;
+  border-radius: var(--acc-r-sm);
+  object-fit: cover;
+  object-position: center 40%;
+}
+
+.authorFoot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px 3px 3px;
+}
+
+.authorNames {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.authorName {
+  font: 500 12px var(--acc-font);
+  color: var(--acc-fg);
+}
+
+.authorTagline {
+  font: 10px var(--acc-mono);
+  color: var(--acc-fg-ghost);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The arrow out of the panel, in the same sand the rest of the card warms to on hover: it is the whole
+   notice that this one press leaves the IDE. */
+.authorArrow {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  color: var(--acc-warn);
+}
+
+.footer {
+  margin: 16px 12px 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--acc-line);
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font: 10.5px var(--acc-mono);
+  color: var(--acc-fg-ghost);
+}
+
+.footerVersion {
+  color: var(--acc-line-strong);
+}
+
+/* --- What a screen is made of ---------------------------------------------- */
+
+.screen {
+  padding: 12px 12px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* A list-shaped screen keeps its own padding: rows run edge to edge and are told apart by their own
+   fill - kept off each other by the same hair as the root list, so that a ticked row and the one under
+   the cursor do not merge into a single two-tone block. */
+.screenList {
+  padding: 6px 6px 20px;
+  gap: 2px;
+}
+
+.screenLabel {
+  font: 600 9px/1 var(--acc-mono);
+  letter-spacing: 0.09em;
+  color: var(--acc-fg-faint);
+}
+
+.screenNote {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--acc-fg-faint);
+  text-wrap: pretty;
+}
+
+/* A note standing above a list-shaped screen: the list runs edge to edge, a paragraph must not. */
+.choiceNote {
+  padding: 6px 8px 10px;
+}
+
+.screenEmpty {
+  padding: 18px 12px;
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--acc-fg-ghost);
+}
+
+.screenGroup {
+  padding: 9px 6px 4px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.screenGroupHint {
+  font: 10px var(--acc-mono);
+  color: var(--acc-fg-ghost);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/*
+ * The instructions the improve button asks by (see ImprovePrompt.tsx). Mono, like the relay address above
+ * and unlike the feedback message: this is a text a model reads, and it is written with the care one gives
+ * a configuration rather than the ease one gives a sentence.
+ *
+ * A fixed window with a scroll rather than a box that grows: the built-in text alone is a screenful, and a
+ * field that grew to fit it would push the buttons under it off the bottom of the panel.
+ */
+.instructions {
+  width: 100%;
+  height: 300px;
+  padding: 8px 9px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-sm);
+  background: var(--acc-bg-raised);
+  color: var(--acc-fg);
+  font: 11.5px/1.55 var(--acc-mono);
+  resize: vertical;
+}
+
+.instructions:focus-visible {
+  outline: none;
+  border-color: var(--acc-accent-40);
+}
+
+.instructions::placeholder {
+  color: var(--acc-fg-faint);
+}
+
+/* A line that reports how an action went - the same place on every screen, right under the head. */
+.message {
+  padding: 7px 9px;
+  border-radius: var(--acc-r-lg);
+  font-size: 11px;
+  line-height: 1.45;
+  text-wrap: pretty;
+}
+
+.messageOk {
+  background: var(--acc-ok-12);
+  color: var(--acc-ok-text);
+}
+
+.messageBad {
+  background: var(--acc-bad-12);
+  color: var(--acc-bad-text);
+}
+
+/* --- History ---------------------------------------------------------------- */
+
+.historyRow {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 8px;
+  border-radius: var(--acc-r-lg);
+  text-align: left;
+  transition: background-color 80ms linear;
+}
+
+.historyRow:hover,
+.historyRow[data-hover] {
+  background: var(--acc-bg-menu-hover);
+}
+
+.historyTitle {
+  font: 500 12.5px var(--acc-font);
+  color: var(--acc-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.historyMeta {
+  font: 10.5px var(--acc-mono);
+  color: var(--acc-fg-ghost);
+}
+
+/* --- A card with a name, a state and buttons: MCP servers, plugins, devices -- */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-2xl);
+  background: var(--acc-bg-card);
+}
+
+.cardWarn {
+  border-color: var(--acc-warn-32);
+  background: var(--acc-warn-06);
+}
+
+.cardTop {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Nudged a pixel down, and the pixel is measured rather than guessed.
+   The row centres the dot on the line BOX, which is what CSS can see; the eye centres it on the letters.
+   JetBrains Mono has an ascent of 13 against a descent of 4, so at 12.5px the text sits low in its box
+   and its ink centre lands exactly 1px below the box centre - which is where the dot has to be, or it
+   reads as floating above the name. `top` rather than a margin: a margin is shared out by the centring
+   and would move it half as far. */
+.cardDot {
+  position: relative;
+  top: 1px;
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 9px;
+  background: var(--acc-fg-ghost);
+}
+
+.cardDotOn {
+  background: var(--acc-ok);
+}
+
+.cardDotWarn {
+  background: var(--acc-warn);
+}
+
+.cardDotBad {
+  background: var(--acc-bad);
+}
+
+.cardName {
+  min-width: 0;
+  font: 12.5px var(--acc-mono);
+  color: var(--acc-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cardState {
+  font: 10.5px var(--acc-mono);
+  color: var(--acc-fg-ghost);
+}
+
+.cardStateOk {
+  color: var(--acc-ok);
+}
+
+.cardStateWarn {
+  color: var(--acc-warn);
+}
+
+.cardStateBad {
+  color: var(--acc-bad);
+}
+
+.cardMeta {
+  flex: none;
+  margin-left: auto;
+  font: 10.5px var(--acc-mono);
+  color: var(--acc-fg-ghost);
+  white-space: nowrap;
+}
+
+.cardCommand {
+  font: 11px var(--acc-mono);
+  color: var(--acc-fg-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cardError {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--acc-bad-text);
+  text-wrap: pretty;
+}
+
+.cardActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+/* --- Buttons --------------------------------------------------------------- */
+
+.button {
+  padding: 4px 10px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-md);
+  background: var(--acc-bg-control);
+  font: 11px var(--acc-font);
+  color: var(--acc-fg-body);
+  transition: background-color 80ms linear, border-color 80ms linear, color 80ms linear;
+}
+
+.button:hover:not(:disabled),
+.button[data-hover]:not(:disabled) {
+  border-color: var(--acc-line-hover);
+  background: var(--acc-bg-hover);
+  color: var(--acc-fg);
+}
+
+.button:disabled {
+  opacity: 0.5;
+}
+
+.buttonPrimary {
+  border-color: transparent;
+  background: var(--acc-accent);
+  color: var(--acc-on-accent);
+  font-weight: 500;
+}
+
+.buttonPrimary:hover:not(:disabled),
+.buttonPrimary[data-hover]:not(:disabled) {
+  border-color: transparent;
+  background: var(--acc-accent-hover);
+  color: var(--acc-on-accent);
+}
+
+/* Red standing, not only under the cursor.
+   Every other danger button in the panel - Forget, Remove, Revoke - reaches no further than this
+   machine, and wears its colour on hover like the rest of the system. Logging out is the one that goes
+   past it: it revokes the credential on Anthropic's side, so the person is signed out everywhere. A
+   button that only admits to that when the mouse is already on it admits it too late. */
+.buttonDangerStrong:not(:disabled) {
+  border-color: var(--acc-bad-32);
+  background: var(--acc-bad-10);
+  color: var(--acc-bad-text);
+}
+
+.buttonDangerStrong:hover:not(:disabled),
+.buttonDangerStrong[data-hover]:not(:disabled),
+.buttonDanger:hover:not(:disabled),
+.buttonDanger[data-hover]:not(:disabled) {
+  border-color: var(--acc-bad-40);
+  background: var(--acc-bad-16);
+  color: var(--acc-bad-text);
+}
+
+.buttonWide {
+  align-self: flex-start;
+}
+
+/* A form's own button: at the right-hand edge, under the end of the field it submits. */
+.buttonEnd {
+  align-self: flex-end;
+}
+
+/* A form's row of buttons: the one that submits it last, at the right-hand edge. */
+.formActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+/* --- Tabs inside a screen (plugins: installed / browse / markets) ----------- */
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border-radius: var(--acc-r-xl);
+  background: var(--acc-bg-deep);
+}
+
+.tab {
+  flex: 1;
+  padding: 5px 6px;
+  border-radius: var(--acc-r-md);
+  font: 11px var(--acc-font);
+  color: var(--acc-fg-faint);
+}
+
+.tab:hover,
+.tab[data-hover] {
+  color: var(--acc-fg-body);
+}
+
+.tabOn {
+  background: var(--acc-bg-control);
+  color: var(--acc-fg);
+}
+
+/* --- Fields ---------------------------------------------------------------- */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.input {
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-sm);
+  background: var(--acc-bg-raised);
+  color: var(--acc-fg);
+  font: 12px var(--acc-mono);
+}
+
+.input:focus-visible {
+  outline: none;
+  border-color: var(--acc-accent-40);
+}
+
+.inputRow {
+  display: flex;
+  gap: 6px;
+}
+
+/*
+ * The message field of the feedback screen (see Feedback.tsx). Borrowed from .input in everything but the
+ * font and the shape: the address above it is a machine's string and reads better in mono, while this one
+ * is a person writing sentences and reads better in the interface font.
+ *
+ * No resize handle and no inner scrollbar: the field grows to whatever is typed (see Grower), and a box
+ * that both grows by itself and offers to be dragged gives two answers to the same question.
+ */
+.textarea {
+  width: 100%;
+  min-height: 76px;
+  max-height: 320px;
+  padding: 8px 9px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-sm);
+  background: var(--acc-bg-raised);
+  color: var(--acc-fg);
+  font: var(--acc-fs-body) / 1.5 var(--acc-font);
+  resize: none;
+  overflow-y: auto;
+}
+
+.textarea:focus-visible {
+  outline: none;
+  border-color: var(--acc-accent-40);
+}
+
+.textarea::placeholder {
+  color: var(--acc-fg-ghost);
+}
+
+/* The conversation the report will describe, beside the switch's own label: dimmer than the label and in
+   the mono font, so it reads as a name being quoted rather than as more of the sentence. */
+.switchTab {
+  font: var(--acc-fs-meta) var(--acc-mono);
+  color: var(--acc-fg-faint);
+}
+
+/* Something to hang a hint on over a control that cannot report being hovered - a disabled button fires
+   no pointer events, so the tooltip has to live on a box around it (see Feedback). inline-flex rather than
+   display:contents: a box with no geometry of its own receives no pointer events either. */
+.tooltipHost {
+  display: inline-flex;
+}
+
+/* --- Attachments on the feedback screen ------------------------------------ */
+
+/* A row rather than a .card: a file here is a name and a size, and a card's padding around two words
+   turns a list of five into a screenful. */
+.attachRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px 5px 9px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-sm);
+  background: var(--acc-bg-raised);
+}
+
+.attachName {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--acc-fg-body);
+  /* The cut itself is made in TypeScript, in the middle of the name (see shortName): CSS can only take
+     the end off, and the end of a file name is the part one is checking. */
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.attachSize {
+  flex: none;
+  font: 10px var(--acc-mono);
+  color: var(--acc-fg-ghost);
+}
+
+.attachDrop {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--acc-r-xs);
+  font-size: 13px;
+  line-height: 1;
+  color: var(--acc-fg-faint);
+  transition: background-color 80ms linear, color 80ms linear;
+}
+
+.attachDrop:hover,
+.attachDrop[data-hover] {
+  background: var(--acc-bad-12);
+  color: var(--acc-bad-text);
+}
+
+.attachNote {
+  color: var(--acc-warn);
+}
+
+.attachFoot {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.attachTotal {
+  font: 10px var(--acc-mono);
+  color: var(--acc-fg-ghost);
+}
+
+.attachTotalBad {
+  color: var(--acc-bad-text);
+}
+
+/* A line that opens a further screen and looks like the sentence it is - a button here would compete with
+   the one that sends the whole form. */
+.linkRow {
+  align-self: flex-start;
+  padding: 0;
+  font-size: 11px;
+  color: var(--acc-accent-light);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.linkRow:hover,
+.linkRow[data-hover] {
+  color: var(--acc-accent-hover);
+}
+
+/* The debug report, as text. Wrapped rather than scrolled sideways: a line that runs off the right edge of
+   a 350px panel is a line nobody checked. */
+.logText {
+  margin: 0;
+  padding: 9px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-sm);
+  background: var(--acc-bg-deep);
+  font: var(--acc-fs-mono) / 1.5 var(--acc-mono);
+  color: var(--acc-fg-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* --- The no-stress colour mode ---------------------------------------------
+   A sample of the ladder: one gauge per step, drawn by the very component the status row uses (see
+   CalmColors.tsx). It sits above the switch rather than below it - the row is read as an answer to what
+   is shown, and a sample under a switch is a sample nobody looks at before pressing. */
+.calmSample {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-2xl);
+  background: var(--acc-bg-card);
+}
+
+/* Two classes rather than one, and not out of habit: this cancels a rule in another module
+   (.contextMeterRow in composer.module.css), and a single class would be settling the matter by
+   whichever file the bundler happened to write last. */
+.calmSample .calmBarRow {
+  padding: 0;
+  /* The ticks at the fifths do not paint themselves - they cut through whatever is under the bar, and
+     over the field that is the field's own fill (see --acc-field-bg in composer.module.css). Unnamed
+     here, they would come out invisible and the sample would show a bar the panel never draws. */
+  --acc-field-bg: var(--acc-bg-card);
+}
+
+/* Spread across the card rather than pressed into a row: four rings shoulder to shoulder read as one
+   control, and what is being compared here is the paint of each. */
+.calmLadder {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.calmStep {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* The slider and what it is called, in the card the switch used to stand in. A plain box rather than
+   .switchRow: that one is a button - it is pressed as a whole - and here the thing that is dragged is
+   the slider itself, so the row around it must not answer to a press. */
+.calmControl {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-2xl);
+  background: var(--acc-bg-card);
+}
+
+.calmControlHead {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+}
+
+/* The same figure the status row writes beside its own rings, and set the same way: tabular, so the
+   four steps stand in one rhythm however wide their digits are. */
+.calmStepValue {
+  font: var(--acc-fs-meta) / 1 var(--acc-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- A switch -------------------------------------------------------------- */
+
+.switchRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-2xl);
+  background: var(--acc-bg-card);
+  text-align: left;
+}
+
+.switchRow:hover,
+.switchRow[data-hover] {
+  border-color: var(--acc-line-hover);
+}
+
+.switchText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.switchLabel {
+  font: 500 12.5px var(--acc-font);
+  color: var(--acc-fg);
+}
+
+.switchHint {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--acc-fg-faint);
+}
+
+.switchTrack {
+  flex: none;
+  position: relative;
+  width: 34px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--acc-line-strong);
+  transition: background 0.18s ease;
+}
+
+.switchTrackOn {
+  background: var(--acc-ok);
+}
+
+.switchKnob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--acc-bg-sunken);
+  transition: left 0.18s ease;
+}
+
+.switchKnobOn {
+  left: 17px;
+}
+
+/* The switch on a kind of message the report has nothing to say about: dimmed and unclickable, but still
+   there, because the row carries the promise about what the report contains (see Feedback). */
+.switchRowMoot {
+  opacity: 0.5;
+}
+
+.switchRowMoot:hover,
+.switchRowMoot[data-hover] {
+  border-color: var(--acc-line);
+}
+
+/* --- Remote access --------------------------------------------------------- */
+
+.stateCard {
+  padding: 12px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-2xl);
+  background: var(--acc-bg-card);
+}
+
+.stateTop {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.stateDot {
+  width: 9px;
+  height: 9px;
+  border-radius: 9px;
+  background: currentcolor;
+  box-shadow: 0 0 0 4px var(--acc-neutral-12);
+}
+
+.stateLabel {
+  font: 600 13px var(--acc-font);
+}
+
+.stateAgent {
+  margin-left: auto;
+  font: 10px var(--acc-mono);
+  color: var(--acc-fg-ghost);
+}
+
+.stateHint {
+  margin: 8px 0 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--acc-fg-dim);
+  text-wrap: pretty;
+}
+
+/*
+ * IDE - relay - device, drawn rather than described.
+ *
+ * The relay is the part people ask about, and the drawing answers the question before it is asked: the
+ * conversation does not go to a service somewhere, it goes through one hop that only forwards.
+ */
+.path {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.pathNode {
+  flex: 1;
+  text-align: center;
+  padding: 7px 4px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-lg);
+  background: var(--acc-bg-raised);
+  font: 600 9px var(--acc-mono);
+  letter-spacing: 0.08em;
+  color: var(--acc-fg-faint);
+}
+
+.pathNodeLive {
+  border-color: currentcolor;
+}
+
+.pathLink {
+  flex: none;
+  width: 26px;
+  height: 1px;
+  background: var(--acc-line-strong);
+}
+
+.qr {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.qrCode {
+  flex: none;
+  padding: 8px;
+  border-radius: var(--acc-r-lg);
+  background: #fff;
+}
+
+.qrSide {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.qrUrl {
+  font: 10px var(--acc-mono);
+  color: var(--acc-fg-ghost);
+  overflow-wrap: anywhere;
+}
+
+.device {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-2xl);
+  background: var(--acc-bg-card);
+}
+
+.deviceText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.deviceLabel {
+  font: 500 12px var(--acc-font);
+  color: var(--acc-fg);
+}
+
+.deviceMeta {
+  font: 10.5px var(--acc-mono);
+  color: var(--acc-fg-ghost);
+}
+
+/* A model identifier in the list of the hand-added ones (see CustomModels.tsx). Mono, because it is a
+   machine's string and read character by character; one line with an ellipsis, because a row that grows
+   taller on a long name reads as a different row. */
+.modelName {
+  flex: 1;
+  min-width: 0;
+  font: 12px var(--acc-mono);
+  color: var(--acc-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fingerprint {
+  font: 11px var(--acc-mono);
+  color: var(--acc-fg-mono);
+  letter-spacing: 0.04em;
+}
+
+/* The way into "what travels" - a row rather than a wall of text on the screen one came to switch
+   something on. */
+.aboutLink {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-2xl);
+  background: var(--acc-bg-card);
+  text-align: left;
+}
+
+.aboutLink:hover,
+.aboutLink[data-hover] {
+  border-color: var(--acc-line-hover);
+}
+
+.aboutIcon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  background: var(--acc-neutral-12);
+  font: 600 11px var(--acc-mono);
+  color: var(--acc-fg-dim);
+}
+
+.aboutProse {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--acc-fg-dim);
+  text-wrap: pretty;
+}
+
+.aboutList {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 11px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-2xl);
+  background: var(--acc-bg-card);
+}
+
+.aboutItem {
+  display: flex;
+  gap: 8px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--acc-fg-body);
+  text-wrap: pretty;
+}
+
+.aboutMarkOk {
+  flex: none;
+  color: var(--acc-ok);
+}
+
+.aboutMarkNo {
+  flex: none;
+  color: var(--acc-bad);
+}
+
+/* --- Sound alerts ---------------------------------------------------------- */
+
+.soundCard {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-2xl);
+  background: var(--acc-bg-card);
+}
+
+.soundTop {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.soundSwitch {
+  flex: none;
+  display: grid;
+  place-items: center;
+}
+
+/* The sounds switch on in the primary colour rather than the green of remote access: green here would
+   read as "connected", which is a different kind of statement altogether. */
+.switchTrackAccent {
+  background: var(--acc-accent);
+}
+
+.soundText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.soundLabel {
+  font: 500 12.5px var(--acc-font);
+  color: var(--acc-fg-faint);
+}
+
+.soundLabelOn {
+  color: var(--acc-fg);
+}
+
+.soundHint {
+  font-size: 11px;
+  color: var(--acc-fg-faint);
+}
+
+/* The figure beside a slider - shared by the volume of a sound and the colour of the gauges. */
+.percentChip {
+  flex: none;
+  padding: 1px 6px 2px;
+  border-radius: var(--acc-r-sm);
+  font: 10px var(--acc-mono);
+  background: var(--acc-accent-12);
+  color: var(--acc-accent);
+}
+
+.percentChipMuted {
+  background: var(--acc-neutral-12);
+  color: var(--acc-fg-ghost);
+}
+
+.soundPlay {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--acc-r-sm);
+  font-size: 9px;
+  color: var(--acc-fg-faint);
+}
+
+.soundPlay:hover,
+.soundPlay[data-hover] {
+  background: var(--acc-bg-menu-hover);
+  color: var(--acc-fg);
+}
+
+/* Two screens drag it now, so it is named after what it is rather than after the first of them. Only the
+   -webkit- pseudo-elements are dressed: the panel is drawn by JCEF, which is Chromium. */
+.slider {
+  width: 100%;
+  height: 14px;
+  appearance: none;
+  background: none;
+  cursor: pointer;
+}
+
+.slider::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 3px;
+  background: var(--acc-bg-control);
+}
+
+.slider::-webkit-slider-thumb {
+  appearance: none;
+  margin-top: -4.5px;
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: var(--acc-accent);
+}
+
+.sliderMuted::-webkit-slider-thumb {
+  background: var(--acc-line-strong);
+}
+
+/* --- A choice out of several: the default mode ------------------------------ */
+
+.choice {
+  display: flex;
+  gap: 9px;
+  width: 100%;
+  padding: 9px 8px;
+  border-radius: var(--acc-r-lg);
+  text-align: left;
+  transition: background-color 80ms linear;
+}
+
+.choice:hover:not(:disabled),
+.choice[data-hover]:not(:disabled) {
+  background: var(--acc-bg-menu-hover);
+}
+
+.choiceOn {
+  background: var(--acc-accent-08);
+}
+
+.choice:disabled {
+  opacity: 0.45;
+}
+
+.choiceTick {
+  flex: none;
+  width: 12px;
+  font-size: 11px;
+  color: var(--acc-accent);
+}
+
+.choiceBody {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.choiceTop {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+}
+
+.choiceLabel {
+  font: 500 12.5px var(--acc-font);
+  color: var(--acc-fg-body);
+}
+
+.choiceLabelOn {
+  color: var(--acc-fg);
+}
+
+.choiceTag {
+  font: 10px var(--acc-mono);
+  color: var(--acc-fg-ghost);
+}
+
+.choiceTagDanger {
+  color: var(--acc-bad);
+}
+
+.choiceSub {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--acc-fg-faint);
+  text-wrap: pretty;
+}
+
+/*
+ * A choice that carries a field of its own - the number of lines a paste has to reach before it folds
+ * (see PasteCollapse.tsx). The box is the same .choice; only the halves inside it differ, so the row
+ * cannot drift away from the plain ones above and below it.
+ */
+.choiceField {
+  align-items: center;
+}
+
+/* The half that chooses. It takes the whole row apart from the field, so that the hit area is the row
+   itself rather than the words in it - a two-line option with a small target beside a large one reads as
+   two different kinds of thing. */
+.choiceHit {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  gap: 9px;
+  text-align: left;
+}
+
+/*
+ * The number itself. Narrow on purpose: three digits is the whole range it accepts, and a field the width
+ * of the row would promise a sentence.
+ *
+ * Chromium's own spinner arrows are turned off (the field is a text one with a numeric keyboard, so they
+ * never appear on the desktop either) - at this size they take a third of the box and land under the
+ * pointer exactly where the digits are.
+ */
+.choiceNumber {
+  flex: none;
+  width: 56px;
+  padding: 5px 0;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-sm);
+  background: var(--acc-bg-raised);
+  color: var(--acc-fg);
+  font: 12px var(--acc-mono);
+  text-align: center;
+}
+
+.choiceNumber:focus-visible {
+  outline: none;
+  border-color: var(--acc-accent-40);
+}
+
+/* Dimmed rather than gone: what folding would go back to stays readable while "never fold" is chosen. */
+.choiceNumber:disabled {
+  opacity: 0.4;
+}
+
+/* --- Composer layout: four little drawings rather than four words ----------- */
+
+.layoutGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.layoutCard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-2xl);
+  background: var(--acc-bg-card);
+  text-align: left;
+}
+
+.layoutCard:hover,
+.layoutCard[data-hover] {
+  border-color: var(--acc-line-hover);
+}
+
+.layoutCardOn {
+  border-color: var(--acc-accent-40);
+  background: var(--acc-accent-08);
+}
+
+.layoutName {
+  font: 500 12px var(--acc-font);
+  color: var(--acc-fg-body);
+}
+
+.layoutNameOn {
+  color: var(--acc-fg);
+}
+
+/* --- Voice input ----------------------------------------------------------- */
+
+/* The rose of the recording indicator itself, so the row and the button in the composer are recognisably
+   about the same thing. */
+.rowIconVoice {
+  background: var(--acc-bad-12);
+  color: var(--acc-bad-light);
+}
+
+/* What is left on the Deepgram account, and the way to ask again. One row rather than two, because the
+   figure means nothing without the button beside it: it is a cached answer, not a live one. */
+.balanceRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.balanceText {
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--acc-fg-faint);
+  overflow-wrap: anywhere;
+}
+
+/* One mode with both of its triggers - the chord and the mouse button. */
+.hotkeyBlock {
+  /* The height of everything a binding row puts side by side - the keys, the empty slot, the wait for a
+     press. Kept in one place because the row reads as broken the moment two of them differ. */
+  --acc-hotkey-h: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 10px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-2xl);
+  background: var(--acc-bg-card);
+}
+
+.hotkeyRow {
+  display: flex;
+  /* Wide enough that the cross which clears one slot reads as belonging to it rather than as a divider
+     before the next one. */
+  gap: 14px;
+  /* One line, always. The keyboard and the mouse are one decision made twice, and a half of it that
+     drops under the other - which is what wrapping did while a binding was being recorded - reads as the
+     row having changed rather than as a row waiting for a key. */
+  flex-wrap: nowrap;
+  margin-top: 7px;
+}
+
+.hotkeySlot {
+  /* By its keys rather than by half the row - and able to give way, see the two states below. */
+  flex: 0 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/*
+ * KEY and MOUSE beside the keys they label.
+ *
+ * Given the row's own height rather than left as a nine-pixel line of text: a short box and a tall one
+ * are centred against each other in fractions of a pixel, and the browser then rounds each of them its
+ * own way - which is how a label ends up sitting a pixel above the keys it belongs to.
+ */
+.hotkeyKind {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  height: var(--acc-hotkey-h);
+  /* Capitals have no descender, so a line of them centred by its own box sits a pixel above the middle of
+     the keys beside it. This is that pixel, put back by hand. */
+  padding-top: 2px;
+  font: 600 9px/1 var(--acc-mono);
+  letter-spacing: 0.08em;
+  color: var(--acc-fg-ghost);
+}
+
+/*
+ * The area a binding is set from, and it has three looks. With keys on it the keys are what somebody
+ * looks for, so the button gets out of their way and keeps only its hover; with nothing on it there is
+ * nothing to look at at all, so it has to say "press me" itself.
+ */
+.hotkeyButton {
+  flex: 0 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  /* One height for everything in the row - a key, an empty slot, the wait for a press - so that the KEY
+     and MOUSE labels beside them sit level whichever of the three is on screen. */
+  min-height: var(--acc-hotkey-h);
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: var(--acc-r-md);
+  font: 11px var(--acc-font);
+  color: var(--acc-fg-body);
+  white-space: nowrap;
+  transition: background-color 80ms linear, border-color 80ms linear, color 80ms linear;
+}
+
+/*
+ * Keys on it: no frame, only the padding its hover needs to read as one patch behind them.
+ *
+ * The one thing in the row that never gives way. Everything else can lose its last few pixels to an
+ * ellipsis; a chord cut short is not a shorter hotkey, it is a different one.
+ */
+.hotkeyButtonSet {
+  flex: none;
+  padding: 0 4px;
+}
+
+.hotkeyButtonSet:hover,
+.hotkeyButtonSet[data-hover] {
+  background: var(--acc-bg-hover);
+}
+
+.hotkeyButtonSet:hover .cap,
+.hotkeyButtonSet[data-hover] .cap {
+  border-color: var(--acc-line-hover);
+  color: var(--acc-fg);
+}
+
+/*
+ * The two states that are a sentence rather than keys: nothing bound, and waiting for a press.
+ *
+ * Laid out as text rather than as a flex row so that they can end in an ellipsis. They are the halves of
+ * the row that may be squeezed - in the narrowest panel "Press a mouse button…" beside a three-key chord
+ * does not fit at any size, and the alternative to trimming it is a row that jumps a line while somebody
+ * is looking at it.
+ */
+.hotkeyButtonEmpty,
+.hotkeyButtonLive {
+  display: block;
+  height: var(--acc-hotkey-h);
+  line-height: calc(var(--acc-hotkey-h) - 2px);
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Nothing bound: dashed rather than solid - an empty slot is an invitation, not a value. */
+.hotkeyButtonEmpty {
+  border: 1px dashed var(--acc-line);
+  color: var(--acc-fg-ghost);
+}
+
+.hotkeyButtonEmpty:hover,
+.hotkeyButtonEmpty[data-hover] {
+  border-color: var(--acc-line-hover);
+  color: var(--acc-fg);
+}
+
+/* Waiting for a key. The same rose as a running dictation: in both cases the panel is listening to
+   something it does not normally listen to, and that is worth one colour. */
+.hotkeyButtonLive {
+  border-color: var(--acc-bad-32);
+  background: var(--acc-bad-12);
+  color: var(--acc-bad-light);
+}
+
+/*
+ * One key of a hotkey.
+ *
+ * A key rather than a word in a box, and the thicker bottom edge is the whole of that illusion - without
+ * it the same rectangle reads as a tag. What stands inside is often a drawing rather than a character
+ * (see HotkeyCaps): ⌥ and ⌘ are not in this panel's font, and written as text they fell through to
+ * whatever the system had, at a size and a weight of their own.
+ */
+.cap {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  /*
+   * One size for every key, and the numbers are chosen so that they meet: a sign is 14 wide, the padding
+   * takes it to 26, and 26 is also the least a key may be - so ⌥ and F come out the same square while
+   * Shift is simply wider. Keys of two sizes side by side is the thing that reads as broken.
+   */
+  height: var(--acc-hotkey-h);
+  min-width: 26px;
+  /* The thicker bottom edge is taken off the top, or the letter sits high in its own key. */
+  padding: 1px 5px 0;
+  border: 1px solid var(--acc-line);
+  border-bottom-width: 2px;
+  border-radius: var(--acc-r-sm);
+  background: var(--acc-bg-control);
+  font: 11px/1 var(--acc-mono);
+  color: var(--acc-fg-body);
+  transition: border-color 80ms linear, color 80ms linear;
+}
+
+.capGlyph {
+  flex: none;
+  display: block;
+  /* A hair above the letters beside it: a sign has no x-height to sit on, and at the same nominal size
+     as the type it reads as the smaller of the two. */
+  width: 14px;
+  height: 14px;
+}
+
+/* Which side of the keyboard, on the key itself: "RIGHT ⌥" is one key of a keyboard, not two. */
+.capSide {
+  font: 600 8px/1 var(--acc-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--acc-fg-ghost);
+}
+
+.hotkeyClear {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--acc-r-sm);
+  color: var(--acc-fg-ghost);
+  font-size: 13px;
+  line-height: 1;
+}
+
+.hotkeyClear:hover,
+.hotkeyClear[data-hover] {
+  background: var(--acc-neutral-12);
+  color: var(--acc-fg);
+}
+
+/* --- The accounts screen with nothing on it yet ----------------------------------
+   An empty screen is an invitation to act, so this one is a single centred block: the glyph, one line
+   saying what the feature buys, and the action. Deliberately NOT a bordered card - a card here would
+   repeat the shape of an account row and read as one empty account rather than as an offer.
+   The boldness is spent on the glyph alone; everything under it is quiet. */
+.accountsEmpty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 26px 10px 8px;
+  text-align: center;
+}
+
+.accountsGlyph {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--acc-r-2xl);
+  background: var(--acc-accent-12);
+  color: var(--acc-accent-light);
+}
+
+.accountsHeadline {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--acc-fg-body);
+}
+
+/* Held well short of the panel's width: a line running the full 350px reads as a paragraph to get
+   through rather than as a sentence to take in. */
+.accountsBody {
+  max-width: 30ch;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--acc-fg-faint);
+  text-wrap: pretty;
+}
+
+/* The one thing to press on this screen, so it takes the width rather than hugging the left edge the
+   way a secondary button does. */
+.accountsAction {
+  width: 100%;
+  padding: 7px 10px;
+}
+
+/* Waiting for a sign-in: what is happening on the left, the way out of it on the right.
+
+   One row rather than a disabled button with the word inside it, because the two are different things -
+   a sentence about the wait, and something to press. The wait is generous (ten minutes: a browser, a
+   password manager, an SSO detour), and without the button beside it there was no way out of it at all. */
+.accountsWaiting {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.accountsWaitingText {
+  font-size: 11.5px;
+  color: var(--acc-fg-ghost);
+}
+
+/* Claude Design's sign-in: a section of its own rather than one more thing under the Add button.
+
+   Everything above this line is about which Claude account is in force; this is about a second
+   authorization filed inside that account, and it is offered whether or not the machine can keep two
+   accounts apart. The screen's own 14px gap does not say "a different subject" - a rule does, and it is
+   the only one on this screen for exactly that reason. */
+.accountsDesign {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--acc-line);
+}
+
+.accountsFinePrint {
+  max-width: 32ch;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--acc-fg-ghost);
+  text-wrap: pretty;
+}
+
+/* The cards line up with the text above them rather than sitting further in.
+   `.screenList` is not usable here: elsewhere it REPLACES the screen's padding (applied beside .screen),
+   while this list lives inside .screen, so its 6px would stack on the screen's 12 and inset the cards by
+   half again as much as the paragraph over them. */
+.accountList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* --- One account's card ----------------------------------------------------------
+   Its own lines rather than .cardMeta, which is a single right-aligned nowrap label: three spans put
+   inside it ran together into one word and were pushed against the right edge. */
+/* The address sits on the plan's line, so it takes that line's size and gives way when it runs out. */
+.accountAddress {
+  font-family: var(--acc-mono);
+  color: var(--acc-fg-faint);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* One line, never two: a card that grows a row when an address is long reads as a different card. */
+.accountFacts {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  color: var(--acc-fg-ghost);
+}
+
+/* The plan is the one word here worth reading at a glance - it is what the limits below belong to. */
+.accountPlan {
+  padding: 0 5px;
+  border-radius: var(--acc-r-sm);
+  background: var(--acc-bg-control);
+  color: var(--acc-fg-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* What is left of each window, side by side. The figure carries the colour and the name stays quiet:
+   two coloured words next to each other cancel each other out. */
+.accountMeters {
+  display: flex;
+  gap: 12px;
+  font: 10.5px var(--acc-mono);
+}
+
+.accountMeter {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.accountMeterName {
+  color: var(--acc-fg-ghost);
+}

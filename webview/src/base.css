@@ -1,0 +1,163 @@
+@import './tokens.css';
+@import './fonts.css';
+
+* {
+  box-sizing: border-box;
+  /*
+   * No ligatures - everywhere and always. Console fonts (JetBrains Mono and its kin) glue `===`, `!==` and
+   * `->` into a single glyph: in an editor that is pretty, but here stands someone else's code and someone
+   * else's commands, read in order to understand what exactly will run - and what has to be seen is exactly
+   * the characters that are written.
+   *
+   * On every element and through !important rather than one line on body: half of the panel's styles set
+   * the font through the shorthand `font: 11px ...`, and that resets the ligature settings to the font's
+   * default. calt is switched off along with liga: in these fonts the programming ligatures live precisely
+   * in it.
+   */
+  font-variant-ligatures: none !important;
+  font-feature-settings: 'liga' 0, 'calt' 0 !important;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--acc-bg);
+  color: var(--acc-fg);
+  font-family: var(--acc-font);
+  /* Thirteen in the panel, fifteen under a thumb - see --acc-fs-body in tokens.css. Almost everything
+     in the feed inherits from here, so this single line is what the touch type scale rides on. */
+  font-size: var(--acc-fs-body, 13px);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+a {
+  color: var(--acc-accent);
+  text-decoration: none;
+}
+
+@media (hover: hover) {
+  a:hover {
+    color: var(--acc-accent-light);
+    text-decoration: underline;
+  }
+}
+
+textarea,
+input,
+button {
+  font-family: inherit;
+  color: inherit;
+}
+
+/* A pointer on everything that can be pressed: the panel lives inside an IDE but behaves like an ordinary
+   interface, and the cursor is the first thing that shows it. A dimmed button is not entitled to one:
+   there is nothing to press it with. */
+button {
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+}
+
+::selection {
+  background: var(--acc-accent-32);
+}
+
+/*
+ * The hover hints are not drawn here any more: a ::after grown out of the marked element could not know
+ * where the window ends, and at the panel's edges it unfolded off the screen. The `data-tooltip` and
+ * `data-tooltip-at` marks in the markup are the same as they were, but they are read by one shared
+ * element that measures itself against the window - see components/Tooltips.tsx.
+ */
+
+/* The user explicitly asked for the focus ring to be removed everywhere: it irritates more than it helps.
+   One shared reset instead of an outline:none on every class. */
+*:focus,
+*:focus-visible {
+  outline: none;
+}
+
+/* The same width as the IDE's own native scrollbar - otherwise ours looks like a toy beside it. */
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--acc-line-strong);
+  border: 2px solid transparent;
+  border-radius: var(--acc-r-lg);
+  background-clip: content-box;
+}
+
+@media (hover: hover) {
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--acc-line-hover);
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/*
+ * The two corners the browser draws by itself: the grip on a field that can be dragged taller, and the
+ * square where a vertical scrollbar meets a horizontal one.
+ *
+ * Both are drawn for a white page - a pale grey stack of lines on an even paler fill - and on a dark
+ * panel they read as a chip of somebody else's interface stuck into the bottom corner of a field. The
+ * grip is kept rather than hidden: the field genuinely drags, and taking the handle away takes the only
+ * sign of it. It is simply drawn in our own line colour, in the same two strokes.
+ *
+ * Here at the root beside the scrollbars, not beside each field: a textarea added tomorrow gets this for
+ * free, and every one of them today (the scenario's cards, the feedback, the improve instructions) was
+ * showing the same corner.
+ */
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-resizer {
+  background-color: transparent;
+  background-image: linear-gradient(
+    315deg,
+    transparent 0 28%,
+    var(--acc-line-strong) 28% 42%,
+    transparent 42% 56%,
+    var(--acc-line-strong) 56% 70%,
+    transparent 70% 100%
+  );
+  /* Drawn smaller than the handle it sits in and pushed into the very corner: the grab area stays the
+     width of a scrollbar (that is what the pointer needs), while the mark itself is a hint, not a
+     control - at the full 12px it read as a torn corner of the field. */
+  background-size: 7px 7px;
+  background-position: right bottom;
+  background-repeat: no-repeat;
+}
+
+/*
+ * Letter-spacing belongs to the small capitalised labels of the design, and it is a latin idea: a Han
+ * character, a kana or a hangul syllable is drawn in its own square box, and prising those apart reads as
+ * a rendering fault rather than as a style. The rule is here, at the root, so it reaches every module
+ * without each of them having to remember (see the tracking in shell/composer/feed).
+ *
+ * Asked by an attribute rather than by naming the languages again: the list of them lives in
+ * i18n/locales.ts, where the compiler holds it against the list of languages the panel speaks. Written
+ * out here as tags, it was a fourth copy that nothing kept in step - and a tenth language added upstairs
+ * would simply have gone on being spaced out.
+ */
+html[data-cjk] * {
+  letter-spacing: normal;
+}

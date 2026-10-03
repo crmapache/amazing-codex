@@ -1,0 +1,1771 @@
+/* The panel's wrapping: the header, the stream switcher, the bottom row, the menus, the toast. */
+
+/* The animation keyframes live here rather than in a shared file: a CSS module renames animation names
+   just as it renames classes, and a reference to global keyframes silently turns into nothing - the
+   animation simply does not run. */
+
+@keyframes acc-pulse {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+/* The ring smoking with sparks - see Flames in StatusBar.tsx. */
+
+/* One spark: it lifts off the ring and goes straight up, turning as it goes, and comes apart before it
+   gets far. --acc-rise is this spark's own height, set per spark by the component. Borrowed from the
+   readiness gauge in the gym app, where the same four-pointed stars rise off a bar at peak form - smaller
+   here, because the whole ring is twenty-two pixels across. */
+@keyframes acc-spark-rise {
+  0% {
+    opacity: 0;
+    transform: translateY(0.5px) scale(0.35) rotate(-14deg);
+  }
+
+  /* Faint while it is still against the metal: at full strength there it merges into the ring's own paint,
+     and what one sees is a lumpy ring rather than something coming off it. The spark brightens once it is
+     clear of the edge - which is also how a spark actually behaves. */
+  25% {
+    opacity: 0.38;
+  }
+
+  60% {
+    opacity: 0.72;
+  }
+
+  100% {
+    opacity: 0;
+    transform: translateY(var(--acc-rise, -5px)) scale(1) rotate(34deg);
+  }
+}
+
+/* The heat under the sparks: it swells and gives way, and stays dim throughout - the ring itself has to
+   remain the thing one reads. */
+@keyframes acc-flame-heat {
+  0%,
+  100% {
+    opacity: 0.16;
+    transform: scale(1);
+  }
+
+  40% {
+    opacity: 0.34;
+    transform: scale(1.08);
+  }
+
+  70% {
+    opacity: 0.22;
+    transform: scale(1.03);
+  }
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  background: var(--acc-bg-panel);
+  position: relative;
+  overflow: hidden;
+}
+
+/* On the editor's side it is as with the native tool windows (the terminal, the project view and so on):
+   where a panel borders the editor they always have a thin frame. The panel latches onto any side of the
+   screen, so the frame travels with it rather than being nailed once and for all to one edge. */
+.panel[data-anchor='right'] {
+  border-left: 1px solid var(--acc-line-strong);
+}
+
+.panel[data-anchor='left'] {
+  border-right: 1px solid var(--acc-line-strong);
+}
+
+.panel[data-anchor='bottom'] {
+  border-top: 1px solid var(--acc-line-strong);
+}
+
+.panel[data-anchor='top'] {
+  border-bottom: 1px solid var(--acc-line-strong);
+}
+
+/*
+ * The feed and the input field (composer.dock) divide the room the way the input field's layout decides:
+ * under bottom and compact it is a column, the feed on top under the shared header and the input beneath
+ * it; .workArea here is an ordinary flex column stretched over everything left of the panel under the
+ * header (flex: 1).
+ *
+ * left/right is different: the header takes only the column with the feed and the field, while beside it,
+ * over the PANEL's full height (including the room beside the header itself rather than only under it),
+ * stands .railColumn: MODEL/EFFORT/MODE, the usage and the buttons (see its description below), on the left
+ * under left and on the right under right, as the layout is called. The rail used to span only the height
+ * of the feed plus the dock while the header stood as a separate strip over the whole panel (both the feed
+ * and the rail) - when the tabs wrapped onto a second row the header grew, dragging the rail's top down
+ * with it, though the rail was supposed to span the full height.
+ *
+ * The grid therefore stands on the whole .panel (see its [data-layout] below) rather than on .workArea: the
+ * rail has to cover the header too, and that stands as its neighbour, outside .workArea. For left/right
+ * .workArea itself becomes display: contents - it stops being a box of its own and a grid container of its
+ * own, and its children (the feed, the rail, the dock) become direct items of .panel's grid, in one row
+ * with their own header.
+ */
+.workArea {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.workArea[data-layout='left'],
+.workArea[data-layout='right'] {
+  display: contents;
+}
+
+.panel[data-layout='left'],
+.panel[data-layout='right'] {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+}
+
+/*
+ * minmax(0, 1fr) rather than a bare 1fr: a bare 1fr's implicit track minimum goes by content (as auto's
+ * does) rather than by zero, however much min-width: 0 stands on the element itself (see .content below) -
+ * that is a separate, stronger minimum belonging to the track, and it is fixed only in the track's
+ * definition. Without this correction a narrow panel (a real side dock is often narrower than the rail with
+ * MODEL/EFFORT/MODE needs) could not squeeze the feed below the width of its longest unbreakable line - the
+ * columns together demanded more room than the panel has, and the feed crept past the right edge, half
+ * invisible.
+ */
+.panel[data-layout='right'] {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.panel[data-layout='right'] > .header {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.workArea[data-layout='right'] > .content {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.panel[data-layout='left'] {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.panel[data-layout='left'] > .header {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.workArea[data-layout='left'] > .content {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+/*
+ * The column itself is an empty node right here, in App.tsx's markup, rather than inside Composer: it needs
+ * the panel's full height while Composer stands much lower, beside the input field. The contents are drawn
+ * by App.tsx (the permission, the question, the tasks, the queue, the quotes) and by Composer
+ * (MODEL/EFFORT/MODE and the buttons) through portals straight into here, each in its own place - that way
+ * their state and their handlers stay where they were while the markup lands in the right place in the DOM,
+ * one under another, in the same order as before in the dock above the input field.
+ *
+ * justify-content is not needed: the row with Send/Queue presses itself to the bottom (margin-top: auto, see
+ * .railToolsRow in composer.module.css) - the rest simply stands on top in the markup's order, however many
+ * cards arrive.
+ *
+ * grid-column and the border are mirrored by side: under left the rail is the first column with a border on
+ * the right (there it borders the feed and the field), under right the second column with a border on the
+ * left. span 3 rather than 2: there are three rows now (the header, the feed, the dock), and the rail spans
+ * all three at once, over the panel's full height.
+ */
+.railColumn {
+  grid-row: 1 / span 3;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  /* The same as on .dock (composer.module.css): under left/right this column holds the very same stack of
+     cards, and a tall one used to grow it past the panel's height, taking Send and the input field off the
+     bottom of the screen with it. */
+  min-height: 0;
+  gap: 12px;
+  /* The top and the bottom are the same 8px as .railRow's (see composer.module.css): the input field's bottom
+     edge and the rail's bottom edge share one and the same edge of the dock, and without a matching gap from
+     it the Send/Queue rows and the field's bottom would not stand on one line - noticeable to the eye, and
+     to the pixel too. */
+  padding: 8px 10px;
+  background: var(--acc-bg-panel);
+}
+
+.workArea[data-layout='right'] > .railColumn {
+  grid-column: 2;
+  border-left: 1px solid var(--acc-line);
+}
+
+/* The pair to .dock's rule: giving way is opt-in, and only a card with a scroll of its own asks for it by
+   marking itself data-shrinks. The attribute rather than a class, because these cards are drawn from
+   composer.module.css and a class of theirs cannot be named from here. */
+.railColumn > *:not([data-shrinks]) {
+  flex: none;
+}
+
+.workArea[data-layout='left'] > .railColumn {
+  grid-column: 1;
+  border-right: 1px solid var(--acc-line);
+}
+
+.content {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* A safeguard alongside the grid track's minmax(0, 1fr) above: if the feed is short of room anyway, it
+     honestly clips and scrolls inside its own column (see overflow-x on .feed) rather than drawing over the
+     rail or the neighbouring panel. */
+  overflow: hidden;
+  /* When a question or task card in the dock grows so far that the feed is squeezed almost to nothing (see
+     AskPanel, TaskListPanel), an ordinary Chrome repaints the freed room as it should, while the Chromium
+     inside JCEF does not: the feed's old frame stays visible under the card's head, as though it were
+     showing through. A compositing layer of its own forces JCEF to repaint that area whole instead of
+     reusing the previous frame's raster cache. */
+  transform: translateZ(0);
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+  position: relative;
+  background: var(--acc-bg);
+}
+
+.spacer {
+  flex: 1;
+  min-width: 6px;
+}
+
+/* --- The header with the sessions ------------------------------------------ */
+
+.header {
+  flex: none;
+  display: flex;
+  align-items: stretch;
+  min-height: 34px;
+  background: var(--acc-bg-panel);
+  border-bottom: 1px solid var(--acc-line);
+}
+
+/*
+ * Compact saves height wherever it can, and the header is no exception: 2px lower, and its icons 2px
+ * smaller. One modifier on the header itself rather than props on every button: it fixes one cascade here
+ * rather than a dozen places in Header.tsx.
+ */
+.headerCompact {
+  min-height: 32px;
+}
+
+.headerCompact .tab,
+.headerCompact .tabAdd {
+  height: 32px;
+}
+
+/* Narrower than the ordinary 13px/11px by 8px on each side - cramped, but compact's business is not to give
+   a tab room to breathe, it is to leave room for the feed under it. Narrower is not an option: at the
+   previous 1px the cross's hover highlight stood flush against the tab's edge - the same flaw as in the
+   ordinary layout (see .tab above), only more noticeable because of the smaller margin. */
+.headerCompact .tab {
+  padding: 0 5px 0 3px;
+}
+
+.headerCompact .historyButton {
+  width: 26px;
+  height: 26px;
+}
+
+/* 14 rather than 15: the difference from the button (26px) has to divide by 2 without a remainder,
+   otherwise the centring slips by half a pixel and the browser visibly rounds the icon away from the true
+   centre - the same 6px inset on each side as in the ordinary header (see .menuIcon above). */
+.headerCompact .menuIcon {
+  width: 14px;
+  height: 14px;
+}
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  min-width: 0;
+}
+
+/* They squeeze themselves and wrap only when there is nowhere left to squeeze - they neither run off the
+   panel's edge nor get clipped silently. flex-grow:0 matters: with growth a tab, when it is the only one,
+   would spread out to max-width and push the "+" button onto a second row though there is plenty of room
+   beside it. The width comes from the title rather than from growth. The height is explicit: without it,
+   when wrapping onto several rows, a tab's height would be counted from its contents (shorter) rather than
+   from the header's former 34px. */
+.tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  /* On the right, with room to spare beyond the cross's width: without it the hover highlight on the close
+     button stood flush against the tab's edge. */
+  padding: 0 13px 0 11px;
+  flex: 0 1 auto;
+  min-width: 70px;
+  max-width: 210px;
+  border-bottom: 2px solid transparent;
+  color: var(--acc-fg-dim);
+  /* A tab is not a button (it holds one of its own - the cross), but it is pressed whole, so it needs a
+     pointer just as the buttons do. */
+  cursor: pointer;
+  /* A tab's caption is not text to read and copy but a label: there is no reason to select it, and during a
+     drag the selection climbed over the gesture outright. */
+  user-select: none;
+  /* The neighbours step aside to make room for the dragged tab - smoothly, otherwise the row jerks in fits
+     and the rearrangement is impossible to follow. By the same transition a dropped tab travels from under
+     the hand into its slot, while the lifted look (the background and the shadow) fades over exactly the
+     same path rather than snapping off at once. */
+  transition:
+    transform 0.16s ease,
+    background-color 0.16s ease,
+    box-shadow 0.16s ease,
+    opacity 0.16s ease;
+}
+
+/* The stripe on top is the group's colour: a conversation and all its forks share one, so the belonging is
+   visible without reading the caption. */
+.tabGroupBar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  opacity: 0.55;
+}
+
+.tabActive .tabGroupBar {
+  opacity: 1;
+}
+
+/* The statistics tab holds no conversation and takes no fork's indent: its padding is the plain one,
+   whatever the depth arithmetic would have said. */
+.tabStatistics {
+  padding-left: 11px;
+}
+
+/* The gap sets one group off from another: colour alone is not enough if the tabs have stuck together. */
+.tabGroupStart {
+  margin-left: 6px;
+}
+
+.tabGroupStart:first-child {
+  margin-left: 0;
+}
+
+/* The line-height is shared with .tabTitle: the fork sign is mono 11px while the title is sans 12px, and
+   with different line-heights the icon hangs above the caption. */
+.tabFork {
+  flex: none;
+  font: 11px/15px var(--acc-mono);
+  opacity: 0.85;
+}
+
+.tab:hover {
+  background: var(--acc-bg-card);
+}
+
+.tabActive {
+  background: var(--acc-bg);
+  color: var(--acc-fg);
+}
+
+/* The active one is darker than the panel anyway - a second signal (the bottom stripe) was superfluous and
+   only confused things beside the group's stripe on top. The hover is kept separate for each: the active one
+   darkens more than an inactive one so that the difference reads. */
+.tabActive:hover {
+  background: var(--acc-bg-sunken);
+}
+
+/* While a group is dragged, its tabs travel after the cursor (the shift is set by Header itself) and rise
+   above their neighbours - it is visible what exactly is travelling and that the whole group travels rather
+   than one tab out of it. The cursor meanwhile is a "grabbed" one - the shell sets it on the IDE's window
+   itself (see the cursor message in protocol).
+
+   Without the shadow a tab in its new place would read as glued to the row; the slight transparency leaves
+   visible whatever it is riding over right now. */
+.tabDragging {
+  /* It travels after the hand, hence without a delay: smoothness here would read as the tab lagging behind
+     the cursor. */
+  transition: none;
+  opacity: 0.9;
+  cursor: grabbing;
+  z-index: 2;
+  border-radius: var(--acc-r-md);
+  background: var(--acc-bg-card);
+  box-shadow: var(--acc-shadow-menu);
+}
+
+.dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 9px;
+  background: var(--acc-fg-ghost);
+  transition: background 0.2s ease;
+}
+
+/* Only a working tab breathes: the other states are static, otherwise the header ripples and stops telling
+   anything at all. */
+.dotRunning {
+  background: var(--acc-warn);
+  box-shadow: 0 0 0 3px var(--acc-warn-16);
+  animation: acc-pulse 1.5s ease-in-out infinite;
+}
+
+.dotDone {
+  background: var(--acc-ok);
+}
+
+.dotAttention {
+  background: var(--acc-accent);
+  box-shadow: 0 0 0 3px var(--acc-accent-16);
+  animation: acc-pulse 1.5s ease-in-out infinite;
+}
+
+/* It does not pulse: this is not a working process but a fact - the session broke off. */
+.dotCrashed {
+  background: var(--acc-bad-light);
+  box-shadow: 0 0 0 3px var(--acc-bad-16);
+}
+
+.tabTitle {
+  font: 12px/15px var(--acc-font);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tabClose {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--acc-r-xs);
+  font-size: 12px;
+  color: var(--acc-fg-faint);
+}
+
+.tabClose:hover {
+  background: var(--acc-line-strong);
+  color: var(--acc-fg);
+}
+
+.tabAdd {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 34px;
+  flex: none;
+  font-size: 15px;
+  color: var(--acc-fg-dim);
+}
+
+.tabAdd:hover {
+  background: var(--acc-bg-hover);
+  color: var(--acc-fg);
+}
+
+.headerTools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 6px;
+  /* Without it the row's shrinking would run into the children's combined "natural" width (a flex item's
+     min-width is auto by default) - the branch chip inside could shrink itself as far as one likes (see
+     .statusItem), but the whole row outwards could not, and no shrinking would genuinely happen. */
+  min-width: 0;
+}
+
+/* Someone else is watching this project - a browser page beside the IDE, later a phone.
+   Deliberately quiet: it is a fact worth knowing, not a thing to look at. What it must never be is
+   absent, so that a remote connection is never a silent one (see the clients message in protocol.ts). */
+.watchers {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+  font-size: 11px;
+  color: var(--acc-fg-dim);
+  cursor: default;
+}
+
+/* The icon alone: room in the header is dear, and the caption wrapped onto a second row. */
+.historyButton {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: var(--acc-r-sm);
+  color: var(--acc-fg-dim);
+}
+
+.menuIcon {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+.historyButton:hover {
+  background: var(--acc-line-strong);
+  color: var(--acc-fg);
+}
+
+.historyButton:active {
+  background: var(--acc-bg-control-hover);
+  color: var(--acc-fg);
+}
+
+.historyButton:disabled {
+  background: none;
+  color: var(--acc-fg-ghost);
+  opacity: 0.5;
+}
+
+/* --- The stream switcher --------------------------------------------------- */
+
+.streams {
+  flex: none;
+  display: flex;
+  align-items: center;
+  padding: 6px 8px;
+  background: var(--acc-bg-raised);
+  border-bottom: 1px solid var(--acc-line);
+  overflow: hidden;
+}
+
+/* Scrolling by the mouse wheel is switched on in the component (deltaY -> scrollLeft) - overflow-x here
+   only gives the browser somewhere to put the contents that did not fit. The bar is hidden by the same trick
+   as .feed's - a native one would reserve height and move the chips when it appeared. */
+.streamList {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.streamList::-webkit-scrollbar {
+  display: none;
+}
+
+.stream {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  height: 22px;
+  padding: 0 9px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-md);
+  color: var(--acc-fg-dim);
+  white-space: nowrap;
+}
+
+.stream:hover {
+  border-color: var(--acc-line-hover);
+}
+
+/* A label rather than a button: a background command has no stream of its own, and a highlight under the
+   cursor would promise there is somewhere to go through it. */
+.streamStatic {
+  border-style: dashed;
+}
+
+.streamStatic:hover {
+  border-color: var(--acc-line);
+}
+
+.streamActive {
+  background: var(--acc-bg-control);
+  border-color: var(--acc-line-hover);
+  color: var(--acc-fg);
+}
+
+.streamDot {
+  width: 5px;
+  height: 5px;
+  border-radius: 9px;
+  flex: none;
+}
+
+.streamProgress {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1px solid;
+  box-sizing: border-box;
+}
+
+.streamLabel {
+  font: 500 11px var(--acc-mono);
+  white-space: nowrap;
+}
+
+/* The agent's business and a background command's short caption. The width is squeezed on purpose: the
+   chips stand in one row on a narrow panel, and every extra ten pixels pushes the neighbours past the edge.
+   Whatever did not fit goes into the tooltip on hover. */
+.streamMeta {
+  font: 10px var(--acc-mono);
+  color: var(--acc-fg-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 96px;
+}
+
+.streamDuration {
+  flex: none;
+  font: 10px var(--acc-mono);
+  color: var(--acc-fg-fainter);
+}
+
+/* Room for the cross is always held, and on the right there is as much of it as the chip has above and
+   below: otherwise it either presses against the very edge or the chip jerks in width under the cursor.
+   Hence the smaller right inset too - the cross makes it up itself. */
+.streamStoppable {
+  padding-right: 3px;
+}
+
+/* The cross kills the work itself rather than the chip, so it shows up only under the cursor: visible at
+   all times on every chip, it would read as "close". */
+.streamStop {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--acc-r-xs);
+  color: var(--acc-fg-ghost);
+  opacity: 0;
+}
+
+/* Block rather than inline: an inline one leaves a gap under the line for descenders, and the drawing slips
+   upwards from the button's middle. */
+.streamStopIcon {
+  display: block;
+  width: 8px;
+  height: 8px;
+}
+
+.stream:hover .streamStop,
+.streamStop:focus-visible {
+  opacity: 1;
+}
+
+.streamStop:hover {
+  background: var(--acc-line-strong);
+  color: var(--acc-bad);
+}
+
+/* --- The question before the irreversible ---------------------------------- */
+
+/* Its own backdrop rather than the menu's, and above it.
+   A confirmation shares the menu's rung (41) only until something is confirmed FROM the menu - the
+   accounts screen asks before logging out - and then the two are level, so the one drawn later wins and
+   the question hides behind the surface that raised it. A question about something irreversible is the
+   one thing that may never be covered, so it sits above every panel surface, the search window (45)
+   included. */
+.confirmScrim {
+  position: absolute;
+  top: var(--header-height);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 46;
+}
+
+.confirm {
+  position: absolute;
+  z-index: 47;
+  top: calc(var(--header-height) + 48px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(300px, calc(100% - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 13px 14px 11px;
+  border: 1px solid var(--acc-line-strong);
+  border-radius: var(--acc-r-2xl);
+  background: var(--acc-bg-panel);
+  box-shadow: var(--acc-shadow-menu);
+}
+
+.confirmTitle {
+  font: 600 12px var(--acc-font);
+  color: var(--acc-fg);
+}
+
+.confirmSubject {
+  font: 11px var(--acc-mono);
+  color: var(--acc-fg-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A sentence rather than a name, so it wraps - see the note prop in Confirm. */
+.confirmNote {
+  font: 10.5px/1.55 var(--acc-mono);
+  color: var(--acc-fg-ghost);
+}
+
+.confirmActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 5px;
+}
+
+.confirmCancel,
+.confirmAccept {
+  height: 24px;
+  padding: 0 11px;
+  border-radius: var(--acc-r-md);
+  font: 500 11px var(--acc-font);
+}
+
+.confirmCancel {
+  background: var(--acc-bg-control);
+  color: var(--acc-fg-dim);
+}
+
+.confirmCancel:hover {
+  background: var(--acc-bg-control-hover);
+  color: var(--acc-fg);
+}
+
+.confirmAccept {
+  background: var(--acc-bad);
+  color: var(--acc-on-accent);
+}
+
+.confirmAccept:hover {
+  filter: brightness(1.1);
+}
+
+.confirmAccept:focus-visible {
+  outline: 1px solid var(--acc-fg);
+  outline-offset: 1px;
+}
+
+/* --- The bottom row -------------------------------------------------------- */
+
+/* The bottom row: a summary in text, as in a terminal's status line. The meters go in a row of their own
+   above the buttons - beside them they scatter one by one. */
+/* The status row: the selectors on one side, and on the other the usage with the bubble and the heart (see
+   .statusEnd). The branch with its PR has moved into the header.
+
+   It wraps as two blocks rather than letting the selectors wrap inside themselves. Dragged narrow enough,
+   the three of them plus the usage no longer fit on a line, and the choice is which way to spend the second
+   line: on the selectors breaking into a column one button wide (three lines, and the whole panel loses the
+   height), or on the end of the row stepping down under them (two lines, both of them full). The row-gap is
+   what the second line stands on. */
+.status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  padding: 7px 2px 8px;
+}
+
+/* The far end of the status row as one block: the usage, then the bubble and the heart. Together, because
+   they step onto the second line together - the usage parted from the pair reads as a third thing in a row
+   that has only two. margin-left holds them at the far edge on either line, which a spacer between the two
+   blocks could not do: on a wrapped line the spacer stays behind on the first one. */
+.statusEnd {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: none;
+  margin-left: auto;
+}
+
+/* Every meter is one whole piece: the key and the value must not drift apart. A size of its own rather than
+   an inherited one: the branch row used to stand inside .statusLine with this same font - now BranchChip
+   stands in the header (see Header.tsx), in the interface font and smaller, and without a font of its own
+   here it would read in that one. */
+.statusItem {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  white-space: nowrap;
+  font: 12.5px/1.4 var(--acc-mono);
+  /* The width is counted from the room the branch name genuinely needs rather than fixed - it is given the
+     room the tabs leave free (see .headerTools below), and conversely it gives way to them itself, clipped
+     with an ellipsis (see .statusBranch), when there is not enough room for everyone. max-width is only a
+     ceiling: even with a completely empty header one branch must not take more than a third of a typical
+     panel's width. */
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 350px;
+}
+
+/* The branch is clipped to exactly the room genuinely available (min-width: 0 + flex: 1 1 auto) rather than
+   to some arbitrary constant in pixels - short branches are shown whole, long ones squeeze only when there
+   genuinely is no room. */
+.statusBranch {
+  color: var(--acc-ok-light);
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.statusPr {
+  color: var(--acc-fg-ghost);
+}
+
+.statusPrLink {
+  appearance: none;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: var(--acc-branch-light);
+  cursor: pointer;
+}
+
+.statusPrLink:hover {
+  text-decoration: underline;
+}
+
+/* --- The usage rings in the input field's bottom row ------------------------ */
+
+/* The gaps differ: between a ring and its number it is tight (that is one meter), between the meters it is
+   roomy - otherwise the row reads as one mush of percentages.
+
+   One line and no shrinking: this block now stands at the far end of the status row, between the spacer and
+   the bubble with the heart (see .status and StatusBar.tsx), and there a wrap costs the whole row a second
+   line - for the sake of moving the day's tokens under the rings. What gives way when the panel is dragged
+   narrow is the selectors opposite: they wrap by themselves, and each of them is one button rather than a
+   line of figures. */
+.meters {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 12px;
+  min-width: 0;
+  font: 12.5px/1.4 var(--acc-mono);
+}
+
+.meter {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+/* overflow visible: the arc's round cap sticks out past the viewbox's boundary, and without this it is cut
+   off exactly at twelve o'clock - where the arc closes. */
+.meterRing {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  overflow: visible;
+}
+
+.meterTrack {
+  fill: none;
+  stroke: var(--acc-meter-track);
+  stroke-width: 3.8;
+}
+
+/*
+ * The arc is drawn as a dash the length of the whole circumference, and the visible part is set by the
+ * offset (stroke-dashoffset) - that is what is animated. A quarter turn anticlockwise: without it the arc
+ * would begin on the right rather than at the top.
+ */
+.meterPace,
+.meterArc {
+  fill: none;
+  stroke-width: 3.8;
+  stroke-linecap: round;
+  transform: rotate(-90deg);
+  transform-origin: 11px 11px;
+  transition: stroke-dashoffset 0.7s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* The pace goes as a background under the usage: it is not an event but a line one checks against. */
+.meterPace {
+  stroke: var(--acc-meter-pace);
+}
+
+.meterArc {
+  transition:
+    stroke-dashoffset 0.7s cubic-bezier(0.4, 0, 0.2, 1),
+    stroke 0.3s ease;
+}
+
+/* --- The burning ring: extra usage ---------------------------------------------
+   Nine sparks lifting off the ring, each on a rhythm of its own (the periods come from the component -
+   see Flames), over a wide blurred circle that breathes: that one is the heat, and it is what makes the
+   sparks look lit.
+
+   Only transforms and opacity move - both go on the compositor, without laying the page out again. And
+   all of it burns solely while the money is running. */
+.flameHeat {
+  fill: none;
+  stroke: var(--acc-extra);
+  stroke-width: 2.6;
+  transform-origin: 11px 11px;
+  animation: acc-flame-heat 2.4s ease-in-out infinite;
+}
+
+/* The star grows and turns about its own middle: fill-box is the box of the star inside this group, which
+   is exactly the shape being scaled. The sparks all move the same way - straight up - so the group needs
+   no place of its own; where each one starts is set by the inner group's transform (see Flames). */
+.flameSpark {
+  transform-origin: center;
+  transform-box: fill-box;
+  animation-name: acc-spark-rise;
+  animation-iteration-count: infinite;
+  animation-timing-function: cubic-bezier(0.3, 0, 0.55, 1);
+}
+
+.flameSparkStar {
+  fill: var(--acc-extra-light);
+}
+
+/* The halo under a spark: the same star, wider and blurred. Scaled about its own middle, so the two stay
+   concentric however big the ring itself is drawn. */
+.flameSparkGlow {
+  fill: var(--acc-extra);
+  opacity: 0.6;
+  transform: scale(1.45);
+  transform-origin: center;
+  transform-box: fill-box;
+}
+
+/*
+ * Somebody who has asked the system for less movement gets the ring without the burning: the paint and
+ * the heat stay, the sparks simply do not fly. Something flickering in the corner of the eye is precisely
+ * the kind of thing that setting exists for.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .flameHeat,
+  .flameSpark {
+    animation: none;
+  }
+
+  .flameHeat {
+    opacity: 0.3;
+  }
+
+  .flameSpark {
+    opacity: 0.55;
+  }
+}
+
+.meterValue {
+  /* Digits of one width: otherwise the percentage jerks the row on every update. */
+  font-variant-numeric: tabular-nums;
+}
+
+/* statusline.sh paints the day's volume in turquoise (FG_CYAN) - we take the same colour. It has no ring:
+   the day's tokens have neither a limit nor a share of a whole. */
+.meterTokens {
+  position: relative;
+  color: var(--acc-branch-light);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.selectors {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  position: relative;
+  /* Above the menu's scrim (.menuScrim, z-index 40): without this a second click on a button's own self (in
+     the bottom row it stands below header-height, where the scrim is supposed to catch clicks outside the
+     menu) went to the scrim rather than to the button. One's own closed as a "click outside", and switching
+     straight to another selector took two clicks - first close, then open. A button has to get the click
+     itself and decide itself (see App.openSelector), as the header's buttons already do (see .history and
+     its neighbours, the same trick). */
+  z-index: 41;
+  /* Not flex: none - the usage and the pair stand in the same row now (see .statusEnd and StatusBar.tsx),
+     and a block that cannot shrink would push them out past the panel's right edge on a narrow panel. It
+     does not grow either: the row's free width belongs to the gap before the far end rather than to the
+     selectors. What shrinks inside is the selectors themselves - each of them ends its value with an
+     ellipsis (see .selectorText) rather than being cut off by the panel's edge.
+
+     They do not wrap among themselves: the row above wraps instead (see .status), and this block staying
+     one line deep is exactly what that buys. */
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* The width is counted by the longest of the values rather than by the chosen one (see .selectorSample) -
+   otherwise the row would jerk on every change of model or mode. This used to be a fixed 120px: the row
+   stood still, but the longest captions ("Opusplan 1M", "ultracode") did not fit into them and lived
+   clipped. The button can still shrink - on a really narrow panel the room matters more than a whole
+   caption, and there the value goes off into an ellipsis. */
+.selector {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 1 auto;
+  min-width: 0;
+  height: 23px;
+  padding: 0 8px;
+  border: 1px solid var(--acc-line-strong);
+  border-radius: var(--acc-r-md);
+  background: var(--acc-bg-control);
+  /* The same 80ms as the side menu's rows, and for the same reason: this browser draws offscreen and
+     repaints when something asks it to, and an instant colour swap asks exactly once - a request that can
+     be missed, leaving the button under the cursor unlit. A transition asks over several frames. */
+  transition:
+    background-color 80ms linear,
+    border-color 80ms linear;
+}
+
+/* [data-hover] beside every :hover here - the mark useHoverTarget puts on the button under the cursor
+   (see App). In the IDE :hover alone skips the crossing from one selector straight into the next. */
+.selector:hover,
+.selector[data-hover] {
+  border-color: var(--acc-line-hover);
+}
+
+/*
+ * Every mode gets an accent of its own on its background and its border at rest, and the same accent, only
+ * brighter, under the cursor: without a :hover of its own the shared .selector:hover would win (the same
+ * specificity, and the mode's class already stands second in the markup) - it painted the border a neutral
+ * grey, and a coloured selector faded into an ordinary one on hover. The label is painted in the state's
+ * accent too rather than left neutral: otherwise the "MODE" read as separate from the coloured capsule
+ * around it.
+ */
+.selectorPlan {
+  background: var(--acc-accent-16);
+  border-color: var(--acc-accent-40);
+}
+
+.selectorPlan:hover,
+.selectorPlan[data-hover] {
+  border-color: var(--acc-accent);
+}
+
+.selectorPlan .selectorLabel {
+  color: var(--acc-accent-light);
+}
+
+.selectorAccept {
+  background: var(--acc-ok-12);
+  border-color: var(--acc-ok-32);
+}
+
+.selectorAccept:hover,
+.selectorAccept[data-hover] {
+  border-color: var(--acc-ok);
+}
+
+.selectorAccept .selectorLabel {
+  color: var(--acc-ok-light);
+}
+
+.selectorDanger {
+  background: var(--acc-bad-12);
+  border-color: var(--acc-bad-40);
+}
+
+.selectorDanger:hover,
+.selectorDanger[data-hover] {
+  border-color: var(--acc-bad);
+}
+
+.selectorDanger .selectorLabel {
+  color: var(--acc-bad-light);
+}
+
+/* The conversation is running on a model nobody here chose - the CLI moved it there itself (see
+   ModelSwitchItem). The same warn accent the CONTEXT label and the model card in the feed wear: not a
+   breakage, but not the state of things one asked for either. Built like the mode accents above, and for
+   the same reason it needs a :hover of its own. */
+.selectorSwitched {
+  background: var(--acc-warn-12);
+  border-color: var(--acc-warn-32);
+}
+
+.selectorSwitched:hover,
+.selectorSwitched[data-hover] {
+  border-color: var(--acc-warn);
+}
+
+.selectorSwitched .selectorLabel {
+  color: var(--acc-warn-light);
+}
+
+/* The label and the value share a size and a line-height: at different sizes their optical centres do not
+   meet, and the button looks crooked however one centres it. */
+.selectorLabel {
+  flex: none;
+  font: 500 10.5px/1 var(--acc-mono);
+  letter-spacing: 0.04em;
+  color: var(--acc-fg-fainter);
+}
+
+.selectorValue {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  font: 500 10.5px/1 var(--acc-mono);
+  color: var(--acc-fg);
+  text-align: left;
+}
+
+/* The invisible longest variant is what alone sets the width of the room for the value (see Selector in
+   StatusBar.tsx). The genuine value is taken out of the flow and does not affect the width, so the button
+   does not jump when it switches: an "Ask" takes exactly as much as a "Bypass" would. */
+.selectorSample {
+  visibility: hidden;
+  white-space: pre;
+}
+
+/* inset rather than a width: the room has already been measured off by the spacer, all that is left is to
+   occupy it. Too long a caption (a model outside the known families) is clipped with an ellipsis - the full
+   name is in the tooltip under the cursor anyway. */
+.selectorText {
+  position: absolute;
+  inset: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/*
+ * Compact keeps these same buttons in the input field itself, while left/right keeps them in the side rail
+ * spanning the panel's full height (see .railColumn below and Composer.tsx) rather than in the status row -
+ * there they have no reason to divide a fixed 120px three ways: there are only three neighbours, and they
+ * divide the row's whole width evenly among themselves rather than crowding into the right edge with
+ * emptiness on the left. It comes later than .selector in the file - and therefore wins over its
+ * flex: 0 0 120px at equal specificity.
+ *
+ * min-width: min-content rather than 0 - otherwise flex-basis: 0 stops taking the contents' own width into
+ * account when counting the row's width, and the value would be clipped with an ellipsis though there is
+ * room beside it. With min-content no button shrinks below its own spacer (see .selectorSample) - only what
+ * is left over it is divided evenly. What is measured meanwhile is the longest variant rather than the
+ * chosen one, so the row is not rebuilt when it switches.
+ */
+.selectorAuto {
+  flex: 1 1 0;
+  width: auto;
+  min-width: min-content;
+}
+
+.selectorCaret {
+  flex: none;
+  width: 8px;
+  height: 5px;
+  color: var(--acc-fg-fainter);
+  transition: color 0.12s ease;
+}
+
+.selector:hover .selectorCaret,
+.selector[data-hover] .selectorCaret {
+  color: var(--acc-fg-dim);
+}
+
+/* --- Saying thanks --------------------------------------------------------- */
+
+/*
+ * The heart at the far end of the selectors' row (see Thanks.tsx). An icon and no caption: it is not one of
+ * the three controls the turn runs on, and a fourth capsule with a word in it would read as a fourth
+ * setting.
+ *
+ * 26px tall in every layout - the same height as the attachment button and the slash beside it (see .attach
+ * in composer.module.css). It used to take the selectors' 23px in the status row, to sit there as a
+ * neighbour rather than as an insert, and at that size a bordered box holding a 12px heart read as a squat
+ * little rectangle rather than as a button. It stands at the far end of the row past a wide gap, so being
+ * three pixels taller than the selectors costs nothing - looking cramped did.
+ *
+ * Wider than tall rather than a square: the icon has no caption to fill the box, and at 26px on both sides
+ * the frame sat too close to the heart's own outline for the two to read as separate things.
+ *
+ * min-height beside the two sides on purpose: the height is what a row is free to squash, and a heart in a
+ * flattened box is exactly the complaint this size answers.
+ *
+ * position + z-index for the same reason as .selectors above: the menu's scrim covers everything below the
+ * header, and without this a second click on the heart's own self would go to the scrim - the menu would
+ * close as a "click outside" and open again from the same press.
+ */
+.thanks {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  z-index: 41;
+  flex: none;
+  width: 32px;
+  height: 26px;
+  min-height: 26px;
+  border: 1px solid var(--acc-line-strong);
+  border-radius: var(--acc-r-md);
+  background: var(--acc-bg-control);
+  color: var(--acc-heart);
+  /* A transition rather than an instant swap - the same reason as .selector's above. */
+  transition:
+    background-color 80ms linear,
+    border-color 80ms linear;
+}
+
+.thanks:hover,
+.thanks[data-hover] {
+  background: var(--acc-heart-16);
+  border-color: var(--acc-heart-40);
+}
+
+/*
+ * Compact: the heart shares its row with MODEL/EFFORT/MODE, so it takes their 23px instead of the 26 above.
+ *
+ * The three pixels the status line can afford this row cannot. There the heart stands past a wide gap from
+ * everything else and reads as its own thing; here it butts up against MODE four pixels away, and two
+ * capsules of different heights side by side read as one of them being slightly broken.
+ */
+.thanksLevel {
+  height: 23px;
+  min-height: 23px;
+}
+
+/* The rail's variant: the same box, only without the frame - in a row of borderless buttons a bordered
+   capsule would read as a different kind of thing. */
+.thanksRail {
+  border: none;
+  background: var(--acc-neutral-12);
+}
+
+.thanksRail:hover,
+.thanksRail[data-hover] {
+  background: var(--acc-heart-16);
+}
+
+/* Level with the paperclip and the slash beside it, in the rail and in the status row alike. */
+.thanksIcon {
+  flex: none;
+  display: block;
+  width: 13px;
+  height: 13px;
+}
+
+/* The pair at the far end of the row - the bubble and the heart. One and the same block wherever it stands:
+   the status row under the field, the selectors' row in compact, the usage's row in the side rail. Their own
+   spacing, taken from the selectors opposite them (.selectors), rather than the row's wide one: two icon
+   buttons ten pixels apart read as two separate things rather than as a pair. */
+.endPair {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 4px;
+}
+
+/*
+ * The speech bubble beside the heart (see Feedback.tsx) - the way to say something back rather than only
+ * to say thanks.
+ *
+ * The same box as the heart's in every measurement, deliberately: the two stand side by side, and a
+ * button half a pixel off from its neighbour reads as a mistake rather than as a difference. What does
+ * differ is the colour. The heart is the one warm thing in this row and should stay the only one, so the
+ * bubble sits in the row's ordinary dim grey and only warms up under the pointer.
+ */
+.feedback {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  z-index: 41;
+  flex: none;
+  width: 32px;
+  height: 26px;
+  min-height: 26px;
+  border: 1px solid var(--acc-line-strong);
+  border-radius: var(--acc-r-md);
+  background: var(--acc-bg-control);
+  color: var(--acc-fg-dim);
+  transition:
+    background-color 80ms linear,
+    border-color 80ms linear,
+    color 80ms linear;
+}
+
+/* [data-hover] beside :hover throughout: the embedded browser drops the real :hover when the pointer
+   leaves the IDE's window, and the panel puts the attribute on itself (see useHoverTarget). */
+.feedback:hover,
+.feedback[data-hover] {
+  background: var(--acc-accent-12);
+  border-color: var(--acc-accent-40);
+  color: var(--acc-accent-light);
+}
+
+.feedbackRail {
+  border: none;
+  background: var(--acc-neutral-12);
+}
+
+.feedbackRail:hover,
+.feedbackRail[data-hover] {
+  background: var(--acc-accent-12);
+}
+
+/* Compact's variant: the same three pixels shorter as the heart it stands beside, for the same reason
+   (see .thanksLevel above) - the two of them share a row with MODEL/EFFORT/MODE there. */
+.feedbackLevel {
+  height: 23px;
+  min-height: 23px;
+}
+
+/* Level with the heart, the paperclip and the slash. */
+.feedbackIcon {
+  flex: none;
+  display: block;
+  width: 13px;
+  height: 13px;
+}
+
+/* --- The dropdown menu ----------------------------------------------------- */
+
+/*
+ * Fixed rather than absolute, like the menu it belongs to.
+ *
+ * The scrim answers "a click anywhere else closes this menu", and "anywhere else" must not depend on
+ * which box the button happened to stand in: an absolute one is laid out against the nearest positioned
+ * ancestor, so a menu opened from a form on a layer of its own got a scrim the size of that form - and a
+ * click beside it went to the form's own backdrop and shut the whole form, menu and answers with it.
+ */
+.menuScrim {
+  position: fixed;
+  /* Not inset:0 - otherwise it covers the header, and the history / MCP / plugins buttons are not clickable
+     while another modal is open: the scrim swallows the click. The header is of variable height (the tabs
+     wrap onto a second row) - hence a var rather than a number. */
+  top: var(--header-height);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 40;
+}
+
+.menu {
+  position: fixed;
+  z-index: 41;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--acc-bg-panel);
+  border: 1px solid var(--acc-line-strong);
+  border-radius: var(--acc-r-2xl);
+  box-shadow: var(--acc-shadow-menu);
+  overflow: hidden;
+  overflow-y: auto;
+  padding: 4px;
+  max-height: min(640px, 86vh);
+}
+
+/*
+ * The title and its hint share a line while they fit, and the hint drops whole onto the next one when
+ * they do not. Left to wrap word by word, a long hint ("shift+tab cycles every mode but Don't ask" in a
+ * narrow panel) broke both halves across two ragged lines at once - the title itself came out as
+ * "PERMISSION" over "MODE", which reads as a layout accident rather than a heading.
+ */
+.menuHead {
+  padding: 6px 9px 5px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+}
+
+.menuTitle {
+  font: 600 9px/1 var(--acc-mono);
+  letter-spacing: 0.09em;
+  color: var(--acc-fg-faint);
+  white-space: nowrap;
+}
+
+.menuHint {
+  font: 10px var(--acc-mono);
+  color: var(--acc-fg-ghost);
+  /* One line of its own, cut with an ellipsis only where even a line to itself is not enough. */
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.menuItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  width: 100%;
+  padding: 6px 9px;
+  border-radius: var(--acc-r-md);
+  text-align: left;
+  /* Knowing which entry is under the cursor is only half of it (that half lives in Menu.tsx): the colour
+     has to reach the screen too, and an instant swap asks this browser for a repaint once - see .selector
+     above for the whole story. */
+  transition: background-color 80ms linear;
+}
+
+/* A class rather than :hover - see Menu.tsx, the same trick and the same reason as .suggestItemOn in
+   SlashSuggest: in the IDE's offscreen browser the pseudo-class does not always fire when the cursor
+   crosses from one entry straight into the next. Which entry wears the class is decided in Menu.tsx: the
+   chosen one is never given it, so its accent survives the cursor passing over. */
+.menuItemHot {
+  background: var(--acc-bg-menu-hover);
+}
+
+.menuItemOn {
+  background: var(--acc-accent-12);
+}
+
+.menuItem:disabled {
+  opacity: 0.45;
+}
+
+.menuTick {
+  flex: none;
+  width: 13px;
+  text-align: center;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--acc-accent);
+}
+
+/* A star is golden rather than blue: the accent is the panel's own colour of "chosen", and here nothing is
+   chosen - it is GitHub's own star (see Thanks.tsx). */
+.menuIconWarn {
+  color: var(--acc-warn);
+}
+
+.menuBody {
+  min-width: 0;
+  flex: 1;
+}
+
+.menuRow {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+}
+
+.menuLabel {
+  font: 500 12px var(--acc-font);
+  color: var(--acc-fg-soft);
+}
+
+.menuLabelOn {
+  color: var(--acc-fg);
+}
+
+.menuTag {
+  font: 10px var(--acc-mono);
+  color: var(--acc-fg-faint);
+}
+
+.menuTagDanger {
+  color: var(--acc-bad-light);
+}
+
+.menuSub {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--acc-fg-faint);
+  margin-top: 1px;
+  text-wrap: pretty;
+}
+
+/* A placeholder in the place of the text or the button while the list is still loading - with the same
+   breathing as a tab's working dot, so as not to start an animation of its own for the sake of one thing. */
+.skeletonBar {
+  display: inline-block;
+  border-radius: var(--acc-r-sm);
+  background: var(--acc-bg-control);
+  animation: acc-pulse 1.5s ease-in-out infinite;
+}
+
+/* --- The selection menu ---------------------------------------------------- */
+
+/* The coordinates are the screen's, hence the positioning from the window: inside the scrolling feed the
+   menu rode downwards along with the scroll. */
+.selection {
+  position: fixed;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--acc-line-strong);
+  border-radius: var(--acc-r-xl);
+  background: var(--acc-bg-panel);
+  box-shadow: var(--acc-shadow-popover);
+}
+
+.selectionButton {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: var(--acc-r-md);
+  font: 500 11.5px var(--acc-font);
+  color: var(--acc-fg);
+}
+
+.selectionButton:hover {
+  background: var(--acc-line-strong);
+}
+
+.selectionBranch {
+  color: var(--acc-branch-light);
+}
+
+.selectionBranch:hover {
+  background: var(--acc-branch-16);
+}
+
+.selectionDivider {
+  width: 1px;
+  height: 15px;
+  background: var(--acc-line-strong);
+}
+
+/* --- The login screen ------------------------------------------------------- */
+
+/* Exactly at the panel's centre, both horizontally and vertically: the screen fills it whole, and text
+   pressed to the left edge reads as having slipped there by accident rather than as a screen in its own
+   right. */
+.gate {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px 20px;
+  background: var(--acc-bg);
+  text-align: center;
+}
+
+/* A paragraph carries the browser's own margin, and this screen is laid out on the gap above: with both
+   in force every line stood a line and a half from the next, and a screen of five short lines read as
+   five unrelated ones. Zeroed the same way .emptyState below zeroes them, and for the same reason. */
+.gate p {
+  margin: 0;
+}
+
+.gateTitle {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--acc-fg);
+}
+
+.gateText {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--acc-fg-faint);
+  text-wrap: pretty;
+  max-width: 380px;
+}
+
+.gateButton {
+  height: 28px;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  margin-top: 4px;
+  border-radius: var(--acc-r-lg);
+  background: var(--acc-accent);
+  color: var(--acc-on-accent);
+  font: 600 12px var(--acc-font);
+}
+
+.gateButton:hover {
+  background: var(--acc-accent-hover);
+}
+
+.gateButton:active {
+  background: var(--acc-accent-active);
+}
+
+.gateButton:disabled {
+  background: var(--acc-bg-control);
+  color: var(--acc-fg-ghost);
+}
+
+.gateGhost {
+  font: 11.5px var(--acc-mono);
+  color: var(--acc-fg-faint);
+  text-decoration: underline;
+}
+
+/* The last line of the screen and the least of it: without a gap of its own it read as one more way to
+   switch accounts, sitting as close to that row as the names sit to each other. */
+.gate > .gateGhost {
+  margin-top: 6px;
+}
+
+.gateGhost:hover {
+  color: var(--acc-fg);
+}
+
+/* The offer of another account, kept together and set apart from the button above it: one gap for the
+   whole screen made "Or switch to another account" read as the next line of the sign-in itself. */
+.gateSwitch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+/*
+ * The machine's other accounts - the way out when the one in force cannot be signed in.
+ *
+ * Buttons rather than the underlined ghosts they used to be: those are the same thing "Check again" is,
+ * and three identical links one under another say nothing about which of them switches an account. And a
+ * row of their own rather than .gateRow - that one is as wide as the field it was written for and holds
+ * its contents at the left edge, so on a wide panel the names sat off to one side of a screen that is
+ * centred to the pixel.
+ */
+.gateAccounts {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  max-width: 380px;
+}
+
+.gateAccount {
+  height: 26px;
+  padding: 0 12px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-lg);
+  background: var(--acc-bg-control);
+  color: var(--acc-fg-dim);
+  font: 11.5px var(--acc-font);
+}
+
+.gateAccount:hover {
+  border-color: var(--acc-line-hover);
+  background: var(--acc-bg-control-hover);
+  color: var(--acc-fg);
+}
+
+/* The sign-in could not even start (see the `authProblem` message). Wrapped to the same width as the
+   text above it, because it is a sentence and not a status line. */
+.gateProblem {
+  max-width: 380px;
+  font: 11.5px/1.6 var(--acc-font);
+  color: var(--acc-warn-light);
+}
+
+.gateWaiting {
+  font: 11.5px/1.6 var(--acc-mono);
+  color: var(--acc-fg-fainter);
+  animation: acc-pulse 1.8s infinite;
+}
+
+/* A manual path to the CLI: the field and the button on one line - the input and its confirmation side by
+   side. */
+.gateRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  max-width: 380px;
+}
+
+.gateInput {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-lg);
+  background: var(--acc-bg-control);
+  font: 11.5px var(--acc-mono);
+  color: var(--acc-fg);
+}
+
+.gateInput:focus {
+  outline: none;
+  border-color: var(--acc-accent);
+}
+
+/* The list of the places checked, folded up: it is long and needed only when something has gone wrong. */
+.gateDetails {
+  max-width: 380px;
+  text-align: left;
+}
+
+.gateSummary {
+  font: 11.5px var(--acc-mono);
+  color: var(--acc-fg-faint);
+  cursor: pointer;
+}
+
+.gateList {
+  margin: 6px 0 0;
+  padding-left: 14px;
+  font: 10.5px/1.7 var(--acc-mono);
+  color: var(--acc-fg-fainter);
+  word-break: break-all;
+}
+
+/* The last tab was closed - the title and the button go at the panel's centre, as on the login screen. */
+.emptyState {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: var(--acc-bg);
+  text-align: center;
+}
+
+/* The gap alone was not the gap: a paragraph carries the browser's own margin, and the button a top
+   margin meant for the login screen, so the greeting and the button it belongs to stood a line and a half
+   apart. Zeroed here rather than on the shared classes - the login screen is laid out around them. */
+.emptyState > p,
+.emptyState > .gateButton {
+  margin: 0;
+}
+
+/* --- The fallback view without an embedded browser -------------------------- */
+
+.unsupported {
+  padding: 16px;
+  font-size: 12px;
+  color: var(--acc-fg-dim);
+}

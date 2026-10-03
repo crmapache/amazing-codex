@@ -1,0 +1,2622 @@
+/* The output feed and all its cards. The order of the sections matches the order in the design. */
+
+/* The animation keyframes live here rather than in a shared file: a CSS module renames animation names
+   just as it renames classes, and a reference to global keyframes silently turns into nothing - the
+   animation simply does not run. */
+
+@keyframes acc-shimmer {
+  from {
+    background-position: 160% 0;
+  }
+
+  to {
+    background-position: -60% 0;
+  }
+}
+
+@keyframes acc-pulse {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+/* The wrapper is needed apart from .feed: the "down" button has to stand still while the feed itself
+   scrolls rather than ride along with the contents like an ordinary child of a scrolling block. */
+.feedWrap {
+  flex: 1 1 0;
+  min-width: 0;
+  /* On a phone this wrapper is a row in a column (see .thread in mobile.module.css), and a flex item is
+     not allowed to shrink below its contents unless told so: without this the feed would grow the column
+     instead of scrolling inside it, and the end of the conversation would sit below the edge of the
+     screen with nothing able to reach it. */
+  min-height: 0;
+  display: flex;
+  position: relative;
+}
+
+.feed {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* The one scroller of the conversation, on a phone as much as at the desk (see .thread in
+     mobile.module.css). A pull past the end stays here rather than travelling on to the page behind it:
+     on a touchscreen that is what turns the end of a feed into a bounce of the whole screen. */
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+  /*
+   * The slack at the top is the pinned strip's own height (see --acc-pins-height, written by Feed).
+   *
+   * The strip lies OVER the feed rather than above it, so without this the first lines of a conversation
+   * would sit under it with nothing left to scroll and no way to reach them at all. With it the strip
+   * covers a piece of the scroll that has nothing in it, and the conversation passes under the shelf
+   * only while it is scrolled past.
+   */
+  padding: calc(14px + var(--acc-pins-height, 0px)) 0 18px;
+  position: relative;
+  /* A floating thumb of our own is drawn by ScrollThumb - the native scrollbar is not wanted here even as
+     something visible, it would reserve width and move the content when it appeared. */
+  scrollbar-width: none;
+  /* The feed is read and selected with a mouse - the cursor says so. The buttons inside override it with
+     a pointer of their own, as on an ordinary web page. */
+  cursor: text;
+  /* The feed's contents are what a terminal shows, so the font is the same: the console one from the
+     IDE's settings (see IdeTypography.kt). The same font is typed in in the input field so that what is
+     typed and what is sent look alike. The interface font is left to the wrapping around - the buttons,
+     the header, the menus. */
+  font-family: var(--acc-mono);
+}
+
+.feed::-webkit-scrollbar {
+  display: none;
+}
+
+.jumpToBottom {
+  /* One figure for both sides, and only then the fingertip: raising the height alone to --acc-hit while
+     the width stayed at thirty-four turned the circle into an egg on the phone (see tokens.css - on a
+     touchscreen --acc-hit is 44, on a desktop it is auto and the button keeps its own size). */
+  --acc-jump-size: 34px;
+  position: absolute;
+  right: 20px;
+  bottom: 16px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--acc-jump-size);
+  height: var(--acc-jump-size);
+  flex: none;
+  border-radius: 999px;
+  background: var(--acc-bg-control);
+  border: 1px solid var(--acc-line-strong);
+  color: var(--acc-fg);
+  box-shadow: var(--acc-shadow-menu);
+}
+
+/* Under a thumb the same circle, grown to a fingertip - see --acc-hit. */
+[data-acc-density='touch'] .jumpToBottom {
+  --acc-jump-size: var(--acc-hit);
+}
+
+@media (hover: hover) {
+  .jumpToBottom:hover {
+    background: var(--acc-bg-control-hover);
+  }
+}
+
+.jumpToBottomBadge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--acc-accent);
+  color: var(--acc-on-accent);
+  font: 600 10px/17px var(--acc-mono);
+  text-align: center;
+}
+
+/* --- The messages pinned over the feed ------------------------------------- */
+
+/*
+ * The strip of pinned messages, lying OVER the top of the feed (see PinnedBar).
+ *
+ * Over rather than above it, so that pinning moves nothing on screen: a strip in the flow takes its
+ * height out of the scroller, and everything being read slides by that much the moment a pin goes up or
+ * comes off. What it costs instead is a piece of the scroll's top, and that is given back as slack in
+ * .feed - so the shelf covers empty room rather than the first message.
+ *
+ * Below everything already on the ladder over the feed: the veil and the capsule of a search (21 and 22)
+ * and the "down" button (20). The veil is meant to hide the feed whole, this strip included; the capsule
+ * is the control of the moment and may not be buried under a shelf.
+ *
+ * It carries the feed's own background rather than the panel's - it belongs to the conversation, not to
+ * the chrome around it - and it is opaque: text sliding under half-transparent text is unreadable twice
+ * over. The line and the shadow under it are what say the conversation passes beneath rather than ends.
+ */
+.pins {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 19;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px var(--acc-feed-gutter, 16px);
+  background: var(--acc-bg);
+  border-bottom: 1px solid var(--acc-line);
+  box-shadow: var(--acc-shadow-popover);
+}
+
+.pin {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+/*
+ * The line itself is the button: the whole of it is the target, not the few words that happen to be
+ * legible. What is on it is fixed in width except the text, which takes whatever is left and ends in an
+ * ellipsis the browser places - a count of characters could not follow the panel being resized.
+ */
+.pinGo {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--acc-hit);
+  padding: 3px 5px;
+  border-radius: var(--acc-r-sm);
+  text-align: left;
+  /*
+   * One line box for everything on the row, and that is what makes the letters line up.
+   *
+   * Left to themselves the caption and the line would each get a line box of their own, and two boxes
+   * merely centred against each other put their letters a pixel apart - which on a row of two words is
+   * the one thing the eye catches. The same trouble .userHead answers with baseline alignment, and that
+   * is not open here: .pinText clips its overflow to get its ellipsis, and a clipping box reports its own
+   * bottom edge as its baseline rather than its text's. So the row hands both the same line, and the
+   * caption takes the same size as well (see .pinWho); the pin is centred in that same box.
+   */
+  line-height: 14px;
+}
+
+@media (hover: hover) {
+  .pinGo:hover {
+    background: var(--acc-bg-control);
+  }
+}
+
+.pinMark {
+  flex: none;
+  color: var(--acc-fg-fainter);
+}
+
+/*
+ * Who said it - the caption a message of one's own wears in its head (see .label), only at the size of
+ * the line it stands on rather than at its own.
+ *
+ * That size is the whole of the alignment. Two font sizes on one row put their baselines a pixel apart
+ * whatever the line-height, because the ascent goes with the size - and no nudge of a fixed number of
+ * pixels can fix it, since the feed is set in whatever console font the IDE is configured with. Same
+ * font, same size, same line: the baselines coincide exactly, in every font.
+ */
+.pinWho {
+  flex: none;
+  font-family: var(--acc-mono);
+  font-size: var(--acc-fs-meta, 11px);
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  color: var(--acc-fg-faint);
+}
+
+.pinText {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--acc-fs-meta, 11px);
+  line-height: inherit;
+  color: var(--acc-fg-body);
+}
+
+.pinOff {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  min-height: var(--acc-hit);
+  border-radius: var(--acc-r-sm);
+  color: var(--acc-fg-fainter);
+  font-size: 13px;
+  line-height: 1;
+}
+
+@media (hover: hover) {
+  .pinOff:hover {
+    background: var(--acc-bg-control);
+    color: var(--acc-fg);
+  }
+}
+
+.row {
+  padding: 0 var(--acc-feed-gutter, 16px);
+}
+
+/*
+ * The row a search jumped to, lit for a moment (see Feed.focus). A wash across the whole row rather
+ * than an outline around the card: the cards have gutters and shapes of their own, and an outline
+ * hugging one of them reads as a focus ring on a button. The wash fades on its own; the row itself is
+ * not moved or resized, so nothing under it shifts.
+ */
+.rowLit {
+  animation: acc-row-lit 1.8s ease-out both;
+}
+
+@keyframes acc-row-lit {
+  0%,
+  60% {
+    background: var(--acc-accent-soft);
+    box-shadow: inset 3px 0 0 var(--acc-accent);
+  }
+  100% {
+    background: transparent;
+    box-shadow: inset 3px 0 0 transparent;
+  }
+}
+
+/*
+ * The words a search matched, wherever they stand (see Feed.paint). A registered highlight rather than
+ * a mark element: the text is not wrapped in anything, so chips, code and links keep their markup and
+ * the reveal wave keeps its single line. Only colours may be set here - that is all the browser allows
+ * on a highlight, and all that is wanted.
+ */
+::highlight(acc-search) {
+  /* The same paint as the marks in the search window's list. A wash of twelve percent was tried first
+     and was lost on a card: a highlight in running text has to be found from across the panel. */
+  background-color: var(--acc-warn-32);
+  color: var(--acc-warn-light);
+}
+
+/* --- The empty state ------------------------------------------------------- */
+
+.empty {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--acc-fg-faint);
+}
+
+/* Both lines drop the browser's paragraph margin: the gap above belongs to the flex column, and left
+   as it was it stood on top of a line's worth of margin from each of them. */
+.emptyTitle {
+  margin: 0;
+  font-size: 13px;
+  color: var(--acc-fg-dim);
+}
+
+.emptyHint {
+  margin: 0;
+  font: var(--acc-fs-meta, 11px) var(--acc-mono);
+  color: var(--acc-fg-fainter);
+}
+
+/* --- The user's message ---------------------------------------------------- */
+
+.user {
+  /* For the pair of buttons in the corner - they stand where the reply's copy button stands, see
+     .userActions. */
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 16px 0 12px;
+  padding: calc(9px + var(--acc-card-grow, 0px)) calc(11px + var(--acc-card-grow, 0px));
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-xl);
+  background: var(--acc-bg-card);
+}
+
+/* By the baseline rather than by the middle: the label and the time are two pieces of text of different
+   sizes and different line heights, and centring their boxes leaves the letters themselves sitting a
+   pixel apart - which is exactly what one notices in a heading two words long. */
+.userHead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.label {
+  font: 600 10px/1 var(--acc-mono);
+  letter-spacing: 0.09em;
+  color: var(--acc-fg-faint);
+}
+
+.time {
+  font: var(--acc-fs-label, 10px) var(--acc-mono);
+  color: var(--acc-fg-fainter);
+}
+
+.spacer {
+  flex: 1;
+}
+
+/*
+ * The pair of them, in the card's top right corner - at the very same 7px from the edges as the copy
+ * buttons on a reply (see .textActions).
+ *
+ * Absolute rather than a child of the head, and that is what makes the two kinds of card agree: in the
+ * flow they sat at the head's own padding, 11px in, so the buttons jumped sideways as the pointer went
+ * from a message of one's own to the answer under it - and being 20px squares four pixels apart, the
+ * jump was the most visible thing about them. Out of the flow they take no room from the head either,
+ * so nothing about the label and the time depends on how many buttons there are.
+ *
+ * The gap is 4px rather than the head's own 8: they are one pair doing one kind of thing, and that is
+ * the distance the bubble and the heart keep down by the input field (see .endPair in shell.module.css).
+ */
+.userActions {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/*
+ * The two buttons in a sent message's head: copy it out, and take it back into the input field.
+ *
+ * Always visible rather than appearing on hover, unlike the one on a code block. Two reasons, and the
+ * second is the stronger: there is no hover on a phone, where the copy button is the only way to get a
+ * message out at all; and the whole reason these exist is that a person could not find the ways back to
+ * their own message that the panel already had (the up arrow in the field, a selection copied with the
+ * chips resolved) - a button that hides until the pointer finds it would keep that problem.
+ *
+ * Faint, and lit only under the pointer: the head is a label and a time, and two bright squares beside
+ * them would read as the loudest thing in a message the person wrote themselves.
+ */
+.userAction {
+  /* Auto on a desktop, a fingertip on a touchscreen - see --acc-hit in tokens.css. */
+  min-height: var(--acc-hit);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  border-radius: var(--acc-r-sm);
+  background: none;
+  color: var(--acc-fg-faint);
+  font-size: 11px;
+}
+
+@media (hover: hover) {
+  .userAction:hover {
+    background: var(--acc-bg-control);
+    color: var(--acc-fg);
+  }
+}
+
+/*
+ * An ordinary block flow rather than flex - exactly as in the input field this message came from: the
+ * chips inside it are inline-flex, so the text and the attachments stand like words and pictures in a
+ * paragraph. Flex here would lay the children out along its own axis rather than as text, and the line
+ * breaks between them would disappear: a message typed over several lines stuck together into one in the
+ * feed.
+ *
+ * A long word without spaces (a path, a link, a hash) is broken by force in the flow: previously the
+ * flex's wrapping saved us from it, and left alone it stretches the card sideways.
+ */
+/* The same shade as the agent's answer (see .text), not the full foreground: the two are the same size
+   and the same face, and the brighter one read as the larger one. */
+.userBody {
+  font-size: var(--acc-fs-body, 13px);
+  line-height: var(--acc-leading, 1.55);
+  color: var(--acc-fg-body);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* A piece the panel filled in itself - a repeat of the agent's question beside the answer to it (see
+   UserToken.echo). The same dimming trick as .userQuote: the question has been read above, the attention
+   has to go to the answer. */
+.userEcho {
+  color: var(--acc-fg-faint);
+}
+
+/* A chip has no side margins of its own - for exactly the same reason as in the input field (see .token in
+   composer.module.css): the space around an attachment stands in the message's text itself, and a margin
+   added up with it into a gap and a half. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px 2px;
+  border: 1px solid;
+  border-radius: var(--acc-r-sm);
+  font: var(--acc-fs-meta, 11px) var(--acc-mono);
+  /* The baseline of a centred inline-flex without a text line of its own the browser synthesises from the
+     box's bottom edge - the chip hangs below the line. middle is the same trick as the token in the input
+     field (composer.module.css), which is where the chip comes here from. */
+  vertical-align: middle;
+}
+
+.chipFile {
+  background: var(--acc-accent-soft);
+  border-color: var(--acc-accent-line);
+  color: var(--acc-accent-light);
+}
+
+/* A chip that opens its file - a button in the chip's own clothes. The text inside goes left (a button
+   centres it) and the pointer says it does something; the dotted line under the pointer is the mark every
+   path that opens carries in this panel (see .pathLink): a solid one here means a link out into a browser.
+   The colours stay the kind's - a button would take the system's own. */
+.chipOpens {
+  text-align: left;
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .chipOpens:hover {
+    text-decoration: underline dotted;
+    text-underline-offset: 2px;
+  }
+}
+
+.chipImg {
+  background: var(--acc-agent-soft);
+  border-color: var(--acc-agent-line);
+  color: var(--acc-agent-light);
+}
+
+.chipDir {
+  background: var(--acc-ok-soft);
+  border-color: var(--acc-ok-line);
+  color: var(--acc-ok-light);
+}
+
+.chipCmd {
+  background: var(--acc-warn-soft);
+  border-color: var(--acc-warn-line);
+  color: var(--acc-warn-light);
+}
+
+/* A reference to a piece of a file from the editor: the same colour as the side branches - both are tied
+   to a particular place rather than to a whole file. */
+.chipRef {
+  background: var(--acc-branch-12);
+  border-color: var(--acc-branch-32);
+  color: var(--acc-branch-light);
+}
+
+/* A quote selected in the agent's own output - a colour of its own, overlapping none of the other
+   attachments. */
+.chipQuote {
+  background: var(--acc-quote-12);
+  border-color: var(--acc-quote-32);
+  color: var(--acc-quote);
+}
+
+/* A collapsed paste from the clipboard - neutral, see --acc-paste in tokens.css. */
+.chipPaste {
+  background: var(--acc-paste-12);
+  border-color: var(--acc-paste-32);
+  color: var(--acc-paste);
+}
+
+/* A paste with nothing after it in the message takes up a whole line. */
+.chipPasteBlock {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+  width: 100%;
+  margin-top: 3px;
+  padding: 5px 8px 6px;
+}
+
+.chipPasteCount {
+  font: var(--acc-fs-label, 10px) var(--acc-mono);
+  color: var(--acc-fg-faint);
+}
+
+/* A collapsed paste is the one chip that answers a click - it opens the text inside it (see PasteView).
+   The pointer says so before the click: everything else in a sent message is inert.
+
+   It is a button, so it starts from the chip's own look rather than the browser's idea of one: the text
+   inside goes left (a button centres it), and the colour is the chip's (a button would take the system's
+   own). */
+.chipPasteOpens {
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .chipPasteOpens:hover {
+    border-color: var(--acc-paste);
+  }
+}
+
+/* Three lines - as many as an ordinary paragraph of an answer would take: beyond that it is no longer a
+   reminder of what was pasted but a second conversation on top of the first. */
+.chipPasteText {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--acc-fg-dim);
+  line-height: 16px;
+}
+
+/* --- An opened paste ------------------------------------------------------- */
+
+/* Opened, it is no longer a caption of an attachment but the text itself, so it drops the chip's tinted
+   background for the same deep one the code blocks of an answer stand on. */
+.chipPasteFull {
+  background: var(--acc-bg-deep);
+  cursor: default;
+}
+
+.chipPasteHead {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* The line count doubles as the way back: it is where the eye already is, and a paste closes where it
+   opened. The caption keeps the collapsed one's look - only the pointer says it is pressable. */
+.chipPasteToggle {
+  min-height: var(--acc-hit);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--acc-fg-faint);
+  font: var(--acc-fs-label, 10px) var(--acc-mono);
+  cursor: pointer;
+}
+
+/* The arrow is sized for the head of a call, where the line is taller than this one. */
+/* On the middle of the row, not at its top: .caret is written for a call's head, where it is pinned to
+   the first line of a box that goes on for another twenty pixels (see .caret). Here the row is one line
+   of text, and an arrow pinned to its top stands two pixels above the letters beside it. */
+.chipPasteHead .caret {
+  height: auto;
+  align-self: center;
+}
+
+@media (hover: hover) {
+  .chipPasteToggle:hover {
+    color: var(--acc-fg);
+  }
+}
+
+/* Always visible, unlike the one on a code block: a paste is opened on purpose, and the button is half
+   the reason for opening it.
+
+   The negative margin is what keeps the row still. The button is twenty pixels tall and the caption beside
+   it thirteen, so in the flow it stretched the row to its own height - and the caption, centred in a row
+   that had grown, moved down by the difference the moment the paste opened. The button keeps its size (it
+   is a target for a finger), and the row keeps the height of its text. */
+.chipPasteCopy {
+  min-height: var(--acc-hit);
+  margin-left: auto;
+  margin-block: -4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  border-radius: var(--acc-r-sm);
+  background: none;
+  color: var(--acc-fg-faint);
+  font-size: 11px;
+}
+
+@media (hover: hover) {
+  .chipPasteCopy:hover {
+    background: var(--acc-bg-control);
+    color: var(--acc-fg);
+  }
+}
+
+/* The text as it was pasted, monospaced like the code blocks of an answer. It scrolls inside itself
+   rather than growing the message: half the panel is as much as a piece of the past may take before the
+   conversation around it stops being visible at all. */
+.chipPasteBody {
+  max-height: 46vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--acc-fg-dim);
+  font: var(--acc-fs-mono, 11.5px) var(--acc-mono);
+  line-height: 1.5;
+  /* The wheel stops here instead of scrolling the feed on behind it once the end is reached. */
+  overscroll-behavior: contain;
+}
+
+/* Said only when the text was cut - see pasteBody. */
+.chipPasteCut {
+  font: var(--acc-fs-label, 10px) var(--acc-mono);
+  color: var(--acc-fg-fainter);
+}
+
+/* A quote inside a message: the same trick as in the Claude chat - a stripe on the left and dimmed text so
+   that it cannot be mistaken for one's own words. */
+.userQuote {
+  margin: 0 0 2px;
+  padding: 4px 0 4px 9px;
+  border-left: 2px solid var(--acc-accent);
+  background: var(--acc-accent-08);
+  border-radius: 0 var(--acc-r-sm) var(--acc-r-sm) 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--acc-fg-faint);
+  white-space: pre-wrap;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+/* --- The answer's text ----------------------------------------------------- */
+
+/* A capsule rather than bare text running on with the rest of the feed - the same trick as the user's
+   message (a border instead of a fill: quieter, but it is still visible where the technical logs ended and
+   the genuine answer began). */
+.text {
+  position: relative;
+  margin: 8px 0 10px;
+  /* The right side carries the copy button, so it is the padding plus the button's own room. */
+  padding: calc(10px + var(--acc-card-grow, 0px)) calc(34px + var(--acc-card-grow, 0px))
+    calc(10px + var(--acc-card-grow, 0px)) calc(11px + var(--acc-card-grow, 0px));
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-xl);
+  font-size: var(--acc-fs-body, 13px);
+  line-height: var(--acc-leading, 1.62);
+  color: var(--acc-fg-body);
+  /* A word with no room to break - a path in backticks, a hash, a link - is broken by force, the same
+     rule the person's own message has (see .userBody). On a phone a path to a file in a project runs the
+     whole width of the screen and then some, and left alone it ran out of the card sideways; the fenced
+     blocks are not touched by this - they scroll inside their own wrap. */
+  overflow-wrap: anywhere;
+}
+
+/* Two buttons in the corner instead of one, so the room they stand in is that much wider. */
+.textPinnable {
+  padding-right: calc(58px + var(--acc-card-grow, 0px));
+}
+
+/*
+ * The buttons in an answer's top right corner - copy it out, and pin it over the conversation.
+ *
+ * An answer has no head to hang them off the way a message of one's own does (see .userActions), so the
+ * room they stand in is the card's own right padding. That is why the second one is paid for only where
+ * it exists: .textPinnable widens the padding, and an answer on a screen with no pinning (the phone) is
+ * laid out exactly as it always was.
+ */
+.textActions {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.textAction {
+  /* Auto on a desktop, a fingertip on a touchscreen - see --acc-hit in tokens.css. */
+  min-height: var(--acc-hit);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  border-radius: var(--acc-r-sm);
+  color: var(--acc-fg-faint);
+  font-size: 11px;
+}
+
+@media (hover: hover) {
+  .textAction:hover {
+    background: var(--acc-bg-control);
+    color: var(--acc-fg);
+  }
+}
+
+/*
+ * The pin button of a card while its message is pinned - in both corners it stands in (.userAction and
+ * .textAction).
+ *
+ * Lit rather than merely filled: the strip is at the top of the feed and the card may be a screen away
+ * from it, so this button is the only thing that answers "is this the one up there?" without scrolling.
+ * It stands after both of those on purpose - all three are single classes, and the last one written is
+ * the one that decides the colour.
+ */
+.pinOn,
+.pinOn:hover {
+  color: var(--acc-accent);
+}
+
+/*
+ * A pin button with nowhere to pin to: three are up already (see PIN_LIMIT).
+ *
+ * Dimmed and inert rather than gone - the hint on it is the only line that says why it will not work and
+ * what to do about it, and a button that disappears takes that line with it. It answers to nothing under
+ * the pointer either: a square that lights up and then does nothing reads as something broken.
+ */
+.pinDead,
+.pinDead:hover {
+  background: none;
+  color: var(--acc-fg-faint);
+  opacity: 0.4;
+  cursor: default;
+}
+
+/*
+ * The bullet and the text used to be separate flex items (a span + a div) - when copying, the browser
+ * inserts a line break at the boundary of block elements regardless of the fact that visually they are on
+ * one line, so the bullet was copied as a separate line above the text. Now this is one inline flow in one
+ * block - copied as one line, as it looks. The hanging indent (padding-left + a negative text-indent) gives
+ * the same "hanging" look: the bullet sticks out to the left while wrapped lines align to the text rather
+ * than to the bullet.
+ */
+.para {
+  margin: 0 0 6px;
+  text-wrap: pretty;
+}
+
+.paraBullet {
+  padding-left: 16px;
+  text-indent: -16px;
+}
+
+/* The same bold text as an ordinary paragraph has (see .strong in PartView), but with a gap above -
+   otherwise a heading reads as a continuation of the paragraph above it rather than as the start of a new
+   section, especially when another bold line follows right after. For the answer's very first paragraph the
+   gap is removed below, along with
+   .text > *:first-child. */
+.paraHeading {
+  margin-top: 14px;
+}
+
+/* A markdown quote (a line with a ">") - the same trick as .userQuote and the same colour as .chipQuote: a
+   stripe on the left and dimmed text so that it is not mistaken for the agent's own words. */
+.paraQuote {
+  padding: 3px 0 3px 10px;
+  border-left: 2px solid var(--acc-quote-32);
+  color: var(--acc-fg-dim);
+}
+
+.bullet {
+  font: 12px/var(--acc-leading, 1.62) var(--acc-mono);
+  color: var(--acc-fg-fainter);
+}
+
+.code {
+  border-radius: var(--acc-r-xs);
+  background: var(--acc-neutral-12);
+  color: var(--acc-agent-light);
+  font-family: var(--acc-mono);
+  font-size: 11.8px;
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .code:hover {
+    background: var(--acc-neutral-16);
+  }
+}
+
+/* A path in backticks opens the file rather than copying it (see InlineCode). Underlined only under the
+   pointer, and dotted: a solid line would read as a web link, while the eye still needs telling that this
+   piece leads somewhere and the one beside it does not. */
+@media (hover: hover) {
+  .codeFile:hover {
+    text-decoration: underline dotted;
+    text-underline-offset: 2px;
+  }
+}
+
+/* A path the agent wrote as ordinary text, or inside a fenced block: a click opens the file. It has to
+   read as the text around it - a coloured or boxed path would repaint half of a list of files - so the
+   only mark is the pointer, and a dotted underline once the pointer is on it. Inline, so a path inside a
+   <pre> keeps the block's line breaks. */
+.pathLink {
+  display: inline;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .pathLink:hover {
+    text-decoration: underline dotted;
+    text-underline-offset: 2px;
+  }
+}
+
+/* The only answer to a click that is possible here: one cannot look into the clipboard. */
+.codeCopied,
+.codeCopied:hover {
+  background: var(--acc-ok-12);
+  color: var(--acc-ok-text);
+}
+
+.mark {
+  border-radius: var(--acc-r-xs);
+  background: var(--acc-branch-16);
+  box-shadow: inset 0 -1px 0 var(--acc-branch);
+  color: var(--acc-fg);
+}
+
+.strong {
+  font-weight: 600;
+  color: var(--acc-fg);
+}
+
+/* Italic carries no colour of its own: it is a shade of the sentence it stands in, not a piece singled
+   out of it the way bold is. Written together (***so***) the two simply add up. */
+.em {
+  font-style: italic;
+}
+
+.link {
+  color: var(--acc-branch-light);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .link:hover {
+    text-decoration: underline;
+  }
+}
+
+/* The wrapper holds the block's padding and the room for the button: the pre itself scrolls horizontally,
+   and a button inside it would ride away with a long line. */
+.codeBlockWrap {
+  position: relative;
+  margin: 2px 0 8px;
+}
+
+.codeCopy {
+  /* Auto on a desktop, a fingertip on a touchscreen - see --acc-hit in tokens.css. */
+  min-height: var(--acc-hit);
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--acc-r-sm);
+  background: var(--acc-bg-deep);
+  color: var(--acc-fg-faint);
+  font-size: 11px;
+  opacity: 0;
+}
+
+/* Focus is not hover: a keyboard can be attached to a tablet, and this half has to keep working where
+   the other one is switched off below. */
+.codeCopy:focus-visible {
+  opacity: 1;
+}
+
+@media (hover: hover) {
+  .codeBlockWrap:hover .codeCopy {
+    opacity: 1;
+  }
+}
+
+@media (hover: hover) {
+  .codeCopy:hover {
+    background: var(--acc-bg-control);
+    color: var(--acc-fg);
+  }
+}
+
+.codeBlock {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-lg);
+  background: var(--acc-bg-deep);
+  font: var(--acc-fs-mono, 11.5px) var(--acc-mono);
+  line-height: var(--acc-code-leading, 18px);
+  color: var(--acc-fg-mono);
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+
+/* Formulas.
+
+   KaTeX's own stylesheet travels with the library and therefore reaches the page AFTER this file, so a
+   rule of equal weight here loses to it. Every override below reaches through its wrapper on purpose -
+   `.formulaBlock :global(.katex-display)` is 0,2,0 against katex's 0,1,0 - rather than naming the foreign
+   class on its own. `:global` appears nowhere else in the panel: it is what a CSS module needs in order to
+   name a class somebody else wrote, the same trap the head of this file describes for keyframes.
+
+   Nothing here sets a size or a colour. `.katex` is 1.21em of whatever it stands in and takes its colour
+   from currentColor, so a formula follows the console font the IDE hands down, the phone's density and
+   both themes without being told about any of them. */
+.formulaBlock {
+  /* The rhythm the blocks of an answer stand in - the same as .codeBlockWrap and .tableWrap. KaTeX asks
+     for 1em above and below, which at the feed's body size stands a formula noticeably further from its
+     neighbours than the code block right beside it. */
+  margin: 2px 0 8px;
+  /* .katex neither wraps nor scrolls, so a formula wider than the panel - 350px at its narrowest - is
+     simply cut off, with nothing to reach its right half by. The padding pays for the same overflow: a box
+     that scrolls clips a tall fraction or the limits of a sum at its own edge. */
+  overflow-x: auto;
+  padding: 2px 0;
+}
+
+.formulaBlock :global(.katex-display) {
+  margin: 0;
+}
+
+/* Centred content in a box that scrolls loses its left edge first, and left is also where the code block
+   and the table above and below it start. */
+.formulaBlock :global(.katex-display),
+.formulaBlock :global(.katex-display) > :global(.katex) {
+  text-align: left;
+}
+
+/* The hidden half of a formula is hidden by a clip rather than taken out of the layout, so a selection
+   carries it and the formula comes out of the clipboard twice over. The feed answers that by swapping the
+   whole node for its source (see COPY_ATTRIBUTE in Formula.tsx); this is the second line, for the copy
+   paths that never reach that swap. The MathML stays in the accessibility tree either way - it is the only
+   half a screen reader can read. */
+.math :global(.katex-mathml) {
+  user-select: none;
+}
+
+/* The formula as it was written: while the library is still on its way, and for one KaTeX would not take.
+   In the console font, because that is what it is at that moment - text. */
+.formulaSource {
+  font-family: var(--acc-mono);
+  white-space: pre-wrap;
+}
+
+/* The wrapper holds the border and the rounding and scrolls horizontally itself - an answer may hold more
+   columns than the panel's width can show without wrapping the headings sideways. */
+.tableWrap {
+  margin: 2px 0 8px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-lg);
+  overflow: auto;
+}
+
+.table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12.5px;
+}
+
+.table th,
+.table td {
+  padding: 5px 9px;
+  border: 1px solid var(--acc-line);
+  text-align: left;
+  vertical-align: top;
+}
+
+/* The table's top and left borders are already given by .tableWrap - the edge cells' own on top of it
+   would read twice as thick along exactly those two sides. thead rather than tr:first-child - the same
+   "first in its parent" line also holds for the body's first row, which does need a top border: it is the
+   boundary with the head. */
+.table thead th {
+  border-top: none;
+}
+
+.table tr th:first-child,
+.table tr td:first-child {
+  border-left: none;
+}
+
+.table th {
+  background: var(--acc-bg-card);
+  color: var(--acc-fg);
+  font-weight: 600;
+}
+
+.tableCellCenter {
+  text-align: center;
+}
+
+.tableCellRight {
+  text-align: right;
+}
+
+/* The last paragraph or code block in an answer needs no bottom margin - there is nothing else under it,
+   and .text already gives its own padding-bottom. Symmetrically at the top: if an answer begins straight
+   with a heading, its extra gap (.paraHeading) must not add up with the container's padding-top. */
+.text > *:last-child {
+  margin-bottom: 0;
+}
+
+.text > *:first-child {
+  margin-top: 0;
+}
+
+/* --- A tool call ----------------------------------------------------------- */
+
+.tool {
+  margin: 1px 0;
+  border-radius: var(--acc-r-md);
+  overflow: hidden;
+}
+
+/* On the baseline, like the feed's other rows (.think, .checkpoint, .compact): the captions here are of
+   different sizes - the chip 9.5px, the target 12px, the status 11px, the duration 10px - and a shared
+   centre by boxes puts their letters at four different heights, which is what reads as "slipped". The
+   row's height therefore grows from its contents: with a fixed height the baseline would press the whole
+   group to the top edge. */
+.toolHead {
+  /* The height of one line of the head - the chip is the tallest thing on its baseline. The caret keeps
+     to it (see .caret), and .toolHead's own floor below is built from the same number. */
+  --acc-head-line: 17px;
+  /* The gap between the row's captions. Named because the strut below has to take its own back. */
+  --acc-head-gap: 8px;
+  /* Auto on a desktop, a fingertip on a touchscreen - see --acc-hit in tokens.css. */
+  min-height: var(--acc-hit);
+  display: flex;
+  align-items: baseline;
+  gap: var(--acc-head-gap);
+  width: 100%;
+  padding: 4px 7px;
+  /* The floor under the caret: an arrow is an icon rather than a caption and stands outside the baseline
+     (see .caret), so a row whose letters are shorter than it would come out shorter than its own arrow.
+     One line plus our own 8px of padding, top and bottom. */
+  min-height: calc(var(--acc-head-line) + 8px);
+  border-radius: var(--acc-r-md);
+  text-align: left;
+}
+
+/* A zero-width copy of the chip, always in the row.
+ *
+ * The height of the row is settled by the baseline: the tallest ascent plus the deepest descent among
+ * what stands in it, and the deepest descent is the chip's - it hangs below the letters by its own
+ * padding. A collapsed group ("N tools") carries no chip (see ToolGroupCard), so without the strut the
+ * row loses those pixels, and everything being read above it in the feed jumps by them at every collapse
+ * and every new call - which is exactly what a burst of calls does, once every few seconds, for as long
+ * as the turn runs.
+ *
+ * The floor above hid this at a console font of exactly 13px and only there: any other size scales the
+ * whole page (see IdeTypography), and at any scale but one the content outgrows a floor written in round
+ * pixels. Measured: at a scale of 0.9 the row with a chip stood 1.2px taller than the same row without.
+ *
+ * The zero-width space is what gives the strut a baseline of its own - an empty box has none and would
+ * align by its bottom edge, holding nothing.
+ */
+.toolHead::before {
+  content: '\200b';
+  flex: none;
+  width: 0;
+  /* The strut is not a caption: it takes back the gap the row would leave after it. */
+  margin-right: calc(-1 * var(--acc-head-gap));
+  padding: var(--acc-chip-pad) 0;
+  font: 600 var(--acc-chip-size) / var(--acc-chip-leading) var(--acc-mono);
+}
+
+/* Only a head that opens something is entitled to a pointer - the same rule base.css keeps for a dimmed
+   button, written out here because a tool call's head is a div (see ToolCard). The group's head and the
+   subagent's card are real buttons and carry this class through `composes`, so they are named too: a row
+   that highlights under the pointer is the only hint that it opens. */
+.toolHead[role='button'] {
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  .toolHead[role='button']:hover,
+  button.toolHead:not(:disabled):hover {
+    background: var(--acc-bg-card);
+  }
+}
+
+/* The path in the head opens the file. Dotted and only under the pointer, exactly as a path in the text of
+   an answer is (see .codeFile): a solid line in this panel means a link into a browser, and a permanent
+   underline on every call's head would draw a line through half the feed. */
+@media (hover: hover) {
+  .toolTargetLink:hover {
+    text-decoration: underline dotted;
+    text-underline-offset: 2px;
+  }
+}
+
+/* The arrow is an icon rather than a caption: it has no baseline of its own to share with the words
+   beside it, and it never carries its own tap target - the row around it is already the whole button
+   (see ToolCard/ToolGroupCard/Rows). */
+.caret {
+  flex: none;
+  /* Tied to the head's first line rather than to the middle of the head.
+     The head aligns its contents by the baseline and stands a fingertip tall on a touchscreen
+     (--acc-hit): the words therefore sit at its top edge while its box goes on for another twenty
+     pixels. An arrow centred by that box dropped into the empty half and read, on a phone, as floating
+     under "N tools" rather than beside it. A box the height of the line, at the top, puts the middle of
+     the arrow and the middle of the words in one place - at any height of the head. */
+  align-self: flex-start;
+  height: var(--acc-head-line);
+  width: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--acc-fg-fainter);
+}
+
+.caret svg {
+  width: 9px;
+  height: 9px;
+  /* The turn is about the middle of the square the triangle is drawn in - and the triangle is drawn
+     symmetrically about it (see Caret), so open and closed occupy exactly the same place. */
+  transition: transform 0.12s ease-out;
+}
+
+.caretOpen svg {
+  transform: rotate(90deg);
+}
+
+/* The chip stands in the row on the baseline - like everything else in the head. But the baseline aligns
+   by letters, while beside the text what is seen is not the chip's letters but its fill: the rectangle
+   whole. That box is symmetrical around the metrics of its own, smaller font, and its middle ends up above
+   the middle of the neighbouring word - to the eye the chip hangs above the row. We drop it by a pixel so
+   that the middles meet; the shift is a painted one, does not meddle with the flow, does not touch the
+   row's height and leaves the caption inside the chip exactly at its centre. */
+.toolChip {
+  flex: none;
+  /* The same three numbers the strut is built from (see .toolHead::before): they are one measurement,
+     and written twice by hand they part company at the first edit. */
+  padding: var(--acc-chip-pad) 6px;
+  border-radius: var(--acc-r-xs);
+  font: 600 var(--acc-chip-size) / var(--acc-chip-leading) var(--acc-mono);
+  letter-spacing: 0.05em;
+}
+
+.chipThink {
+  background: var(--acc-neutral-16);
+  color: var(--acc-fg-dim);
+}
+
+.chipRead,
+.chipGrep,
+.chipTool {
+  background: var(--acc-neutral-12);
+  color: var(--acc-fg-mono);
+}
+
+.chipEdit,
+.chipWrite {
+  background: var(--acc-accent-16);
+  color: var(--acc-accent-light);
+}
+
+.chipBash {
+  background: var(--acc-warn-12);
+  color: var(--acc-warn-light);
+}
+
+.chipWeb,
+.chipMcp,
+.chipSkill {
+  background: var(--acc-branch-12);
+  color: var(--acc-branch-light);
+}
+
+/* The iris of subagents everywhere else in the panel - the chip in the header, the dropdown, the agent's
+   own screen. A launch in the feed is the same thing being talked about, and a colour of its own would
+   only hide that. */
+.chipAgent {
+  background: var(--acc-agent-12);
+  color: var(--acc-agent-light);
+}
+
+.toolTarget {
+  font: 12px var(--acc-mono);
+  color: var(--acc-fg-soft);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.toolMeta {
+  flex: none;
+  font: var(--acc-fs-meta, 11px) var(--acc-mono);
+  color: var(--acc-fg-faint);
+}
+
+.toolDur {
+  flex: none;
+  font: var(--acc-fs-label, 10px) var(--acc-mono);
+  color: var(--acc-fg-ghost);
+}
+
+.toolMeta.running {
+  color: var(--acc-accent-light);
+  animation: acc-pulse 1.6s infinite;
+}
+
+/* An agent's card keeps its errand on the head while it works (see TaskCard), so it is the ticking
+   duration that says the work is live - the same pulse, moved to the other end of the row. */
+.toolDur.running {
+  color: var(--acc-accent-light);
+  animation: acc-pulse 1.6s infinite;
+}
+
+/* Deliberately not pulsing: the agent is doing nothing, it stands and waits for you - it should not look
+   as brisk as genuine work. */
+.toolMeta.waiting {
+  color: var(--acc-warn);
+}
+
+.toolError {
+  color: var(--acc-bad-light);
+}
+
+.toolBody {
+  margin: 3px 0 8px 11px;
+  border-left: 2px solid var(--acc-line);
+  padding-left: 10px;
+}
+
+.detail {
+  font: var(--acc-fs-mono, 11.5px) var(--acc-mono);
+  line-height: var(--acc-code-leading, 18px);
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--acc-fg-dim);
+}
+
+/* The heading over the errand inside an agent's card - the same quiet caption the rest of the panel
+   labels a block with, so the two lines below it read as an answer to it. */
+.taskPromptLabel {
+  font: var(--acc-fs-meta, 11px) var(--acc-mono);
+  letter-spacing: 0.06em;
+  color: var(--acc-fg-faint);
+  margin-bottom: 4px;
+}
+
+/*
+ * The prompt as it was written. It is capped in height rather than shown whole: an errand runs to
+ * thousands of characters, and a card that pushes the whole conversation off the screen when opened is a
+ * card nobody opens twice. What does not fit scrolls inside the block - the text is there, it simply does
+ * not take the feed with it.
+ */
+.taskPrompt {
+  font: var(--acc-fs-mono, 11.5px) var(--acc-mono);
+  line-height: var(--acc-code-leading, 18px);
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--acc-fg-body);
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+/* The agent's own log under the errand - what is above is what it was asked, what is below is what it
+   did. Set apart by a gap alone: the rule that used to stand here ran the full width of the card and met
+   the line down its left side at a corner neither of them drew, so an open card read as two boxes badly
+   joined rather than as one - worst of all on a workflow, which has no errand above it and so showed the
+   rule with nothing on either side of it. Every other body in the feed is held by that left line only
+   (see toolBody). The gap is wider than the one between the log's own lines, which is what tells the two
+   blocks apart now. */
+.taskLog {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.detailOk {
+  color: var(--acc-ok-light);
+}
+
+.detailBad {
+  color: var(--acc-bad-light);
+}
+
+/* --- A group of tool calls -------------------------------------------------- */
+
+.toolGroup {
+  composes: tool;
+}
+
+.toolGroupHead {
+  composes: toolHead;
+}
+
+.toolGroupBody {
+  composes: toolBody;
+}
+
+/* --- The diff -------------------------------------------------------------- */
+
+.hunks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 2px;
+  /* The diff stands under the call's head rather than inside the body: it is shown without being asked
+     (see ToolCard), while the body opens on the caret. The indent lines it up with the head's caption. */
+  padding: 4px 0 2px 24px;
+}
+
+/* What was left out of an open diff, and the button that shows it. In the same mono as the lines above it,
+   and dim: it is the panel speaking, not a line of the file. Aligned left like them, because it stands at
+   the end of the same column. */
+.hunkMore {
+  font: var(--acc-fs-meta, 11px) var(--acc-mono);
+  color: var(--acc-fg-faint);
+  padding: 2px 2px 2px 2px;
+  text-align: left;
+  align-self: flex-start;
+}
+
+@media (hover: hover) {
+  .hunkMore:hover {
+    color: var(--acc-fg-dim);
+    text-decoration: underline dotted;
+    text-underline-offset: 2px;
+  }
+}
+
+.hunk {
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-lg);
+  background: var(--acc-bg-deep);
+  overflow: hidden;
+}
+
+.hunkHead {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 8px;
+  background: var(--acc-bg-card);
+  border-bottom: 1px solid var(--acc-line);
+}
+
+.hunkRange {
+  font: var(--acc-fs-meta, 11px) var(--acc-mono);
+  color: var(--acc-accent);
+}
+
+.hunkNote {
+  font: var(--acc-fs-meta, 11px) var(--acc-mono);
+  color: var(--acc-fg-faint);
+}
+
+.diffLine {
+  display: flex;
+  font: var(--acc-fs-mono, 11.5px) var(--acc-mono);
+  line-height: var(--acc-code-leading, 18px);
+}
+
+.diffAdd {
+  background: var(--acc-ok-10);
+}
+
+.diffDel {
+  background: var(--acc-bad-10);
+}
+
+.diffNum {
+  width: 34px;
+  flex: none;
+  text-align: right;
+  padding-right: 8px;
+  color: var(--acc-fg-ghost);
+  user-select: none;
+}
+
+.diffSign {
+  width: 12px;
+  flex: none;
+  color: var(--acc-fg-ghost);
+}
+
+.diffSignAdd {
+  color: var(--acc-ok-light);
+}
+
+.diffSignDel {
+  color: var(--acc-bad-light);
+}
+
+.diffText {
+  white-space: pre-wrap;
+  min-width: 0;
+  color: var(--acc-fg-mono);
+}
+
+.diffTextAdd {
+  color: var(--acc-ok-text);
+}
+
+.diffTextDel {
+  color: var(--acc-bad-text);
+}
+
+/* --- The agent's screen (a chip's tab instead of main) ---------------------- */
+
+/* Simply text, in the same language as an ordinary answer in the main feed - without a card frame: the
+   screen itself already fills the whole output area, a second level of outline is not wanted here. */
+.agentViewBody {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.agentViewLine {
+  font-size: var(--acc-fs-body, 13px);
+  line-height: var(--acc-leading, 1.62);
+  color: var(--acc-fg-body);
+}
+
+.agentViewOk {
+  color: var(--acc-ok-text);
+}
+
+.agentViewBad {
+  color: var(--acc-bad-text);
+}
+
+.agentViewDim {
+  color: var(--acc-fg-faint);
+}
+
+/* The same shimmering text as the main feed's status line (.streamingText below) - the agent's screen has
+   no card of its own, so the ticking timer has to look just as recognisable rather than in a separate
+   invented style. Not composes: postcss-modules-scope resolves it only against classes declared earlier in
+   the file, and .streamingText is declared below. */
+/* --- What is inside a workflow ---------------------------------------------
+   A fleet of agents, one line each, on the screen of the task that runs them (see WorkflowRun). Lines
+   rather than cards: the point of nine agents is seeing the nine at once, and nine cards do not fit a
+   panel dragged narrow. */
+
+.workflow {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.workflowHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font: var(--acc-fs-label, 10px) var(--acc-mono);
+  color: var(--acc-fg-faint);
+}
+
+/* The counts sit apart from each other so that "3 running" and "5 done" do not read as one number. */
+.workflowCounts {
+  display: flex;
+  gap: 8px;
+  flex: none;
+}
+
+.workflowRunning {
+  color: var(--acc-accent);
+}
+
+.workflowFailed {
+  color: var(--acc-bad-text);
+}
+
+.workflowPhase {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.workflowPhaseTitle {
+  margin-bottom: 2px;
+  font: var(--acc-fs-label, 10px) var(--acc-mono);
+  color: var(--acc-fg-fainter);
+}
+
+/* A button rather than a div: the line opens a window with everything its agent said (see AgentLine),
+   and the whole line is the target - forty of these stand in a column, and a caret alone would be a 12px
+   target. */
+.workflowAgent {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  font: var(--acc-fs-mono, 11.5px) var(--acc-mono);
+  color: var(--acc-fg-dim);
+  cursor: pointer;
+}
+
+.workflowAgent:disabled {
+  cursor: default;
+}
+
+.workflowAgent:not(:disabled):hover .workflowLabel {
+  color: var(--acc-fg);
+}
+
+/* The state is a dot rather than a word: nine words down a column are read one by one, nine dots are
+   taken in at a glance - which is the whole reason this screen exists. */
+.workflowDot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--acc-fg-fainter);
+}
+
+.workflowAgent[data-state='running'] .workflowDot,
+.agentWindowDot[data-state='running'] {
+  background: var(--acc-accent);
+}
+
+.workflowAgent[data-state='done'] .workflowDot,
+.agentWindowDot[data-state='done'] {
+  background: var(--acc-ok);
+}
+
+.workflowAgent[data-state='failed'] .workflowDot,
+.agentWindowDot[data-state='failed'] {
+  background: var(--acc-bad);
+}
+
+/* Queued, skipped and dropped keep the faint dot: none of them is work, and none is a result. Dropped is
+   the one that arrives after the fact - the run ended under an agent the report still calls running (see
+   WorkflowRun) - and it deliberately does not borrow the red of a failure: nothing about it failed. */
+.workflowAgent[data-state='queued'],
+.workflowAgent[data-state='skipped'],
+.workflowAgent[data-state='dropped'] {
+  color: var(--acc-fg-fainter);
+}
+
+.workflowAgent[data-state='running'] .workflowLabel {
+  color: var(--acc-fg);
+}
+
+/* The label takes what room there is and gives the rest to the figures: a label cut short is still
+   recognisable, while "4.1s · 12k" cut short is not a figure at all. */
+.workflowLabel {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workflowMeta {
+  flex: none;
+  color: var(--acc-fg-fainter);
+}
+
+/* The panel's own word inside the window - that the answer was cut, that the record is gone. Set apart
+   from the agent's own text by colour: what the panel says is not what the agent said. */
+.workflowNote {
+  margin-top: 10px;
+  font: var(--acc-fs-meta, 11px) var(--acc-mono);
+  color: var(--acc-fg-fainter);
+}
+
+/* --- One agent of a fleet, over the output area -----------------------------
+   What an agent returns is a page - forty findings as JSON, a report, a diff - and a page has to be read
+   at the width of the panel rather than in a column indented under its own line (see WorkflowAgentView).
+   The ladder is the one written down in holiday.module.css: above the search veil (21) and its capsule
+   (22), below the selection menu (30) and everything one reaches for over the whole panel. */
+
+.agentScrim {
+  position: absolute;
+  inset: 0;
+  z-index: 23;
+  background: rgb(var(--acc-ch-shade) / 55%);
+}
+
+/* Stretched to the output area rather than hung from its top, unlike the search window: a list of hits
+   is read from its first line and ends, while an agent's answer runs on - and the room under a short one
+   is not worth the reading it takes away from a long one. */
+.agentWindow {
+  position: absolute;
+  z-index: 24;
+  inset: 10px;
+  display: flex;
+  flex-direction: column;
+  background: var(--acc-bg-panel);
+  border: 1px solid var(--acc-line-strong);
+  border-radius: var(--acc-r-2xl);
+  box-shadow: var(--acc-shadow-menu);
+  overflow: hidden;
+}
+
+/* A narrow panel: the window is the area. Same rule as the search window, and for the same reason - a
+   dialog with margins inside 350 pixels is the panel with a frame drawn around it. */
+@media (max-width: 480px) {
+  .agentWindow {
+    inset: 0;
+    border: none;
+    border-radius: 0;
+  }
+}
+
+.agentWindowHead {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 0 12px;
+  min-height: 34px;
+  border-bottom: 1px solid var(--acc-line);
+}
+
+.agentWindowDot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--acc-fg-fainter);
+}
+
+.agentWindowLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--acc-fs-mono, 11.5px) var(--acc-mono);
+  color: var(--acc-fg);
+}
+
+/* How long, how much - the line's own facts, which the window is standing on top of. */
+.agentWindowFacts {
+  flex: none;
+  font: var(--acc-fs-meta, 11px) var(--acc-mono);
+  color: var(--acc-fg-fainter);
+}
+
+/* The model is set faint and shrinks away first: it answers "who ran this" for whoever asks, and it is
+   not what the window was opened for. In a narrow panel it goes altogether - the facts beside it are
+   what a person came to compare, and the label is what tells one agent from another. */
+@media (max-width: 480px) {
+  .agentWindowModel {
+    display: none;
+  }
+}
+
+.agentWindowModel {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--acc-fs-meta, 11px) var(--acc-mono);
+  color: var(--acc-fg-fainter);
+}
+
+.agentWindowClose {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--acc-r-md);
+  background: none;
+  color: var(--acc-fg-faint);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.agentWindowClose:hover {
+  background: var(--acc-bg-hover);
+  color: var(--acc-fg);
+}
+
+.agentWindowBody {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.agentWindowBody .taskPromptLabel:not(:first-child) {
+  margin-top: 16px;
+}
+
+/* The agent's own words, wrapped and selectable: this is the text somebody came here to read, and often
+   to copy out of. */
+.agentWindowText {
+  font: var(--acc-fs-mono, 11.5px) var(--acc-mono);
+  line-height: var(--acc-code-leading, 18px);
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--acc-fg-body);
+}
+
+.agentWindowSteps {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.agentWindowStep {
+  font: var(--acc-fs-mono, 11.5px) var(--acc-mono);
+  line-height: var(--acc-code-leading, 18px);
+  color: var(--acc-fg-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Why this one failed, at the top of the window: the run went on without it, and nothing else on screen
+   says what happened to it. */
+.agentWindowError {
+  margin-bottom: 12px;
+  font: var(--acc-fs-mono, 11.5px) var(--acc-mono);
+  line-height: var(--acc-code-leading, 18px);
+  color: var(--acc-bad-light);
+}
+
+/* A line the script printed itself - it narrates the fleet above it. */
+.workflowLog {
+  font: var(--acc-fs-mono, 11.5px) var(--acc-mono);
+  color: var(--acc-fg-faint);
+}
+
+.agentViewWorking {
+  font: var(--acc-fs-mono, 11.5px) var(--acc-mono);
+  background: linear-gradient(
+    100deg,
+    var(--acc-stream-1) 0%,
+    var(--acc-stream-2) 30%,
+    var(--acc-stream-3) 45%,
+    var(--acc-stream-2) 55%,
+    var(--acc-stream-1) 70%,
+    var(--acc-stream-1) 100%
+  );
+  background-size: 260% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  white-space: nowrap;
+  /* The line names the current business in the model's own words, and its length is anyone's guess while
+     the panel may be narrow. An ellipsis at the end is more honest than a line that ran off the edge. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  animation: acc-shimmer 2.6s linear infinite alternate;
+}
+
+/* --- The plan -------------------------------------------------------------- */
+
+.plan {
+  margin: 10px 0;
+  border: 1px solid var(--acc-accent-40);
+  border-radius: var(--acc-r-2xl);
+  background: linear-gradient(180deg, var(--acc-accent-12), var(--acc-accent-08));
+  overflow: hidden;
+}
+
+/* On the baseline rather than centred: the PLAN label and the hint are of different sizes. */
+.planHead {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  padding: 9px 11px;
+  border-bottom: 1px solid var(--acc-accent-20);
+}
+
+.planLabel {
+  font: 600 9.5px/1 var(--acc-mono);
+  letter-spacing: 0.09em;
+  color: var(--acc-accent);
+}
+
+.planHint {
+  font: 10.5px var(--acc-mono);
+  color: var(--acc-fg-faint);
+}
+
+/* The plan's body is the same markdown as in the agent's answer (see Markdown.tsx), with a scroll of its
+   own: a long plan must not push the buttons under it past the panel's edge. */
+.planBody {
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 10px 12px;
+}
+
+.cardFoot {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 11px;
+  background: var(--acc-shade);
+  border-top: 1px solid var(--acc-accent-20);
+}
+
+/* --- The cards' buttons ---------------------------------------------------- */
+
+.primary {
+  height: 25px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 11px;
+  border-radius: var(--acc-r-md);
+  background: var(--acc-accent);
+  color: var(--acc-on-accent);
+  font: 600 11.5px var(--acc-font);
+}
+
+@media (hover: hover) {
+  .primary:hover {
+    background: var(--acc-accent-hover);
+  }
+}
+
+.primary:active {
+  background: var(--acc-accent-active);
+}
+
+.primary:disabled {
+  background: var(--acc-bg-control);
+  color: var(--acc-fg-ghost);
+}
+
+.secondary {
+  height: 25px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 11px;
+  border: 1px solid var(--acc-line-strong);
+  border-radius: var(--acc-r-md);
+  font: 500 11.5px var(--acc-font);
+  color: var(--acc-fg-soft);
+}
+
+@media (hover: hover) {
+  .secondary:hover {
+    border-color: var(--acc-accent);
+    color: var(--acc-fg);
+  }
+}
+
+.secondary:active {
+  border-color: var(--acc-accent-active);
+  background: var(--acc-accent-12);
+  color: var(--acc-fg);
+}
+
+.secondary:disabled {
+  border-color: var(--acc-line);
+  background: none;
+  color: var(--acc-fg-ghost);
+}
+
+.linkish {
+  font-size: 11px;
+  color: var(--acc-fg-faint);
+  text-decoration: underline;
+}
+
+@media (hover: hover) {
+  .linkish:hover {
+    color: var(--acc-accent-light);
+  }
+}
+
+.linkish:active {
+  color: var(--acc-accent);
+}
+
+.linkish:disabled {
+  color: var(--acc-fg-ghost);
+  opacity: 0.6;
+}
+
+/* --- The service rows ------------------------------------------------------ */
+
+/* On the baseline rather than centred: the chip and the text are of different sizes, and centring puts the
+   first word above the rest of the row. */
+.checkpoint {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  margin: 12px 0;
+}
+
+.checkpointChip {
+  font: 600 9px/1 var(--acc-mono);
+  letter-spacing: 0.09em;
+  color: var(--acc-fg-fainter);
+}
+
+.checkpointTarget {
+  font: var(--acc-fs-meta, 11px) var(--acc-mono);
+  color: var(--acc-fg-faint);
+}
+
+/* Centred rather than left on the baseline like the words beside it: a rule has no baseline of its own, so
+   the browser makes one up out of its bottom edge and the line comes out under the text as an underline.
+   The middle of the row's line box is where a rule between words belongs. */
+.dashed {
+  flex: 1;
+  align-self: center;
+  height: 1px;
+  background: repeating-linear-gradient(90deg, var(--acc-line) 0 4px, transparent 4px 8px);
+}
+
+/* The EARLIER mark, turned into a button - see CheckpointRow. Reset to the plain row's own look first:
+   a <button> brings its own border, background and cursor, none of which belong here. */
+.checkpointButton {
+  display: flex;
+  /* The mark stands in the middle of the target, not at its top: baseline alignment inside the row lines
+     the chip up with the words, but the row as a whole then has to be centred in the taller button. */
+  align-items: center;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  /* Auto on a desktop, a fingertip on a touchscreen - see --acc-hit in tokens.css. */
+  min-height: var(--acc-hit);
+}
+
+/* The row gives the button its whole width - otherwise it shrinks to the words and the rule has nothing
+   left to run along. */
+.checkpointButton .checkpoint {
+  flex: 1;
+  min-width: 0;
+}
+
+@media (hover: hover) {
+  .checkpointButton:hover .checkpointTarget {
+    color: var(--acc-fg-dim);
+  }
+}
+
+/* Neither a border nor a backing of its own - the same flat look as the tool call card (.tool) beside it:
+   two cards of one rank running interleaved must not be styled differently. */
+.think {
+  margin: 1px 0;
+  border-radius: var(--acc-r-md);
+  overflow: hidden;
+}
+
+/* On the baseline, like the call's head: the chip, the thought's line and the counter are of different
+   sizes, and a shared centre by boxes puts them at different heights - the line's box is taller than its
+   letters by the gap above them, and by its middle the chip rides upwards. On the baseline the chip's fill
+   stands with its middle exactly opposite the middle of the lowercase letters beside it. */
+/* The same padding as the call's head (.toolHead) - otherwise the thought's caret arrow stands a couple of
+   pixels further right than the call's a row above or below, and the row reads as uneven. */
+.thinkHead {
+  /* One line of the head - see --acc-head-line in .toolHead. */
+  --acc-head-line: 17px;
+  /* Auto on a desktop, a fingertip on a touchscreen - see --acc-hit in tokens.css. */
+  min-height: var(--acc-hit);
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 7px;
+  text-align: left;
+}
+
+/* The same response as the head of a group of calls: the card can be pressed, and that has to be visible
+   before the press. */
+@media (hover: hover) {
+  .thinkHead:hover {
+    background: var(--acc-bg-card);
+  }
+}
+
+/* min-width: 0 - otherwise a flex item does not shrink below the width of its own text, and
+   text-overflow: ellipsis never fires, however much text there is. */
+.thinkText {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 11.5px;
+  color: var(--acc-fg-dim);
+}
+
+/* How many thoughts are inside - the same thing a group of calls signs its "N tools" with: from outside
+   the last one is visible, and the number says there are more behind it. */
+.thinkCount {
+  flex: none;
+  font: var(--acc-fs-label, 10px) var(--acc-mono);
+  color: var(--acc-fg-fainter);
+}
+
+.thinkPending {
+  animation: acc-pulse 1.6s infinite;
+}
+
+.thinkBody {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 2px 9px 9px 26px;
+}
+
+/* An unfolded thought reads as a paragraph: the same line width and the same leading as the agent's
+   answer, only quieter - this is its reasoning rather than what it said aloud. */
+.thinkFull {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: var(--acc-leading, 1.62);
+  color: var(--acc-fg-dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* --- A bash-mode command --------------------------------------------------- */
+
+/*
+ * A command the person ran themselves through a "!". The look is closer to a tool call than to one's own
+ * message: this is not a line in a conversation but an action that has a result. But the chip at the start
+ * is different - the "!" sign it was typed with instead of a BASH caption: there the tool was called by the
+ * agent, here by the person.
+ */
+.bash {
+  margin: 12px 0;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-md);
+  background: var(--acc-bg-raised);
+  overflow: hidden;
+}
+
+.bashHead {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  padding: 6px 9px;
+}
+
+.bashCommand {
+  min-width: 0;
+  font: var(--acc-fs-mono, 11.5px) var(--acc-mono);
+  color: var(--acc-warn-light);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.bashFailed {
+  font: var(--acc-fs-meta, 11px) var(--acc-mono);
+  color: var(--acc-bad-light);
+}
+
+/* The output whole but not filling the screen: a long wall of it scrolls inside the card while the feed
+   stays scrollable. */
+.bashOutput {
+  margin: 0;
+  padding: 7px 9px;
+  border-top: 1px solid var(--acc-line);
+  background: var(--acc-bg-sunken);
+  max-height: 260px;
+  overflow: auto;
+  font: var(--acc-fs-mono, 11.5px)/1.5 var(--acc-mono);
+  color: var(--acc-fg-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.bashOutputFailed {
+  color: var(--acc-bad-text);
+}
+
+/* On the baseline, like .think and .checkpoint: the row holds nothing but captions of different sizes, and
+   a shared centre by boxes would put their letters at different heights. */
+.compact {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  margin: 12px 0;
+  padding: 6px 9px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-md);
+  background: var(--acc-bg-raised);
+}
+
+.compactLabel {
+  font: 600 9px/1 var(--acc-mono);
+  letter-spacing: 0.09em;
+  color: var(--acc-warn);
+}
+
+/* While the compaction genuinely runs the label breathes, like the status of active tool calls
+   (.toolMeta.running); as soon as the outcome is known the animation dies down. */
+.compactLabel.pending {
+  animation: acc-pulse 1.6s infinite;
+}
+
+/* Shrinks with an ellipsis, like a thought in .think: the final caption with the numbers before and after
+   is longer than a narrow panel's width, and without this it would push the percentage past the right
+   edge. */
+.compactText {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 11.5px;
+  color: var(--acc-fg-dim);
+}
+
+.compactPercent {
+  flex: none;
+  font: 9.5px/1 var(--acc-mono);
+  color: var(--acc-fg-dim);
+  /* Digits of one width: otherwise the percentage jerks the whole row on every step. */
+  font-variant-numeric: tabular-nums;
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 2px 0 14px;
+  font: 10.5px var(--acc-mono);
+  color: var(--acc-fg-ghost);
+  flex-wrap: wrap;
+}
+
+/* The pause before a repeated request - the same row as the context compaction (see .compact), but on a
+   warning background: a compaction runs its course, while here the conversation stands because of someone
+   else's breakage, and that has to be visible without reading. */
+.retry {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  margin: 12px 0;
+  padding: 6px 9px;
+  border: 1px solid var(--acc-warn-line);
+  border-radius: var(--acc-r-md);
+  background: var(--acc-warn-soft);
+}
+
+.retryLabel {
+  font: 600 9px/1 var(--acc-mono);
+  letter-spacing: 0.09em;
+  color: var(--acc-warn-light);
+}
+
+/* While the attempts run the label breathes with the same pulse as CONTEXT during a compaction. */
+.retryLabel.pending {
+  animation: acc-pulse 1.6s infinite;
+}
+
+.retryText {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 11.5px;
+  color: var(--acc-fg-dim);
+}
+
+.retryCount {
+  flex: none;
+  font: 9.5px/1 var(--acc-mono);
+  color: var(--acc-fg-dim);
+  /* Digits of one width: otherwise the countdown jerks the row on every second. */
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- The subscription limit ------------------------------------------------ */
+
+/* Built like .retry and .compact - one more line about what happened to the conversation rather than in
+   it - and deliberately not red: a used-up limit is not a breakage. Waiting wears the warn paint, extra
+   usage its own (see --acc-extra in tokens.css), the same one the ring in the composer's row takes: one
+   colour for one state, wherever it shows. */
+.limit {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  margin: 12px 0;
+  padding: 6px 9px;
+  border: 1px solid var(--acc-warn-line);
+  border-radius: var(--acc-r-md);
+  background: var(--acc-warn-soft);
+}
+
+.limit.limitExtra {
+  border-color: var(--acc-extra-32);
+  background: var(--acc-extra-12);
+}
+
+.limitLabel {
+  flex: none;
+  font: 600 9px/1 var(--acc-mono);
+  letter-spacing: 0.09em;
+  color: var(--acc-warn-light);
+}
+
+.limitExtra .limitLabel {
+  color: var(--acc-extra);
+}
+
+.limitText {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 11.5px;
+  color: var(--acc-fg-dim);
+}
+
+.limitWhen {
+  flex: none;
+  font: 9.5px/1 var(--acc-mono);
+  color: var(--acc-fg-dim);
+  /* Digits of one width: otherwise the countdown jerks the row on every tick. */
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- The model swapped by the CLI itself ----------------------------------- */
+
+/* Built like .compact and .retry - the same conversation about the conversation itself - but two-storey:
+   the swap on the first line, the CLI's explanation under it. Warn rather than bad on purpose: nothing
+   has broken, the work goes on, merely on another model. */
+.modelSwitch {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  margin: 12px 0;
+  padding: 6px 9px;
+  border: 1px solid var(--acc-warn-32);
+  border-radius: var(--acc-r-md);
+  background: var(--acc-bg-raised);
+}
+
+.modelSwitchLabel {
+  flex: none;
+  font: 600 9px/1 var(--acc-mono);
+  letter-spacing: 0.09em;
+  color: var(--acc-warn);
+}
+
+.modelSwitchBody {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+/* Wraps rather than clips: on a narrow panel the note about who did the switching moves to a line of its
+   own, and it is the note that makes the whole row worth reading. */
+.modelSwitchLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  font: var(--acc-fs-meta, 11px) var(--acc-mono);
+  color: var(--acc-fg-dim);
+}
+
+.modelSwitchFrom {
+  color: var(--acc-fg-faint);
+  text-decoration: line-through;
+}
+
+.modelSwitchArrow {
+  color: var(--acc-fg-fainter);
+}
+
+.modelSwitchTo {
+  color: var(--acc-fg);
+}
+
+.modelSwitchNote {
+  color: var(--acc-fg-faint);
+}
+
+.modelSwitchReason {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--acc-fg-dim);
+  white-space: pre-wrap;
+}
+
+.crash {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  margin: 12px 0;
+  padding: 6px 9px;
+  border: 1px solid var(--acc-bad-32);
+  border-radius: var(--acc-r-md);
+  background: var(--acc-bad-soft);
+}
+
+.crashLabel {
+  font: 600 9px/1 var(--acc-mono);
+  letter-spacing: 0.09em;
+  color: var(--acc-bad-light);
+}
+
+.crashText {
+  font-size: 11.5px;
+  color: var(--acc-bad-text);
+}
+
+/* --- The working indicator ------------------------------------------------- */
+
+.streaming {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 4px 16px 0;
+}
+
+/* The shimmer runs over the letters themselves: the gradient is wider than the line and travels slowly
+   along it. direction: alternate - the wave travels there and back rather than jerking back in a jump on
+   every repeat. */
+.streamingText {
+  font: var(--acc-fs-mono, 11.5px) var(--acc-mono);
+  background: linear-gradient(
+    100deg,
+    var(--acc-stream-1) 0%,
+    var(--acc-stream-2) 30%,
+    var(--acc-stream-3) 45%,
+    var(--acc-stream-2) 55%,
+    var(--acc-stream-1) 70%,
+    var(--acc-stream-1) 100%
+  );
+  background-size: 260% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  white-space: nowrap;
+  /* The line names the current business in the model's own words, and its length is anyone's guess while
+     the panel may be narrow. An ellipsis at the end is more honest than a line that ran off the edge. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  animation: acc-shimmer 2.6s linear infinite alternate;
+}
+
+/* The work stands waiting for someone else's server: a shimmer over the letters means business under way,
+   and here it would lie. The line is instead simply painted in the warning colour - the same one as the
+   pause card above it (.retry). */
+.streamingText.streamingStalled {
+  background: none;
+  background-clip: border-box;
+  -webkit-background-clip: border-box;
+  color: var(--acc-warn-light);
+  animation: none;
+}
+
+/* The width is that of the feed's other cards: the side padding is given by the row itself (.row), and an
+   error must have none of its own - otherwise it is narrower than its neighbours and reads as something
+   inserted rather than as a part of the conversation. */
+.error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 8px 0 10px;
+  padding: 8px 10px;
+  border-radius: var(--acc-r-md);
+  background: var(--acc-bad-soft);
+  border: 1px solid var(--acc-bad-32);
+  font-size: 12px;
+  color: var(--acc-bad-text);
+}
+
+/* The error's own column: the text, and under it the way out of it when there is one (see ErrorRow).
+   The cross stays outside this column - it belongs to the row as a whole and must not travel down as the
+   card grows. */
+.errorBody {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.errorText {
+  white-space: pre-wrap;
+}
+
+/* Wrapping rather than a row: the panel is 350px at its narrowest, and two buttons beside each other
+   there push the second one off the edge. */
+.errorActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+/* What the press came to, right under the buttons - quieter than the error itself, which is the news. */
+.errorNote {
+  opacity: 0.8;
+}
+
+.errorDismiss {
+  /* Auto on a desktop, a fingertip on a touchscreen - see --acc-hit in tokens.css. */
+  min-height: var(--acc-hit);
+  flex: none;
+  opacity: 0.6;
+  font-size: 12px;
+  color: var(--acc-bad-text);
+}
+
+@media (hover: hover) {
+  .errorDismiss:hover {
+    opacity: 1;
+  }
+}
+
+/**
+ * What appears on hover has to appear some other way where there is no hover: on a touchscreen the
+ * copy buttons would otherwise be unreachable rather than merely subtle.
+ */
+[data-acc-density='touch'] .codeCopy,
+[data-acc-density='touch'] .textAction {
+  opacity: 1;
+}
+
+/* --- A code review's findings ---------------------------------------------- */
+
+/* Framed like the plan, in the warning's colour rather than the accent's: a plan is an offer waiting for
+   an answer, while findings are a list of things wrong - and the two must not look alike at a glance. */
+.findings {
+  margin: 10px 0;
+  border: 1px solid var(--acc-warn-32);
+  border-radius: var(--acc-r-2xl);
+  background: var(--acc-warn-06);
+  overflow: hidden;
+}
+
+.findingsHead {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  padding: 9px 11px;
+  border-bottom: 1px solid var(--acc-warn-32);
+}
+
+.findingsLabel {
+  font: 600 9.5px/1 var(--acc-mono);
+  letter-spacing: 0.09em;
+  color: var(--acc-warn);
+}
+
+.findingsCount {
+  font: 10.5px var(--acc-mono);
+  color: var(--acc-fg-faint);
+}
+
+.findingsBody {
+  padding: 4px 0;
+}
+
+/* A hairline between the findings rather than a frame around each: a dozen framed boxes inside one frame
+   read as a table of contents of something else. The first one does without it - the head above is the
+   line already. */
+.finding + .finding {
+  border-top: 1px solid var(--acc-line);
+}
+
+.finding {
+  padding: 5px 11px 7px;
+}
+
+/* The row's own head: where it is, and what kind of thing it is. On the baseline like every other head in
+   the feed - the place is 11.5px mono, the tags 9.5px, and a shared centre would put them at two heights. */
+.findingHead {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  width: 100%;
+  /* Auto on a desktop, a fingertip on a touchscreen - see --acc-hit in tokens.css. */
+  min-height: var(--acc-hit);
+  text-align: left;
+}
+
+.findingPlace {
+  font: var(--acc-fs-mono, 11.5px) var(--acc-mono);
+  color: var(--acc-fg-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.findingTag {
+  flex: none;
+  padding: 2px 6px;
+  border-radius: var(--acc-r-xs);
+  background: var(--acc-neutral-12);
+  color: var(--acc-fg-faint);
+  font: 600 9.5px/13px var(--acc-mono);
+  letter-spacing: 0.05em;
+}
+
+.findingFixed {
+  background: var(--acc-ok-12);
+  color: var(--acc-ok-light);
+}
+
+.findingSkipped {
+  background: var(--acc-neutral-12);
+  color: var(--acc-fg-ghost);
+}
+
+/* Not a tag but a word of warning: the check could not confirm this one, and it must not be read as
+   settled fact. */
+.findingMaybe {
+  flex: none;
+  font: var(--acc-fs-label, 10px) var(--acc-mono);
+  color: var(--acc-warn);
+}
+
+/* The claim itself - the one line always visible, in the body font rather than mono: it is a sentence,
+   and the paths inside it are already set apart by their own backticks. The indent lines it up with the
+   head's text past the caret. */
+.findingSummary {
+  padding-left: 16px;
+  font-size: var(--acc-fs-body, 13px);
+  line-height: var(--acc-leading, 1.62);
+  color: var(--acc-fg-body);
+}
+
+.findingBody {
+  margin: 6px 0 2px 16px;
+  border-left: 2px solid var(--acc-warn-32);
+  padding-left: 10px;
+}
+
+.findingFile {
+  font: var(--acc-fs-meta, 11px) var(--acc-mono);
+  color: var(--acc-fg-faint);
+  word-break: break-all;
+}
+
+.findingText {
+  margin: 5px 0 0;
+  font-size: var(--acc-fs-body, 13px);
+  line-height: var(--acc-leading, 1.62);
+  color: var(--acc-fg-dim);
+}

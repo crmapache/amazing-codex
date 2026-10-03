@@ -1,0 +1,535 @@
+/*
+ * The "Moonlight" theme - the Amazing Claude Code panel's dark scheme for JetBrains Dark.
+ *
+ * The sizes, radii, fonts and structure are as they were - only the colour values changed and a second
+ * layer appeared.
+ *
+ * Two layers deliberately:
+ *   1. THE PALETTE (--acc-c-*, --acc-ch-*) - raw colours tied to nothing. --acc-ch-* holds the channels
+ *      without alpha: only that way does one and the same paint give both a solid colour and a ladder of
+ *      transparencies without spreading rgb(...) literals through the files.
+ *   2. THE ROLES (--acc-bg, --acc-fg, --acc-accent, ...) - what the components paint with. The components
+ *      know ONLY about this layer.
+ *
+ * A light theme, when its turn comes, overrides the second layer whole and touches neither the first nor a
+ * single CSS module - see the stub at the end of the file.
+ */
+
+:root {
+  /* ======================================================================
+     1. THE PALETTE
+     ====================================================================== */
+
+  /* Neutrals with a blue undertone. The ladder of brightness is the same as JetBrains Dark's: the panel
+     has to sit in the IDE as one of its own rather than as someone else's insert. */
+  --acc-c-ink-01: #14171d;
+  --acc-c-ink-02: #181b22;
+  --acc-c-ink-03: #1c1f26;
+  --acc-c-ink-04: #1f232b;
+  --acc-c-ink-05: #242833;
+  --acc-c-ink-06: #292e38;
+  --acc-c-ink-07: #333947;
+  --acc-c-ink-08: #373d4c;
+  --acc-c-ink-09: #3a4050;
+  --acc-c-ink-10: #3c4353;
+  --acc-c-ink-11: #4a5364;
+  --acc-c-ink-12: #4c5566;
+  --acc-c-ink-13: #636d80;
+  --acc-c-ink-14: #6e788e;
+  --acc-c-ink-15: #7b849a;
+  --acc-c-ink-16: #8891a6;
+  --acc-c-ink-17: #969fb2;
+  --acc-c-ink-18: #a5adc0;
+  --acc-c-ink-19: #b7bfd0;
+  --acc-c-ink-20: #c8cede;
+  --acc-c-ink-21: #dfe4ef;
+
+  /* Moon blue - primary */
+  --acc-c-moon-1: #559dd8;
+  --acc-c-moon-2: #6fb4ef;
+  --acc-c-moon-3: #8ac6f7;
+  --acc-c-moon-4: #a5d4fb;
+
+  /* Aquamarine - secondary */
+  --acc-c-aqua-1: #3aa89e;
+  --acc-c-aqua-2: #4fc9bd;
+  --acc-c-aqua-3: #6ed6cb;
+  --acc-c-aqua-4: #86dbd2;
+
+  /* Iris - tertiary, subagents */
+  --acc-c-iris-1: #8172c0;
+  --acc-c-iris-2: #a894f2;
+  --acc-c-iris-3: #c4b5f8;
+
+  /* Mint - success */
+  --acc-c-mint-1: #3aa87b;
+  --acc-c-mint-2: #4fc494;
+  --acc-c-mint-3: #6fd2a8;
+  --acc-c-mint-4: #7fd8b4;
+  --acc-c-mint-5: #c4ebda;
+
+  /* Sand - warnings and permissions */
+  --acc-c-sand-1: #c1954f;
+  --acc-c-sand-2: #d9ad68;
+  --acc-c-sand-3: #e6c089;
+  --acc-c-sand-4: #ecd3a5;
+
+  /* Copper - between a warning and a refusal */
+  --acc-c-copper-1: #dd8a63;
+  --acc-c-copper-2: #eeae8c;
+
+  /* Rose - refusals and errors */
+  --acc-c-rose-1: #bd555d;
+  --acc-c-rose-2: #d96b73;
+  --acc-c-rose-3: #e5878e;
+  --acc-c-rose-4: #ea9098;
+  --acc-c-rose-5: #eec3c6;
+
+  /* Orchid - a quote from the agent's output. A single role, a colour of its own. */
+  --acc-c-orchid: #d691c4;
+
+  /* An unambiguous green for the usage gauges: mint beside aquamarine reads to the eye as one and the same
+     colour, while "how much is left" has to differ from "the branch" without a second thought. */
+  --acc-c-green: #4dc286;
+
+  /* Channels without alpha - the base of the transparency ladder */
+  --acc-ch-moon: 111 180 239;
+  --acc-ch-aqua: 79 201 189;
+  --acc-ch-iris: 168 148 242;
+  --acc-ch-mint: 79 196 148;
+  --acc-ch-sand: 217 173 104;
+  --acc-ch-rose: 217 107 115;
+  --acc-ch-rose-4: 234 144 152;
+  --acc-ch-copper: 221 138 99;
+  --acc-ch-green: 77 194 134;
+  --acc-ch-orchid: 214 145 196;
+  --acc-ch-mist: 148 158 178;
+  --acc-ch-shade: 8 10 16;
+
+  /* ======================================================================
+     2. THE ROLES - the dark theme
+     ====================================================================== */
+
+  /* Surfaces, from the deepest to the lightest */
+  --acc-bg-sunken: var(--acc-c-ink-01);
+  --acc-bg-deep: var(--acc-c-ink-02);
+  --acc-bg: var(--acc-c-ink-03);
+  --acc-bg-raised: var(--acc-c-ink-04);
+  --acc-bg-card: var(--acc-c-ink-05);
+  --acc-bg-panel: var(--acc-c-ink-06);
+  --acc-bg-control: var(--acc-c-ink-07);
+  --acc-bg-hover: var(--acc-c-ink-08);
+  --acc-bg-menu-hover: var(--acc-c-ink-10);
+  --acc-bg-control-hover: var(--acc-c-ink-11);
+
+  /* Borders */
+  --acc-line: var(--acc-c-ink-09);
+  --acc-line-strong: var(--acc-c-ink-12);
+  --acc-line-hover: var(--acc-c-ink-13);
+
+  /* Text, from the main one to the quietest. The order of brightness and the contrast against every one of
+     the panel's backgrounds are as they were: the steps were recomputed rather than rearranged. */
+  --acc-fg: var(--acc-c-ink-21);
+  --acc-fg-body: var(--acc-c-ink-20);
+  --acc-fg-soft: var(--acc-c-ink-19);
+  --acc-fg-mono: var(--acc-c-ink-18);
+  --acc-fg-dim: var(--acc-c-ink-17);
+  --acc-fg-faint: var(--acc-c-ink-16);
+  --acc-fg-fainter: var(--acc-c-ink-15);
+  --acc-fg-ghost: var(--acc-c-ink-14);
+
+  /* Text and icons on a filled button of any colour. This used to be --acc-bg-sunken: it worked but lied -
+     this is a foreground role rather than a background one, and in a light theme it will not become the
+     darkest surface. */
+  --acc-on-accent: #101620;
+
+  /* --- Primary: the main action, file edits, the plan, the input's focus ---- */
+  --acc-accent: var(--acc-c-moon-2);
+  --acc-accent-hover: var(--acc-c-moon-3);
+  --acc-accent-active: var(--acc-c-moon-1);
+  --acc-accent-light: var(--acc-c-moon-4);
+  --acc-accent-08: rgb(var(--acc-ch-moon) / 8%);
+  --acc-accent-12: rgb(var(--acc-ch-moon) / 12%);
+  --acc-accent-16: rgb(var(--acc-ch-moon) / 16%);
+  --acc-accent-20: rgb(var(--acc-ch-moon) / 20%);
+  --acc-accent-32: rgb(var(--acc-ch-moon) / 32%);
+  --acc-accent-40: rgb(var(--acc-ch-moon) / 40%);
+  /* The previous names are kept as aliases: that way the theme is installed without editing the modules,
+     and the move onto the ladder can be done one file at a time. */
+  --acc-accent-soft: var(--acc-accent-12);
+  --acc-accent-line: var(--acc-accent-32);
+
+  /* --- Secondary: branches and forks, the agent's questions, a file reference */
+  --acc-branch: var(--acc-c-aqua-2);
+  --acc-branch-hover: var(--acc-c-aqua-3);
+  --acc-branch-active: var(--acc-c-aqua-1);
+  --acc-branch-light: var(--acc-c-aqua-4);
+  --acc-branch-06: rgb(var(--acc-ch-aqua) / 6%);
+  --acc-branch-10: rgb(var(--acc-ch-aqua) / 10%);
+  --acc-branch-12: rgb(var(--acc-ch-aqua) / 12%);
+  --acc-branch-16: rgb(var(--acc-ch-aqua) / 16%);
+  --acc-branch-20: rgb(var(--acc-ch-aqua) / 20%);
+  --acc-branch-32: rgb(var(--acc-ch-aqua) / 32%);
+  --acc-branch-40: rgb(var(--acc-ch-aqua) / 40%);
+  --acc-branch-60: rgb(var(--acc-ch-aqua) / 60%);
+  --acc-branch-soft: var(--acc-branch-10);
+  --acc-branch-line: var(--acc-branch-32);
+
+  /* --- Tertiary: subagents, parallel work, inline code --------------------- */
+  --acc-agent: var(--acc-c-iris-2);
+  --acc-agent-light: var(--acc-c-iris-3);
+  --acc-agent-dark: var(--acc-c-iris-1);
+  --acc-agent-12: rgb(var(--acc-ch-iris) / 12%);
+  --acc-agent-32: rgb(var(--acc-ch-iris) / 32%);
+  --acc-agent-soft: var(--acc-agent-12);
+  --acc-agent-line: var(--acc-agent-32);
+
+  /* --- Permissions and warnings ------------------------------------------- */
+  --acc-warn: var(--acc-c-sand-2);
+  --acc-warn-hover: var(--acc-c-sand-3);
+  --acc-warn-active: var(--acc-c-sand-1);
+  --acc-warn-light: var(--acc-c-sand-4);
+  --acc-warn-06: rgb(var(--acc-ch-sand) / 6%);
+  --acc-warn-12: rgb(var(--acc-ch-sand) / 12%);
+  --acc-warn-16: rgb(var(--acc-ch-sand) / 16%);
+  --acc-warn-32: rgb(var(--acc-ch-sand) / 32%);
+  --acc-warn-35: rgb(var(--acc-ch-sand) / 35%);
+  --acc-warn-40: rgb(var(--acc-ch-sand) / 40%);
+  --acc-warn-80: rgb(var(--acc-ch-sand) / 80%);
+  --acc-warn-soft: var(--acc-warn-12);
+  --acc-warn-line: var(--acc-warn-32);
+
+  /* The burn rate is ahead of schedule but not in the red zone yet */
+  --acc-orange: var(--acc-c-copper-1);
+  --acc-orange-light: var(--acc-c-copper-2);
+  --acc-orange-35: rgb(var(--acc-ch-copper) / 35%);
+  --acc-orange-80: rgb(var(--acc-ch-copper) / 80%);
+
+  /* The ctx / 5h / wk usage gauges */
+  --acc-meter-green: var(--acc-c-green);
+  /* The unpainted part of the ring and the bar: the same backing as the controls have. */
+  --acc-meter-track: var(--acc-bg-control);
+  /* The even-pace arc: noticeably dimmer than the usage but lighter than the track. */
+  --acc-meter-pace: var(--acc-c-ink-13);
+  --acc-meter-green-35: rgb(var(--acc-ch-green) / 35%);
+  --acc-meter-green-80: rgb(var(--acc-ch-green) / 80%);
+
+  /* --- The gauges' ladder --------------------------------------------------
+     The four steps a reading is painted by - the context bar and the usage rings alike (see
+     paceColor/contextColor in feed/usage.ts, which name these and nothing else).
+
+     A layer of its own over the paints above rather than the paints themselves, and numbered rather
+     than named by colour, because one setting draws the whole ladder towards one calm tone (see
+     [data-acc-calm] at the foot of this file). Named "green" and "bad", the roles would go on
+     promising a colour the mode has just damped, and every gauge would have to be taught about the
+     mode one by one instead. */
+  --acc-gauge-1: var(--acc-meter-green);
+  --acc-gauge-2: var(--acc-warn);
+  --acc-gauge-3: var(--acc-orange);
+  --acc-gauge-4: var(--acc-bad-light);
+  /* The halo the phone draws around its context bar - the same pair of intensities on every step. */
+  --acc-gauge-1-35: var(--acc-meter-green-35);
+  --acc-gauge-1-80: var(--acc-meter-green-80);
+  --acc-gauge-2-35: var(--acc-warn-35);
+  --acc-gauge-2-80: var(--acc-warn-80);
+  --acc-gauge-3-35: var(--acc-orange-35);
+  --acc-gauge-3-80: var(--acc-orange-80);
+  --acc-gauge-4-35: var(--acc-bad-light-35);
+  --acc-gauge-4-80: var(--acc-bad-light-80);
+
+  /* --- Success and added lines -------------------------------------------- */
+  --acc-ok: var(--acc-c-mint-2);
+  --acc-ok-hover: var(--acc-c-mint-3);
+  --acc-ok-active: var(--acc-c-mint-1);
+  --acc-ok-light: var(--acc-c-mint-4);
+  --acc-ok-text: var(--acc-c-mint-5);
+  --acc-ok-10: rgb(var(--acc-ch-mint) / 10%);
+  --acc-ok-12: rgb(var(--acc-ch-mint) / 12%);
+  --acc-ok-24: rgb(var(--acc-ch-mint) / 24%);
+  --acc-ok-32: rgb(var(--acc-ch-mint) / 32%);
+  --acc-ok-soft: var(--acc-ok-12);
+  --acc-ok-line: var(--acc-ok-32);
+
+  /* --- Refusals and removed lines ----------------------------------------- */
+  --acc-bad: var(--acc-c-rose-2);
+  --acc-bad-hover: var(--acc-c-rose-3);
+  --acc-bad-active: var(--acc-c-rose-1);
+  --acc-bad-light: var(--acc-c-rose-4);
+  --acc-bad-text: var(--acc-c-rose-5);
+  --acc-bad-10: rgb(var(--acc-ch-rose) / 10%);
+  --acc-bad-12: rgb(var(--acc-ch-rose) / 12%);
+  --acc-bad-16: rgb(var(--acc-ch-rose) / 16%);
+  --acc-bad-24: rgb(var(--acc-ch-rose) / 24%);
+  --acc-bad-32: rgb(var(--acc-ch-rose) / 32%);
+  --acc-bad-40: rgb(var(--acc-ch-rose) / 40%);
+  --acc-bad-soft: var(--acc-bad-12);
+  --acc-bad-light-35: rgb(var(--acc-ch-rose-4) / 35%);
+  --acc-bad-light-80: rgb(var(--acc-ch-rose-4) / 80%);
+
+  /* --- Saying thanks ------------------------------------------------------
+     The heart at the end of the selectors' row (see Thanks.tsx). The paint is the same rose as a refusal's,
+     but the role is its own rather than a reuse of --acc-bad: there the colour means "something went
+     wrong", here it means "thank you", and a theme that decides to repaint refusals must not drag the
+     heart along with them. */
+  --acc-heart: var(--acc-c-rose-2);
+  --acc-heart-16: rgb(var(--acc-ch-rose) / 16%);
+  --acc-heart-40: rgb(var(--acc-ch-rose) / 40%);
+
+  /* --- Extra usage: the work past the plan's limit -------------------------
+     A colour of its own rather than a warning's: the limit being passed is neither trouble nor a mistake -
+     it is the plan's ceiling behind us and the meter running. Its own role rather than a reuse of
+     --acc-agent (the same iris paint) because the two mean unrelated things: a theme repainting subagents
+     must not repaint the money. */
+  --acc-extra: var(--acc-c-iris-2);
+  /* The tongues of the flame around a burning ring: the hotter, lighter tone of the same paint. */
+  --acc-extra-light: var(--acc-c-iris-3);
+  --acc-extra-12: rgb(var(--acc-ch-iris) / 12%);
+  --acc-extra-32: rgb(var(--acc-ch-iris) / 32%);
+
+  /* --- A quote from the agent's output ------------------------------------ */
+  --acc-quote: var(--acc-c-orchid);
+  --acc-quote-12: rgb(var(--acc-ch-orchid) / 12%);
+  --acc-quote-32: rgb(var(--acc-ch-orchid) / 32%);
+
+  /* --- The neutral backing: read / grep / think / inline code -------------- */
+  --acc-neutral-12: rgb(var(--acc-ch-mist) / 12%);
+  --acc-neutral-16: rgb(var(--acc-ch-mist) / 16%);
+  --acc-neutral-32: rgb(var(--acc-ch-mist) / 32%);
+
+  /* --- A collapsed paste from the clipboard --------------------------------
+     It has no colour of its own on purpose: no entity stands behind that chip, it is simply text that was
+     folded up - and coloured it would promise more than there is, standing in one row with a file, an
+     image and a command.
+
+     Hence not paints of its own but aliases of the neutral ones: repaint the neutral row and the chip
+     travels with it rather than being left alone off to one side. */
+  --acc-paste: var(--acc-fg-mono);
+  --acc-paste-12: var(--acc-neutral-12);
+  --acc-paste-32: var(--acc-neutral-32);
+
+  /* The backing of the cards' footers - formerly a literal rgb(0 0 0 / 18%). Black dirties bluish
+     surfaces; the theme's shadow is bluish too. */
+  --acc-shade: rgb(var(--acc-ch-shade) / 22%);
+
+  /* --- The holiday layer: 24 Dec - 3 Jan ----------------------------------
+     Two things the panel has no paint for the rest of the year: snow, and the ice the Send button
+     freezes over with (see holiday.ts, Holiday.tsx and the [data-holiday] rules in composer.module.css).
+     Everything else the layer needs - the garland's bulbs - reuses the accents above, so the wire cannot
+     clash with the theme.
+
+     Written out rather than derived from the palette: this is a lit surface with a highlight along its
+     top edge, and the steps of it are one gradient's worth of light rather than roles anything else
+     shares. Ink is dark on purpose - the ice is a light fill, and --acc-on-accent is for the dark one. */
+  --acc-snow: #e6ecf8;
+  --acc-ice-line: #d9f1fb;
+  --acc-ice-ink: #0c3b55;
+  /* The fill itself is a token rather than three loose stops, in the manner of --acc-shadow-menu below:
+     what the button is given is one lit surface, and the light in it is not three roles anything else
+     would ever ask for one at a time. */
+  --acc-ice: linear-gradient(180deg, #a9e2f4 0%, #74c9ea 46%, #46a6d3 100%);
+  --acc-ice-hover: linear-gradient(180deg, #c1ecf9 0%, #8ad6f1 46%, #55b5de 100%);
+  --acc-ice-active: linear-gradient(180deg, #8fd3ea 0%, #5eb6dc 46%, #3892c1 100%);
+
+  /* The status line's shimmer. The warm orange was the only warm spot in the whole panel and stood out;
+     now the wave runs over the primary. */
+  --acc-stream-1: var(--acc-c-moon-4);
+  --acc-stream-2: var(--acc-c-moon-2);
+  --acc-stream-3: #4f8fd8;
+
+  /* --- Fonts -------------------------------------------------------------- */
+  /*
+   * Instrument Sans carries latin and latin-ext and nothing else - its @font-face rules say so with a
+   * unicode-range, so every other script falls through to whatever comes next in this list. Which is why
+   * the CJK families are named here rather than left to `system-ui`: on a machine with several installed,
+   * the browser otherwise picks by its own order and can draw Chinese text in a Japanese face. Cyrillic
+   * has no such ambiguity and is left to the system.
+   *
+   * The Han variant is chosen by `<html lang>`, which the panel writes on every language change (see
+   * i18n/LocaleProvider) - the families below only decide which face, not which shapes.
+   */
+  --acc-font: 'Instrument Sans', system-ui, 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC',
+    'Hiragino Kaku Gothic ProN', 'Yu Gothic UI', 'Noto Sans JP', 'Apple SD Gothic Neo', 'Malgun Gothic',
+    'Noto Sans KR', sans-serif;
+  --acc-mono: 'JetBrains Mono', ui-monospace, 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC',
+    'Hiragino Kaku Gothic ProN', 'Yu Gothic UI', 'Noto Sans JP', 'Apple SD Gothic Neo', 'Malgun Gothic',
+    'Noto Sans KR', monospace;
+  /* The line height of the feed's text. In the IDE it comes from the console's settings - the panel has to
+     read the same way as the terminal beside it; here is only a fallback value for the browser and the
+     harness, where there is nobody to ask. */
+  --acc-leading: 1.62;
+
+  /* The header's height: when there is not enough room the tabs wrap onto a second row and the header
+     grows. The default value is for the case where the ResizeObserver in Header has not set it yet. */
+  --header-height: 34px;
+
+  /* --- Radii -------------------------------------------------------------- */
+  --acc-r-xs: 3px;
+  --acc-r-sm: 4px;
+  --acc-r-md: 5px;
+  --acc-r-lg: 6px;
+  --acc-r-xl: 7px;
+  --acc-r-2xl: 8px;
+
+  /* --- The shadows of the floating layers --------------------------------- */
+  --acc-shadow-menu: 0 18px 44px rgb(var(--acc-ch-shade) / 62%);
+  --acc-shadow-card: 0 16px 42px rgb(var(--acc-ch-shade) / 55%), 0 0 0 1px rgb(var(--acc-ch-shade) / 40%);
+  --acc-shadow-popover: 0 10px 26px rgb(var(--acc-ch-shade) / 60%);
+}
+
+/**
+ * The metrics layer: spacing, hit sizes and the type scale.
+ *
+ * A third group of roles beside the surfaces and the text, and it exists for the same reason as the
+ * light theme's stub below - so that a different kind of screen is served by overriding roles rather
+ * than by a second copy of every stylesheet.
+ *
+ * The phone client sets data-acc-density="touch" on the root and gets the block underneath. The panel
+ * never sets it and renders exactly as before: the defaults here are the values already written into
+ * the modules.
+ */
+:root {
+  --acc-sp-1: 4px;
+  --acc-sp-2: 6px;
+  --acc-sp-3: 8px;
+  --acc-sp-4: 10px;
+  --acc-sp-5: 14px;
+  --acc-sp-6: 18px;
+
+  /* On a desktop a control is as big as its content; on a touchscreen it is as big as a fingertip. */
+  --acc-hit: auto;
+
+  /* The gutter down each side of the feed. Narrower under a thumb, not wider: sixteen pixels either
+     side of a 390px screen is a tenth of it spent on margin, while against a tool window the width of a
+     monitor the same sixteen are free. */
+  --acc-feed-gutter: 16px;
+
+  /* How much bigger the padding inside a card gets under a thumb.
+     A growth rather than an absolute size, for two reasons. The cards differ from one another by a
+     pixel or two on purpose, and an absolute token would flatten that rhythm. And it makes the desktop
+     provably unchanged rather than carefully checked: every value below reads calc(n + 0px). */
+  --acc-card-grow: 0px;
+
+  --acc-fs-body: 13px;
+  --acc-fs-mono: 11.5px;
+  --acc-fs-meta: 11px;
+  --acc-fs-label: 10px;
+
+  /* The chip at the head of a card - READ, BASH, THINK. Its size, its leading and its own padding are
+     named here because two rules live by them: the chip itself, and the invisible strut that holds a
+     head's row at one height when there is no chip in that row (see .toolHead::before in
+     feed.module.css). A strut measured by anything other than the chip stops holding the one thing it
+     was put there for. */
+  --acc-chip-size: 9.5px;
+  --acc-chip-leading: 13px;
+  --acc-chip-pad: 2px;
+
+  /* Code and diff lines are leaded by a fixed number rather than a ratio: the lines have to sit on one
+     grid, and a ratio of a fractional size lands between pixels. */
+  --acc-code-leading: 18px;
+}
+
+/**
+ * A screen operated by a thumb.
+ *
+ * Only the metrics change. The colours, the cards, the markup and the components stay the panel's own -
+ * a phone showing a conversation that reads differently from the one on the desk would be worse than a
+ * phone showing nothing.
+ */
+[data-acc-density='touch'] {
+  --acc-sp-1: 6px;
+  --acc-sp-2: 8px;
+  --acc-sp-3: 12px;
+  --acc-sp-4: 14px;
+  --acc-sp-5: 18px;
+  --acc-sp-6: 24px;
+
+  /* Forty-four: the smallest target most people hit reliably, and the size below which a mistap here
+     answers a question about somebody's files. */
+  --acc-hit: 44px;
+
+  /* The same gutter the phone's own shell uses, so the header, the list and the cards share one left
+     edge. Two nearly-equal insets a few pixels apart is the thing that reads as sloppy rather than as
+     dense. */
+  --acc-feed-gutter: var(--acc-sp-5);
+  --acc-card-grow: 4px;
+
+  --acc-fs-body: 15px;
+  --acc-fs-mono: 13px;
+  --acc-fs-meta: 12px;
+  --acc-fs-label: 11px;
+
+  --acc-code-leading: 20px;
+}
+
+/*
+ * The no-stress colour mode: the gauges stop shouting, by as much as one asks them to.
+ *
+ * The ladder of four is drawn towards one calm tone, and how far is a figure a person sets - all the way
+ * at nought, where a reading at 87% is painted exactly like a reading at 12% and only longer. What is
+ * measured stays on the screen; what fades is the verdict on it. Asked for because the red is read as an
+ * alarm all day long by somebody who is simply working, and the panel sits in the corner of the eye from
+ * morning till night - and made a slider rather than a switch because the answer is rarely either end.
+ *
+ * A step lighter than the panel's dimmest text rather than grey on grey: an instrument nobody can read
+ * is not calmer than a red one, it is only useless. And the only paints touched are the gauges' own -
+ * an error stays red, because that one is not a mood, it is something that happened.
+ *
+ * Here rather than in the components: the whole feature is a swap of four roles, and every gauge that
+ * ever gets added is drawn by the mode without being told about it. The panel and the phone alike put
+ * the attribute and the figure on the root (see hooks/useCalmColors.ts) - and the attribute stands ONLY
+ * below the full hundred, so a panel nobody has calmed wears the literals of :root themselves rather
+ * than a round trip through a mix that has nothing to mix.
+ */
+[data-acc-calm] {
+  /* Where the ladder is drawn to. */
+  --acc-gauge-calm: var(--acc-c-ink-18);
+
+  /*
+   * How much of the paint survives. In oklab, and that is the whole of why the four steps can be trusted
+   * to fade together: the four colours and the calm tone sit at nearly one lightness, and oklab holds
+   * lightness along the line - so at a low figure all four read as ONE grey rather than as four different
+   * ones. (oklch would turn the hue instead and take the green through teal on its way.)
+   *
+   * The fallback is not politeness. A custom property that failed to arrive makes the whole declaration
+   * invalid at computed-value time, --acc-gauge-1 becomes guaranteed-invalid, and the gauge loses its
+   * paint altogether instead of falling back to the ladder.
+   */
+  --acc-gauge-1: color-mix(in oklab, var(--acc-meter-green) var(--acc-gauge-vivid, 100%), var(--acc-gauge-calm));
+  --acc-gauge-2: color-mix(in oklab, var(--acc-warn) var(--acc-gauge-vivid, 100%), var(--acc-gauge-calm));
+  --acc-gauge-3: color-mix(in oklab, var(--acc-orange) var(--acc-gauge-vivid, 100%), var(--acc-gauge-calm));
+  --acc-gauge-4: color-mix(in oklab, var(--acc-bad-light) var(--acc-gauge-vivid, 100%), var(--acc-gauge-calm));
+
+  /*
+   * The halo is made out of the paint above rather than mixed a second time out of channels: written this
+   * way the two intensities are said once each and cannot drift from the steps they belong to. And here
+   * srgb rather than oklab, because this is not a mix at all - color-mix(in srgb, X 35%, transparent) IS
+   * rgb(X / 35%), to the bit: transparent contributes nothing once the alphas are premultiplied.
+   */
+  --acc-gauge-1-35: color-mix(in srgb, var(--acc-gauge-1) 35%, transparent);
+  --acc-gauge-1-80: color-mix(in srgb, var(--acc-gauge-1) 80%, transparent);
+  --acc-gauge-2-35: color-mix(in srgb, var(--acc-gauge-2) 35%, transparent);
+  --acc-gauge-2-80: color-mix(in srgb, var(--acc-gauge-2) 80%, transparent);
+  --acc-gauge-3-35: color-mix(in srgb, var(--acc-gauge-3) 35%, transparent);
+  --acc-gauge-3-80: color-mix(in srgb, var(--acc-gauge-3) 80%, transparent);
+  --acc-gauge-4-35: color-mix(in srgb, var(--acc-gauge-4) 35%, transparent);
+  --acc-gauge-4-80: color-mix(in srgb, var(--acc-gauge-4) 80%, transparent);
+}
+
+/*
+ * The light theme's stub. ONLY the role layer is overridden: the surfaces, the borders, the text,
+ * --acc-on-accent and one step of each accent (on a light background the glowing variant becomes
+ * unreadable while the dark one becomes the main one). The transparency ladders and the channels are not
+ * touched at all: 12% of moon blue works on any background.
+ *
+ * [data-acc-theme='light'] {
+ *   --acc-bg-sunken: #eceef3;
+ *   --acc-bg-deep: #f1f3f7;
+ *   --acc-bg: #f7f8fb;
+ *   ...
+ *   --acc-fg: #1b1f28;
+ *   --acc-on-accent: #ffffff;
+ *   --acc-accent: var(--acc-c-moon-1);
+ *   --acc-accent-hover: #3f86c4;
+ *   --acc-accent-light: var(--acc-c-moon-1);
+ * }
+ */

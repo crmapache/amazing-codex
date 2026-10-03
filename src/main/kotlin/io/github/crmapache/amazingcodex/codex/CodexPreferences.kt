@@ -1,0 +1,381 @@
+package io.github.crmapache.amazingcodex.codex
+
+import com.intellij.ide.util.PropertiesComponent
+
+/**
+ * The chosen model, effort and permission mode.
+ *
+ * They live in the IDE's settings rather than in the panel's memory: the choice is made once, and
+ * repeating it in every new tab - let alone after an editor restart - serves nothing. The storage is
+ * shared across projects: a model is chosen to suit oneself, not the repository.
+ */
+internal object CodexPreferences {
+
+    data class Snapshot(
+        val model: String,
+        val effort: String,
+        val mode: String,
+        val newTabModel: String,
+        val newTabEffort: String,
+        val composerLayout: String,
+        val pasteCollapse: String,
+        val sendKey: String,
+        val gaugeVivid: Int,
+        val improveInstructions: String,
+        val language: String,
+    )
+
+    fun snapshot(): Snapshot = Snapshot(
+        model = model,
+        effort = effort,
+        mode = mode,
+        newTabModel = newTabModel,
+        newTabEffort = newTabEffort,
+        composerLayout = composerLayout,
+        pasteCollapse = pasteCollapse,
+        sendKey = sendKey,
+        gaugeVivid = gaugeVivid,
+        improveInstructions = improveInstructions,
+        language = language,
+    )
+
+    var model: String
+        get() = read(MODEL_KEY)
+        set(value) = write(MODEL_KEY, value)
+
+    var effort: String
+        get() = read(EFFORT_KEY)
+        set(value) = write(EFFORT_KEY, value)
+
+    var mode: String
+        get() = read(MODE_KEY)
+        set(value) = write(MODE_KEY, value)
+
+    /**
+     * The model a new tab is pinned to. Empty - the default - means "whatever was last chosen", which is
+     * what [model] above holds and what the panel has always done.
+     *
+     * Two settings rather than one, and the empty one is the point. [model] is written by every applied
+     * pick in the MODEL chip, so it answers "what did I last work on"; this one is written only from the
+     * screen behind "New chats", so it answers "what do I want to start on". Folding them into a single
+     * value would mean a pin that any pick in any tab quietly overwrote - which is precisely the thing
+     * somebody pinning a model is asking not to happen.
+     *
+     * Filtered like [customModels], and for the same reason: the name travels as a launch argument, and
+     * an argument holding a quote or a line feed is cut short by a shell nobody asked for (see
+     * CodexLaunch).
+     */
+    var newTabModel: String
+        get() = usableModelNames(listOf(read(NEW_TAB_MODEL_KEY))).firstOrNull().orEmpty()
+        set(value) = write(NEW_TAB_MODEL_KEY, usableModelNames(listOf(value)).firstOrNull().orEmpty())
+
+    /**
+     * The effort a new tab is pinned to, empty meaning "whatever was last chosen" - the same pair as
+     * [newTabModel] and [model] above, for the same reason.
+     *
+     * Held to the known levels on the way in AND on the way out: this one, too, leaves as a launch
+     * argument, and what was stored here was written by an earlier version of the screen.
+     */
+    var newTabEffort: String
+        get() = EffortLevels.normalize(read(NEW_TAB_EFFORT_KEY))
+        set(value) = write(NEW_TAB_EFFORT_KEY, EffortLevels.normalize(value))
+
+    /**
+     * What a new tab genuinely starts on when nothing has been chosen for it in particular - the pin if
+     * there is one, and the last pick otherwise.
+     *
+     * Read by everything that has to SHOW that answer rather than launch by it: the chip over an empty
+     * tab in the panel, and the choice a phone opens a new conversation from. The launch itself takes a
+     * longer road, because it also knows which account is paying (see CodexSessions.newSession) - and
+     * an account nobody has worked on yet ends up exactly here.
+     */
+    fun startingModel(): String = newTabModel.ifEmpty { model }
+
+    fun startingEffort(): String = newTabEffort.ifEmpty { effort }
+
+    /**
+     * Where the input field sits: 'left' | 'bottom' | 'right' | 'compact'. Empty means a panel opened
+     * for the first time, which behaves as it used to.
+     */
+    var composerLayout: String
+        get() = read(COMPOSER_LAYOUT_KEY)
+        set(value) = write(COMPOSER_LAYOUT_KEY, value)
+
+    /**
+     * From how many lines a pasted text folds into a chip in the input field: "0" never folds it, a
+     * number folds a paste of that many lines and longer. Empty means the panel's own default (see
+     * pasteCollapseLines in feed/reference.ts) - the same shape as composerLayout above, and for the same
+     * reason: the panel has to behave sensibly before the IDE has said anything at all, the harness
+     * included.
+     *
+     * Machine-wide, beside the rest: whether one wants to see a pasted log whole is a habit of the
+     * person rather than a property of the repository.
+     */
+    var pasteCollapse: String
+        get() = read(PASTE_COLLAPSE_KEY)
+        set(value) = write(PASTE_COLLAPSE_KEY, value.trim())
+
+    /**
+     * Which key sends a message out of the input field: "modEnter" for Cmd/Ctrl+Enter, anything else -
+     * an empty value included - for Enter, which is what the panel did before the setting existed (see
+     * normalizeSendKey in sendKey.ts).
+     *
+     * Machine-wide beside the layout and the paste above, and for the same reason: which key sends is a
+     * habit of the person's hands, not a property of the repository.
+     */
+    var sendKey: String
+        get() = read(SEND_KEY_KEY)
+        set(value) = write(SEND_KEY_KEY, value.trim())
+
+    /**
+     * How much colour the context bar and the usage rings keep: a hundred is the green-to-red ladder,
+     * nought is one calm tone whatever the reading, and between them the ladder is faded towards that
+     * tone (see tokens.css and hooks/useCalmColors.ts). The full ladder unless somebody says otherwise -
+     * it is what the panel has always shown, and what most people read the gauges by.
+     *
+     * Machine-wide beside the send key above: whether a red gauge presses on somebody all day is a
+     * property of the person, not of the repository they happen to have open.
+     */
+    var gaugeVivid: Int
+        get() {
+            val stored = read(CALM_COLORS_KEY)
+            // The switch this setting grew out of, read on purpose: somebody who kept it on asked for one
+            // calm tone, and that is nought here. Taken for "nothing was said", it would hand them back
+            // the very ladder they had switched off.
+            if (stored == CALM_COLORS_WAS_ON) return GAUGE_VIVID_CALM
+
+            return stored.toIntOrNull()?.coerceIn(GAUGE_VIVID_CALM, GAUGE_VIVID_FULL) ?: GAUGE_VIVID_FULL
+        }
+        set(value) {
+            val vivid = value.coerceIn(GAUGE_VIVID_CALM, GAUGE_VIVID_FULL)
+            // The full ladder clears the key rather than writing itself into it - see [write]: an absent
+            // value and "as the panel has always drawn it" are the same answer.
+            write(CALM_COLORS_KEY, if (vivid == GAUGE_VIVID_FULL) "" else vivid.toString())
+        }
+
+    /**
+     * What the improve button asks for, in the person's own words. Empty means the built-in text (see
+     * PromptImprover.BUILT_IN_INSTRUCTIONS), which is also what the screen shows while it is empty - a
+     * setting whose default is invisible is a setting nobody edits.
+     *
+     * Machine-wide like the model and the mode above it: what a good prompt looks like is a habit of the
+     * person, not a property of the repository.
+     */
+    var improveInstructions: String
+        get() = read(IMPROVE_INSTRUCTIONS_KEY)
+        set(value) = write(IMPROVE_INSTRUCTIONS_KEY, value.trim())
+
+    /**
+     * The language the panel speaks. Empty means "whatever the IDE speaks" (see [IdeLanguage]).
+     *
+     * Empty rather than "en" as the default, and that is the whole point of the setting: somebody
+     * working in a Chinese IDE should be spoken to in Chinese without first having to discover that a
+     * switch exists. An explicit choice always wins over the IDE's, including an explicit English.
+     *
+     * Machine-wide beside the model and the mode above: a language is a property of the person, not of
+     * the repository, and choosing it once per project would be choosing it forever.
+     */
+    var language: String
+        get() = read(LANGUAGE_KEY)
+        set(value) = write(LANGUAGE_KEY, value.trim())
+
+    /**
+     * The models somebody named by hand, because Claude Code does not name them (see CustomModels.tsx).
+     *
+     * Machine-wide beside the model and the mode above: which models exist is decided by how this
+     * machine's Claude Code is set up - a proxy router, a gateway, a base URL of one's own - and not by
+     * the repository that happens to be open.
+     *
+     * Filtered on the way in AND on the way out, and that is not belt and braces: what is stored was
+     * written by an earlier version of this list, and one unusable name in it would go out as a launch
+     * argument (see [usableModelNames]).
+     */
+    var customModels: List<String>
+        get() = usableModelNames(read(CUSTOM_MODELS_KEY).split(','))
+        set(value) = write(CUSTOM_MODELS_KEY, usableModelNames(value).joinToString(","))
+
+    /**
+     * The names of that list that can actually be launched with, in the order they were given.
+     *
+     * Not an opinion about what a provider will accept - nobody on this side knows that, and the whole
+     * point of the list is that Claude Code does not know either. It is the one thing that IS knowable:
+     * the name travels as an argument to the CLI, and an argument holding a line feed or a quotation
+     * mark is cut short by a shell nobody asked for - silently, taking the rest of the command line with
+     * it (see CodexLaunch). Whitespace would split one argument into two. A comma is out for a smaller
+     * reason: it is what separates the entries in this setting.
+     *
+     * The panel refuses the same names at the button (see isModelName in catalog.ts), so that nothing is
+     * offered here that would be dropped there. This half is the one that decides.
+     */
+    fun usableModelNames(names: List<String>): List<String> = names
+        .map { it.trim() }
+        .filter { name ->
+            name.isNotEmpty() &&
+                name.length <= MAX_MODEL_NAME &&
+                name.none { it.isWhitespace() || it.isISOControl() || it in UNUSABLE_IN_MODEL }
+        }
+        .distinct()
+        .take(MAX_CUSTOM_MODELS)
+
+    /**
+     * The path to the executable, given by hand. Empty means we look for it ourselves (see
+     * [CodexExecutable]). Needed where the automatic search misses: an unusual install location, an
+     * IDE shell whose PATH is not the terminal's.
+     */
+    var executablePath: String
+        get() = read(EXECUTABLE_KEY)
+        set(value) = write(EXECUTABLE_KEY, value)
+
+    /**
+     * Sounds switched off by hand. What is stored is what is off rather than what is on: by default
+     * everything sounds, and an empty setting means "as intended" rather than "the person cleared every
+     * checkbox". Otherwise a sound added in the next version would arrive switched off for everyone who
+     * had ever opened this list.
+     */
+    var mutedSounds: Set<String>
+        get() = read(MUTED_SOUNDS_KEY).split(',').map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+        set(value) = write(MUTED_SOUNDS_KEY, value.joinToString(","))
+
+    /**
+     * Each sound's volume in per cent. Only those differing from full are written down: a sound not
+     * named here plays as it is.
+     *
+     * Kept apart from [mutedSounds] on purpose - clearing a checkbox must not wipe a configured volume:
+     * turning the sound back on, a person expects their previous per cent rather than a hundred.
+     */
+    var soundVolumes: Map<String, Int>
+        get() = read(SOUND_VOLUMES_KEY)
+            .split(',')
+            .mapNotNull { entry ->
+                val (id, value) = entry.split('=', limit = 2).takeIf { it.size == 2 } ?: return@mapNotNull null
+                val volume = value.trim().toIntOrNull()?.coerceIn(0, 100) ?: return@mapNotNull null
+                id.trim().takeIf { it.isNotEmpty() }?.let { it to volume }
+            }
+            .toMap()
+        set(value) = write(SOUND_VOLUMES_KEY, value.entries.joinToString(",") { "${it.key}=${it.value}" })
+
+    /**
+     * Whether this IDE may be reached from outside at all.
+     *
+     * Off unless it has been turned on, and it stays that way: a channel that can send a message to the
+     * agent is a channel that can run commands on this machine, and nobody should acquire one by
+     * installing a plugin. It is a scalar, so it lives here beside the model and the mode rather than
+     * in a component of its own; what is not a scalar - the paired devices - is in RemoteState.
+     */
+    var remoteEnabled: Boolean
+        get() = read(REMOTE_ENABLED_KEY) == "true"
+        set(value) = write(REMOTE_ENABLED_KEY, if (value) "true" else "")
+
+    /**
+     * Which relay to use. Empty means the public one. Being able to change it is the other half of
+     * publishing the relay's source: reading the code of a server you are obliged to use is only half
+     * an answer.
+     */
+    var remoteRelayUrl: String
+        get() = read(REMOTE_RELAY_KEY)
+        set(value) = write(REMOTE_RELAY_KEY, value.trim())
+
+    /**
+     * The address a person left on the feedback screen last time, so they need not type it again.
+     *
+     * Kept in the ordinary settings rather than in the password safe: it is what somebody chose to give
+     * out in order to be answered, not a secret. It is theirs alone - nothing is ever sent to it from
+     * here, and it travels only inside a message they pressed Send on.
+     */
+    var feedbackEmail: String
+        get() = read(FEEDBACK_EMAIL_KEY)
+        set(value) = write(FEEDBACK_EMAIL_KEY, value.trim())
+
+    /**
+     * Whether the microphone button and its hotkeys exist at all.
+     *
+     * Off until it is turned on, like remote access above and for a smaller version of the same reason:
+     * it needs a key of somebody's own, it listens to a microphone, and neither should arrive with an
+     * installed plugin. Off also means no listener on the IDE's event queue - see VoiceHotkeys.
+     */
+    var voiceEnabled: Boolean
+        get() = read(VOICE_ENABLED_KEY) == "true"
+        set(value) = write(VOICE_ENABLED_KEY, if (value) "true" else "")
+
+    /** Which language dictation listens in - a nova-3 code, or `multi`. See VoiceLanguages. */
+    var voiceLanguage: String
+        get() = read(VOICE_LANGUAGE_KEY)
+        set(value) = write(VOICE_LANGUAGE_KEY, value.trim())
+
+    /**
+     * The input device by its mixer name. Empty means whatever the system calls the default, which is
+     * what almost everybody wants and what follows a headset being plugged in.
+     */
+    var voiceDevice: String
+        get() = read(VOICE_DEVICE_KEY)
+        set(value) = write(VOICE_DEVICE_KEY, value.trim())
+
+    /**
+     * The four bindings, written the way HotkeyBinding writes them.
+     *
+     * Four rather than two because the keyboard and the mouse are independent triggers of the same two
+     * modes: somebody with a side button on their mouse wants it for push-to-talk without giving up the
+     * chord, and a release from one device must not stop what the other started.
+     */
+    var voicePushHotkey: String
+        get() = read(VOICE_PUSH_KEY)
+        set(value) = write(VOICE_PUSH_KEY, value.trim())
+
+    var voiceHoldHotkey: String
+        get() = read(VOICE_HOLD_KEY)
+        set(value) = write(VOICE_HOLD_KEY, value.trim())
+
+    var voicePushMouse: String
+        get() = read(VOICE_PUSH_MOUSE_KEY)
+        set(value) = write(VOICE_PUSH_MOUSE_KEY, value.trim())
+
+    var voiceHoldMouse: String
+        get() = read(VOICE_HOLD_MOUSE_KEY)
+        set(value) = write(VOICE_HOLD_MOUSE_KEY, value.trim())
+
+    /** What a model name may not hold, and how much of it there may be - see [usableModelNames]. */
+    /** The ends of the gauges' colour: the whole ladder, and one calm tone whatever the reading. */
+    const val GAUGE_VIVID_FULL = 100
+    const val GAUGE_VIVID_CALM = 0
+
+    /** What the switch this setting grew out of wrote while it was on. */
+    private const val CALM_COLORS_WAS_ON = "true"
+
+    private const val UNUSABLE_IN_MODEL = "\"'`\\,"
+    private const val MAX_MODEL_NAME = 120
+    private const val MAX_CUSTOM_MODELS = 30
+
+    private fun read(key: String): String = PropertiesComponent.getInstance().getValue(key).orEmpty()
+
+    private fun write(key: String, value: String) {
+        // An empty value means "as Codex has it by default": then the flag is not passed at
+        // launch at all.
+        PropertiesComponent.getInstance().setValue(key, value.ifEmpty { null })
+    }
+
+    private const val MODEL_KEY = "acx.model"
+    private const val EFFORT_KEY = "acx.effort"
+    private const val MODE_KEY = "acx.mode"
+    private const val NEW_TAB_MODEL_KEY = "acx.newTab.model"
+    private const val NEW_TAB_EFFORT_KEY = "acx.newTab.effort"
+    private const val COMPOSER_LAYOUT_KEY = "acx.composerLayout"
+    private const val PASTE_COLLAPSE_KEY = "acx.pasteCollapse"
+    private const val SEND_KEY_KEY = "acx.sendKey"
+    private const val CALM_COLORS_KEY = "acx.calmColors"
+    private const val IMPROVE_INSTRUCTIONS_KEY = "acx.improve.instructions"
+    private const val LANGUAGE_KEY = "acx.language"
+    private const val CUSTOM_MODELS_KEY = "acx.models.custom"
+    private const val EXECUTABLE_KEY = "acx.executable"
+    private const val MUTED_SOUNDS_KEY = "acx.sounds.muted"
+    private const val SOUND_VOLUMES_KEY = "acx.sounds.volumes"
+    private const val REMOTE_ENABLED_KEY = "acx.remote.enabled"
+    private const val REMOTE_RELAY_KEY = "acx.remote.relayUrl"
+    private const val FEEDBACK_EMAIL_KEY = "acx.feedback.email"
+    private const val VOICE_ENABLED_KEY = "acx.voice.enabled"
+    private const val VOICE_LANGUAGE_KEY = "acx.voice.language"
+    private const val VOICE_DEVICE_KEY = "acx.voice.device"
+    private const val VOICE_PUSH_KEY = "acx.voice.push"
+    private const val VOICE_HOLD_KEY = "acx.voice.hold"
+    private const val VOICE_PUSH_MOUSE_KEY = "acx.voice.pushMouse"
+    private const val VOICE_HOLD_MOUSE_KEY = "acx.voice.holdMouse"
+}

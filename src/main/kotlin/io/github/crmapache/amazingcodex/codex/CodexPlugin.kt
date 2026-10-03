@@ -1,0 +1,231 @@
+package io.github.crmapache.amazingcodex.codex
+
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+
+internal data class InstalledPlugin(
+    /** "context7@claude-plugins-official" - the plugin's name and its marketplace in one string. */
+    val id: String,
+    val version: String,
+    val scope: String,
+    val enabled: Boolean,
+    /** The path on disk where its commands/ and skills/ live - needed by CodexCommandHints. */
+    val installPath: String? = null,
+)
+
+internal data class AvailablePlugin(
+    val id: String,
+    val name: String,
+    val description: String,
+    val marketplace: String,
+    val installCount: Int,
+)
+
+internal data class PluginMarketplace(
+    val name: String,
+    /** A human-readable source: "github: anthropics/claude-plugins-official" and the like. */
+    val source: String,
+)
+
+/**
+ * Plugins and marketplaces - the same thing [CodexMcp] is for MCP servers: one-off `claude plugin ...`
+ * calls rather than part of a live conversation. Unlike MCP, install/uninstall/enable/disable have CLI
+ * subcommands of their own - there is no need to route them through a slash command inside the session,
+ * they all go directly.
+ *
+ * `list` also pulls the catalogue of plugins available in the connected marketplaces (`--available`) -
+ * a real search across 200+ plugins, which for MCP servers does not exist at all (there is no public
+ * registry there).
+ */
+internal object CodexPlugin {
+
+    // The marketplace catalogue is noticeably heavier than a single list of MCP servers.
+    private const val LIST_TIMEOUT_MS = 60_000
+
+    fun list(
+        workingDirectory: String?,
+        onResult: (installed: List<InstalledPlugin>, available: List<AvailablePlugin>) -> Unit,
+        onError: (String) -> Unit,
+    ) {
+        CodexCli.run(
+            workingDirectory,
+            listOf("plugin", "list", "--available", "--json"),
+            timeoutMs = LIST_TIMEOUT_MS,
+            onError = onError,
+        ) { output ->
+            val parsed = runCatching { Json.parseToJsonElement(output).jsonObject }.getOrNull()
+            if (parsed == null) {
+                onError("Couldn't parse the plugin list.")
+                return@run
+            }
+
+            val raw = parsed["installed"]?.jsonArray.orEmpty()
+            val installed = raw.mapNotNull(::parseInstalled)
+            // The same guard as in [installed] below, because this is the second door to the same
+            // cache: the plugins screen and every action on a plugin come through here and write the
+            // list the "/" hint is built from (see ProjectCatalog.sendPlugins). Guarded on one door
+            // only, a renamed field in some later CLI would still take every plugin's commands out of
+            // the hint - just by the other road, and without a word to say why.
+            if (unreadable(raw.size, installed.size)) {
+                onError("Couldn't read any plugin out of the list.")
+                return@run
+            }
+
+            onResult(installed, parsed["available"]?.jsonArray.orEmpty().mapNotNull(::parseAvailable))
+        }
+    }
+
+    /**
+     * The installed ones only, without the available catalogue - for slash command argument hints only
+     * the id and the installPath are needed, while a full `--available` pulls the catalogue of every
+     * plugin in every connected marketplace and is noticeably slower.
+     */
+    fun installed(
+        workingDirectory: String?,
+        onResult: (List<InstalledPlugin>) -> Unit,
+        onError: (String) -> Unit,
+    ) {
+        CodexCli.run(workingDirectory, listOf("plugin", "list", "--json"), onError = onError) { output ->
+            // Codex answers with an object - `installed`, and `available` only when asked for it.
+            val parsed = runCatching {
+                val element = Json.parseToJsonElement(output)
+                (element as? JsonObject)?.get("installed")?.jsonArray ?: element.jsonArray
+            }.getOrNull()
+            if (parsed == null) {
+                onError("Couldn't parse the plugin list.")
+                return@run
+            }
+
+            val installed = parsed.mapNotNull(::parseInstalled)
+            if (unreadable(parsed.size, installed.size)) {
+                onError("Couldn't read any plugin out of the list.")
+                return@run
+            }
+
+            onResult(installed)
+        }
+    }
+
+    /**
+     * An answer with entries out of which not one could be read is a shape we did not expect rather
+     * than an empty list. Told apart, the caller may believe an empty answer (see
+     * ProjectCatalog.installedPlugins); folded together, a renamed field in some later CLI would
+     * quietly take every plugin's commands out of the "/" hint and leave nothing to say why.
+     *
+     * One predicate for both doors on purpose: the guard used to sit on one of them, and which door an
+     * answer arrives through is not something the hint should depend on.
+     */
+    internal fun unreadable(entries: Int, read: Int): Boolean = entries > 0 && read == 0
+
+    fun marketplaces(
+        workingDirectory: String?,
+        onResult: (List<PluginMarketplace>) -> Unit,
+        onError: (String) -> Unit,
+    ) {
+        CodexCli.run(workingDirectory, listOf("plugin", "marketplace", "list", "--json"), onError = onError) { output ->
+            val parsed = runCatching {
+                val element = Json.parseToJsonElement(output)
+                (element as? JsonObject)?.get("marketplaces")?.jsonArray ?: element.jsonArray
+            }.getOrNull()
+            if (parsed == null) {
+                onError("Couldn't parse the marketplace list.")
+                return@run
+            }
+
+            onResult(parsed.mapNotNull(::parseMarketplace))
+        }
+    }
+
+    fun install(workingDirectory: String?, plugin: String, onResult: (String) -> Unit, onError: (String) -> Unit) {
+        CodexCli.run(workingDirectory, listOf("plugin", "add", plugin), onError = onError) { output ->
+            onResult(formatResult(output).ifEmpty { "Installed $plugin." })
+        }
+    }
+
+    fun uninstall(workingDirectory: String?, plugin: String, onResult: (String) -> Unit, onError: (String) -> Unit) {
+        CodexCli.run(workingDirectory, listOf("plugin", "remove", plugin), onError = onError) { output ->
+            onResult(formatResult(output).ifEmpty { "Uninstalled $plugin." })
+        }
+    }
+
+    /**
+     * Codex has no switch for a plugin short of removing it - `codex plugin` adds and removes, and that is
+     * all. Said rather than faked: a toggle that answered "done" and changed nothing would be worse.
+     */
+    fun enable(workingDirectory: String?, plugin: String, onResult: (String) -> Unit, onError: (String) -> Unit) {
+        onError("Codex cannot switch a plugin on or off - add it again to use it.")
+    }
+
+    fun disable(workingDirectory: String?, plugin: String, onResult: (String) -> Unit, onError: (String) -> Unit) {
+        onError("Codex cannot switch a plugin on or off - remove it instead.")
+    }
+
+    fun addMarketplace(workingDirectory: String?, source: String, onResult: (String) -> Unit, onError: (String) -> Unit) {
+        CodexCli.run(workingDirectory, listOf("plugin", "marketplace", "add", source), onError = onError) { output ->
+            onResult(formatResult(output).ifEmpty { "Added marketplace $source." })
+        }
+    }
+
+    fun removeMarketplace(workingDirectory: String?, name: String, onResult: (String) -> Unit, onError: (String) -> Unit) {
+        CodexCli.run(workingDirectory, listOf("plugin", "marketplace", "remove", name), onError = onError) { output ->
+            onResult(formatResult(output).ifEmpty { "Removed marketplace $name." })
+        }
+    }
+
+    /**
+     * `claude plugin install` prints "Installing plugin…" and the outcome (✔/✘) as one lump without a
+     * single separator - checked byte by byte directly, this is not a newline we dropped but how the
+     * CLI has it. So we add the break ourselves.
+     */
+    private fun formatResult(output: String): String =
+        output.trim().replace(Regex("""\s*([✔✘])"""), "\n$1").trim()
+
+    internal fun parseInstalled(element: JsonElement): InstalledPlugin? {
+        val obj = element as? JsonObject ?: return null
+        val id = obj["pluginId"]?.jsonPrimitive?.contentOrNull ?: obj["id"]?.jsonPrimitive?.contentOrNull ?: return null
+        val source = obj["source"] as? JsonObject
+
+        return InstalledPlugin(
+            id = id,
+            version = obj["version"]?.jsonPrimitive?.contentOrNull ?: "unknown",
+            scope = obj["scope"]?.jsonPrimitive?.contentOrNull ?: "user",
+            enabled = obj["enabled"]?.jsonPrimitive?.booleanOrNull ?: true,
+            installPath = obj["installPath"]?.jsonPrimitive?.contentOrNull ?: source?.get("path")?.jsonPrimitive?.contentOrNull,
+        )
+    }
+
+    private fun parseAvailable(element: JsonElement): AvailablePlugin? {
+        val obj = element as? JsonObject ?: return null
+        val id = obj["pluginId"]?.jsonPrimitive?.contentOrNull ?: return null
+
+        return AvailablePlugin(
+            id = id,
+            name = obj["name"]?.jsonPrimitive?.contentOrNull ?: id,
+            description = obj["description"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+            marketplace = obj["marketplaceName"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+            installCount = obj["installCount"]?.jsonPrimitive?.intOrNull ?: 0,
+        )
+    }
+
+    private fun parseMarketplace(element: JsonElement): PluginMarketplace? {
+        val obj = element as? JsonObject ?: return null
+        val name = obj["name"]?.jsonPrimitive?.contentOrNull ?: return null
+        // The shape of the source differs by type: github has a repo, the others (url/path) have the
+        // corresponding field with the same meaning.
+        val kind = (obj["source"] as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull.orEmpty()
+        val detail = obj["repo"]?.jsonPrimitive?.contentOrNull
+            ?: obj["url"]?.jsonPrimitive?.contentOrNull
+            ?: obj["path"]?.jsonPrimitive?.contentOrNull
+            ?: obj["root"]?.jsonPrimitive?.contentOrNull
+
+        val source = if (kind.isNotEmpty() && detail != null) "$kind: $detail" else kind.ifEmpty { detail.orEmpty() }
+        return PluginMarketplace(name = name, source = source)
+    }
+}

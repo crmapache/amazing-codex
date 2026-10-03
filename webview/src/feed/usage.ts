@@ -1,0 +1,291 @@
+import type { Dict } from '../i18n/en'
+import type { ExtraUsage, ShellMessage, UsageWindow } from '../protocol'
+
+/**
+ * How the usage gauges are read: what the figures themselves add up to, the ring's geometry, the colour
+ * of a window by its pace, and the colour of the context by its fill.
+ *
+ * Apart from the components because two screens draw them now - the status line at the desk (see
+ * StatusBar) and the composer on the phone (see mobile/screens/Composer). A phone showing 61% in
+ * orange while the panel shows the same 61% in green would be worse than a phone showing nothing: the
+ * whole point of the colour is that it can be trusted without reading the figure.
+ *
+ * The thresholds themselves are taken from a personal ~/.claude/statusline.sh one to one.
+ */
+
+/** What both screens know about the subscription's usage - see [mergeUsage]. */
+export interface UsageFacts {
+  session?: UsageWindow
+  week?: UsageWindow
+  /** Whether the plan's limit is being passed for money right now - see ExtraUsage. */
+  extra?: ExtraUsage
+  /** The current model's context window: with the large ones it is a million, not two hundred thousand. */
+  contextWindow?: number
+  /** Today's tokens across every project - the same "tok" as in a terminal. */
+  todayTokens?: string
+}
+
+type UsageMessage = Extract<ShellMessage, { type: 'usage' }>
+
+/**
+ * The usage figures of every account at once.
+ *
+ * Two accounts genuinely run at the same time - a conversation carries its account for its whole life -
+ * so both answer about their own subscription, and both send `usage` messages. Folded into one picture
+ * they interleave: one account's five-hour window beside the other's weekly one, permanently, with no
+ * switch needed to produce it. So each account has its own set of figures and the screen draws the ones
+ * belonging to the tab in front of the person.
+ *
+ * `shared` is for what belongs to no account. There is exactly one such figure - today's tokens - and it
+ * is counted by reading a transcripts folder that has no account marker anywhere in it (see
+ * ProjectUsage.refreshTodayTokens).
+ */
+export interface UsageBook {
+  byAccount: Record<string, UsageFacts>
+  shared: UsageFacts
+}
+
+export const emptyUsageBook = (): UsageBook => ({ byAccount: {}, shared: {} })
+
+/** One `usage` message folded into the account it names, or into the shared slot when it names none. */
+export const mergeUsageBook = (book: UsageBook, message: UsageMessage): UsageBook =>
+  message.account === undefined
+    ? { ...book, shared: mergeUsage(book.shared, message) }
+    : {
+        ...book,
+        byAccount: {
+          ...book.byAccount,
+          [message.account]: mergeUsage(book.byAccount[message.account] ?? {}, message),
+        },
+      }
+
+/**
+ * What one account's screen shows: its own windows, and the shared figures underneath.
+ *
+ * Written out field by field rather than as a spread of one over the other, because `mergeUsage` leaves
+ * its keys present-and-undefined: spread, an account that has never heard of today's tokens would
+ * overwrite the shared answer with `undefined` and the figure would vanish from the screen.
+ */
+export const usageOf = (book: UsageBook, account: string): UsageFacts => {
+  const own = book.byAccount[account] ?? {}
+
+  return {
+    session: own.session,
+    week: own.week,
+    extra: own.extra,
+    contextWindow: own.contextWindow ?? book.shared.contextWindow,
+    todayTokens: own.todayTokens ?? book.shared.todayTokens,
+  }
+}
+
+/**
+ * One `usage` message folded into what is already known.
+ *
+ * Merged rather than taken whole: the figures arrive by two independent routes - the windows out of the
+ * CLI's own answer and, separately, the scan of the transcripts that counts today's tokens - and the
+ * last message entire would let each of them zero out what the other has just learned.
+ *
+ * `reset` is the exception, and the reason this lives in one place instead of a copy per screen: when
+ * the sign-in moves to another account the previous account's shares have to go, and by the rule above
+ * they never would - a window the new account has not opened yet is not mentioned in the answer at all
+ * (see ProjectUsage.forget). What survives a reset is what does not belong to a subscription: the
+ * context window's size and the day's tokens.
+ */
+export const mergeUsage = (current: UsageFacts, message: UsageMessage): UsageFacts =>
+  message.reset
+    ? { contextWindow: current.contextWindow, todayTokens: current.todayTokens }
+    : {
+        session: message.session ?? current.session,
+        week: message.week ?? current.week,
+        // Extra usage arrives whole or not at all: its two halves are put together on the plugin's side
+        // (see ProjectUsage.putExtra), and merging them field by field here would only take them apart.
+        extra: message.extra ?? current.extra,
+        // ?? will not do here - a 0 is not nullish, it would stick in the state forever and the context
+        // gauge below would divide by zero for good.
+        contextWindow:
+          message.contextWindow && message.contextWindow > 0 ? message.contextWindow : current.contextWindow,
+        todayTokens: message.todayTokens ?? current.todayTokens,
+      }
+
+/**
+ * Which window a limit event is about, in the words a person uses - the CLI's own names for them, not a
+ * guess.
+ *
+ * The weekly ones come per model as well as in general: an exhausted Opus week with the shared one still
+ * half full is an ordinary state of affairs, and "your weekly limit is used up" would then be a lie about
+ * the whole subscription. An unfamiliar name gives an empty string rather than itself: a new bucket in a
+ * later CLI must not turn into "your seven_day_whatever limit" in the panel.
+ *
+ * Here rather than in the feed because two things read it: the row in the feed (see rate_limit_event in
+ * build.ts) and the tooltip on the burning ring (see UsageMeters).
+ */
+const limitWindowNames = (t: Dict): Record<string, string> => ({
+  five_hour: t.limits.fiveHour,
+  seven_day: t.limits.weekly,
+  seven_day_opus: t.limits.weeklyOpus,
+  seven_day_sonnet: t.limits.weeklySonnet,
+  seven_day_oauth_apps: t.limits.weeklyApps,
+  seven_day_overage_included: t.limits.weeklyWithExtra,
+  overage: t.limits.extra,
+})
+
+export const limitWindowName = (t: Dict, window: string | undefined): string =>
+  limitWindowNames(t)[window ?? ''] ?? ''
+
+/**
+ * Which of the two rings the window belongs to: the five-hour one or the weekly one.
+ *
+ * It decides which ring burns while extra usage is being spent. Everything weekly - the shared window and
+ * the per-model ones alike - belongs to the weekly ring; anything else, an unfamiliar name included, goes
+ * to the five-hour one, because that is the window that runs out several times a day and is nearly always
+ * the one meant.
+ */
+export const limitWindowRing = (window: string | undefined): 'session' | 'week' =>
+  window?.startsWith('seven_day') ? 'week' : 'session'
+
+/** The ring's radius in its own coordinates, and the arc length at that radius. */
+export const RING_RADIUS = 8.5
+
+export const RING_LENGTH = 2 * Math.PI * RING_RADIUS
+
+/** How far to leave the arc "unturned": at 0% there is no ring at all, at 100% it is closed. */
+export const ringDash = (percent: number): number =>
+  RING_LENGTH * (1 - Math.min(100, Math.max(0, percent)) / 100)
+
+export const FIVE_HOUR_MS = 5 * 60 * 60 * 1000
+
+export const WEEK_MS = 7 * 24 * 60 * 60 * 1000
+
+/** A month, for the pace of a spending cap that starts over monthly - see spendingWindow. */
+export const MONTH_MS = 30 * 24 * 60 * 60 * 1000
+
+/**
+ * The spending cap as a window with a share and a reset: known when the budget beside the plan says how
+ * much of it has gone, and drawn only while nothing burns - a burning ring already stands for money being
+ * spent. On a Codex business seat this is the only limit there is (see ExtraUsage.resets).
+ */
+export const spendingWindow = (extra: ExtraUsage | undefined): UsageWindow | null =>
+  extra && !extra.active && extra.enabled !== false && extra.percent !== undefined
+    ? { percent: extra.percent, resets: extra.resets ?? '' }
+    : null
+
+const DAY_MS = 24 * 60 * 60 * 1000
+
+const WEEK_DAILY_BUDGET = 14
+
+/**
+ * The alarm level by the pace of usage rather than by a bare percentage. 51% over a week with the
+ * window almost over is not frightening, while the same percentage on the first day is alarming: we
+ * compare the real usage against the line of an even pace up to the reset and colour the deviation
+ * from it. Plus an absolute ceiling on top: right at the limit, time no longer saves anyone, whatever
+ * the pace. 0 = green, 1 = yellow, 2 = orange, 3 = red.
+ */
+const paceSeverity = (usedPercent: number, resets: string, windowMs: number): number => {
+  const resetMs = resets ? new Date(resets).getTime() : Number.NaN
+  const now = Date.now()
+
+  // No reset data, or the window is no longer current (the reset is in the past) - the ceiling only.
+  if (!resets || Number.isNaN(resetMs) || resetMs <= now) {
+    if (usedPercent >= 96) return 3
+    if (usedPercent >= 90) return 2
+    return 0
+  }
+
+  const elapsedFraction = Math.min(1, Math.max(0, (now - (resetMs - windowMs)) / windowMs))
+  const over = usedPercent - elapsedFraction * 100
+
+  let severity = over <= 0 ? 0 : over <= 15 ? 1 : over <= 35 ? 2 : 3
+  if (usedPercent >= 96) severity = Math.max(severity, 3)
+  else if (usedPercent >= 90) severity = Math.max(severity, 2)
+
+  return severity
+}
+
+/**
+ * The four steps of the gauges' ladder, and the one thing every gauge is painted through.
+ *
+ * The roles are numbered rather than named by colour on purpose: what colour a step actually is, is
+ * decided by tokens.css - and in the no-stress mode all four are one calm tone (see [data-acc-calm]
+ * there). Were the paint itself written here - `var(--acc-bad-light)` and the rest - every gauge would
+ * have to be taught about that mode one at a time, and the ones added later would not be taught at all.
+ */
+const SEVERITY_COLOR = ['var(--acc-gauge-1)', 'var(--acc-gauge-2)', 'var(--acc-gauge-3)', 'var(--acc-gauge-4)']
+
+export const paceColor = (usedPercent: number, resets: string, windowMs: number): string =>
+  SEVERITY_COLOR[paceSeverity(usedPercent, resets, windowMs)] ?? SEVERITY_COLOR[0]!
+
+/**
+ * The context has no window with a reset of its own - only a bare percentage, on a scale of its own.
+ * This is the shared source of truth for the thresholds: the context bar in the composer, the vertical
+ * scale beside a narrow field and the phone's own bar are coloured and lit by the same levels -
+ * duplicating 50/70/85 in a second place would mean parting them sooner or later.
+ */
+type ContextLevel = 1 | 2 | 3 | 4
+
+const contextLevel = (percent: number): ContextLevel => {
+  if (percent < 50) return 1
+  if (percent < 70) return 2
+  if (percent < 85) return 3
+  return 4
+}
+
+const CONTEXT_LEVEL_COLOR: Record<ContextLevel, string> = {
+  1: 'var(--acc-gauge-1)',
+  2: 'var(--acc-gauge-2)',
+  3: 'var(--acc-gauge-3)',
+  4: 'var(--acc-gauge-4)',
+}
+
+export const contextColor = (percent: number): string => CONTEXT_LEVEL_COLOR[contextLevel(percent)]
+
+/** The same pair of glow intensities (80% + 35%) as in the context bar itself. */
+const CONTEXT_LEVEL_GLOW: Record<ContextLevel, { strong: string; soft: string }> = {
+  1: { strong: 'var(--acc-gauge-1-80)', soft: 'var(--acc-gauge-1-35)' },
+  2: { strong: 'var(--acc-gauge-2-80)', soft: 'var(--acc-gauge-2-35)' },
+  3: { strong: 'var(--acc-gauge-3-80)', soft: 'var(--acc-gauge-3-35)' },
+  4: { strong: 'var(--acc-gauge-4-80)', soft: 'var(--acc-gauge-4-35)' },
+}
+
+export const contextGlow = (percent: number): { strong: string; soft: string } =>
+  CONTEXT_LEVEL_GLOW[contextLevel(percent)]
+
+/**
+ * How long is left until the window resets: "2h 41m".
+ *
+ * The remainder specifically rather than the reset time: it answers one question - hold out or start
+ * saving right now - and in this shape the answer does not have to be worked out. Null when nobody
+ * knows yet: a window that has just reset has no next reset time until the very first turn, and
+ * "resets soon" would then mean exactly the opposite of the truth.
+ */
+export const timeLeft = (resets: string): string | null => {
+  const resetMs = resets ? new Date(resets).getTime() : Number.NaN
+  if (Number.isNaN(resetMs)) return null
+
+  const minutes = Math.round((resetMs - Date.now()) / 60_000)
+  if (minutes <= 0) return null
+
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return hours > 0 ? `${hours}h ${minutes % 60}m` : `${minutes}m`
+
+  // A weekly window is measured in days for most of its life, and "97h 12m" is a number one has to
+  // divide in one's head before it means anything.
+  return `${Math.floor(hours / 24)}d ${hours % 24}h`
+}
+
+/**
+ * The second figure beside the weekly usage is not the share of time elapsed but the window's day
+ * number: on the day the limit resets 14% is already available, the next day 28%, and so on (100/7
+ * rounded to a flat 14 - the same logic as in a personal statusline.sh), so that it does not have to be
+ * worked out in one's head on every glance.
+ */
+export const weekBudgetToday = (resets: string): number | null => {
+  if (!resets) return null
+
+  const resetMs = new Date(resets).getTime()
+  if (Number.isNaN(resetMs)) return null
+
+  const start = resetMs - WEEK_MS
+  const elapsed = Math.max(0, Date.now() - start)
+  const day = Math.floor(elapsed / DAY_MS) + 1
+  return Math.min(day * WEEK_DAILY_BUDGET, 100)
+}

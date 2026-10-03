@@ -1,0 +1,2043 @@
+/* The panel's lower part: the task list, the queue, the quotes, the input field. */
+
+/* The animation's keyframes live right here rather than in feed.module.css: a CSS module renames animation
+   names just as it renames classes, and a reference to another module's keyframes silently turns into
+   nothing - the animation simply does not run. */
+@keyframes acc-pulse {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+/*
+ * Gives way rather than standing at its full height whatever happens (flex: none, as it was).
+ *
+ * A card in this stack can be tall - six questions in one call is an ordinary thing - and the dock used to
+ * grow past the panel's own height along with it. What stood below the growth was the input field itself,
+ * and the panel clips what does not fit (see .panel in shell.module.css): the person was left looking at a
+ * question with nothing to answer it with, and no scroll anywhere to reach the field. It happens on a short
+ * panel, which is exactly the panel someone drags to the bottom edge of the screen.
+ *
+ * Now the room runs out inside the stack instead. The feed above gives up its height first (it has a scroll
+ * of its own and loses nothing), and when it has none left the card that can scroll gives up the difference
+ * (see .ask below).
+ */
+.dock {
+  flex: 0 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--acc-bg-panel);
+  padding: 8px 10px 0;
+}
+
+/* Nothing in the stack shrinks of its own accord: a squeezed queue, task row or input field has nowhere to
+   put what does not fit and would simply be cut in half. Giving way is opt-in - a card marks itself with
+   data-shrinks when it has a list inside that can scroll instead. The same pair of rules stands over the
+   side rail (.railColumn in shell.module.css), which holds the very same cards under left/right. */
+.dock > *:not([data-shrinks]) {
+  flex: none;
+}
+
+/* The border faces where the feed adjoins the input field - see App.tsx (layout). */
+.dock[data-layout='bottom'],
+.dock[data-layout='compact'],
+.dock[data-layout='left'],
+.dock[data-layout='right'] {
+  border-top: 1px solid var(--acc-line);
+}
+
+/*
+ * left/right: the grid stands on the whole .panel, the header is the first row, the feed and the dock share
+ * one column with it in the rows further on - the feed as the second row, the dock as the third (see
+ * shell.module.css). The side rail (.railColumn) takes all three rows at once, on the left under left and
+ * on the right under right - its own border already separates it over the full height, and the dock needs
+ * no border of its own on that side.
+ */
+.dock[data-layout='right'] {
+  grid-column: 1;
+  grid-row: 3;
+}
+
+.dock[data-layout='left'] {
+  grid-column: 2;
+  grid-row: 3;
+}
+
+/* --- The blocking panels' buttons -------------------------------------------- */
+
+.primary {
+  height: 25px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 11px;
+  border-radius: var(--acc-r-md);
+  background: var(--acc-accent);
+  color: var(--acc-on-accent);
+  font: 600 11.5px var(--acc-font);
+}
+
+.primary:hover {
+  background: var(--acc-accent-hover);
+}
+
+.primary:active {
+  background: var(--acc-accent-active);
+}
+
+.primaryWarn {
+  background: var(--acc-warn);
+}
+
+.primaryWarn:hover {
+  background: var(--acc-warn-hover);
+}
+
+.primaryWarn:active {
+  background: var(--acc-warn-active);
+}
+
+.primaryBranch {
+  background: var(--acc-branch);
+}
+
+.primaryBranch:hover {
+  background: var(--acc-branch-hover);
+}
+
+.primaryBranch:active {
+  background: var(--acc-branch-active);
+}
+
+/* One rule for every filled variant: it stands below the variant :hover rules, so it wins over them at
+   equal specificity and holds its look even under the cursor. */
+.primary:disabled {
+  background: var(--acc-bg-control);
+  color: var(--acc-fg-ghost);
+}
+
+/* The "nothing to send yet" variant: in the design this is a disabled cell of an answer to a question -
+   dimmed and unresponsive to the cursor, so it has no :hover of its own. Its shade of text is lighter than
+   the shared disabled one: the caption here is also a hint about what to do next. The second selector is
+   there to override the shared .primary:disabled. */
+.primaryOff,
+.primaryOff:disabled {
+  background: var(--acc-bg-control);
+  color: var(--acc-fg-faint);
+}
+
+.secondary {
+  height: 25px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 11px;
+  border: 1px solid var(--acc-line-strong);
+  border-radius: var(--acc-r-md);
+  font: 500 11.5px var(--acc-font);
+  color: var(--acc-fg-soft);
+}
+
+.secondary:hover {
+  border-color: var(--acc-accent);
+  color: var(--acc-fg);
+}
+
+.secondary:active {
+  border-color: var(--acc-accent-active);
+  background: var(--acc-accent-12);
+  color: var(--acc-fg);
+}
+
+.secondaryDanger:hover {
+  border-color: var(--acc-bad);
+  color: var(--acc-bad-light);
+}
+
+.secondaryDanger:active {
+  border-color: var(--acc-bad-active);
+  background: var(--acc-bad-16);
+  color: var(--acc-bad-light);
+}
+
+.secondary:disabled {
+  border-color: var(--acc-line);
+  background: none;
+  color: var(--acc-fg-ghost);
+}
+
+/* --- The permission ----------------------------------------------------------- */
+
+.perm {
+  margin-bottom: 8px;
+  border: 1px solid var(--acc-warn-40);
+  border-radius: var(--acc-r-2xl);
+  background: var(--acc-warn-06);
+  overflow: hidden;
+}
+
+/* On the baseline rather than centred: the PERMISSION label is small mono while the target is ordinary
+   text, and by the centres of their own boxes they stand at different heights. */
+.permHead {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  padding: 8px 11px;
+}
+
+.permLabel {
+  font: 600 9.5px/1 var(--acc-mono);
+  letter-spacing: 0.09em;
+  color: var(--acc-warn);
+}
+
+.permTarget {
+  font-size: 12px;
+  color: var(--acc-fg-body);
+}
+
+.permCmd {
+  margin: 0 11px;
+  padding: 7px 9px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-md);
+  background: var(--acc-bg-sunken);
+  font: 11.5px/17px var(--acc-mono);
+  color: var(--acc-warn-light);
+  white-space: pre-wrap;
+}
+
+/* The question's reason: an explanation of the command above, hence along its left edge and with the same
+   padding. In ordinary text rather than mono - this is a sentence rather than a command. */
+.permReason {
+  margin: 6px 11px 0;
+  font-size: 11.5px;
+  line-height: 16px;
+  color: var(--acc-fg-dim);
+}
+
+.permActions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 11px;
+}
+
+/* A button's number is also its hotkey. Small and dimmed: a hint rather than part of the caption, it must
+   not get in the way of reading the button. In a semi-transparent colour rather than one of its own: the
+   buttons here are of different kinds - filled and outlined - and on each it lies over that button's own
+   background. */
+.actionKey {
+  display: grid;
+  place-items: center;
+  width: 13px;
+  height: 13px;
+  border-radius: var(--acc-r-xs);
+  background: rgb(0 0 0 / 18%);
+  font: 600 9px/1 var(--acc-mono);
+  opacity: 0.75;
+}
+
+/* --- The questions -------------------------------------------------------- */
+
+/* A column that can give way (see .dock and data-shrinks above): the head and the foot keep their height
+   while the list of questions takes what is left over and scrolls. How much is left over is decided by the
+   panel's height rather than by a number written here - see .askBody. */
+.ask {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  min-height: 0;
+  margin-bottom: 8px;
+  border: 1px solid var(--acc-branch-40);
+  border-radius: var(--acc-r-2xl);
+  background: var(--acc-branch-06);
+  overflow: hidden;
+}
+
+/* Centred rather than on the baseline, unlike .permHead: the cross at the far end is taller than the text
+   beside it, and in a row aligned by the baseline the whole line hangs from that cross's top edge. Folded,
+   where the head is the entire card, the caption stood two pixels above the middle because of it. */
+.askHead {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 11px;
+  border-bottom: 1px solid var(--acc-branch-20);
+}
+
+/* Folded, the head is the whole card, and the line under it would be a second border a pixel above the
+   card's own - two rules for one edge, and the content half a pixel higher than the middle. */
+.askHeadAlone {
+  border-bottom: none;
+}
+
+/* On the baseline within the group, because the label is small mono and the count is ordinary text: by the
+   centres of their own boxes those two stand at different heights. The group as a whole is what the row
+   centres (the same trick as .taskPanelTextGroup). */
+.askTitle {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  min-width: 0;
+}
+
+.askLabel {
+  font: 600 9.5px/1 var(--acc-mono);
+  letter-spacing: 0.09em;
+  color: var(--acc-branch);
+}
+
+.askMeta {
+  font-size: 11.5px;
+  color: var(--acc-fg-dim);
+}
+
+/* It releases the question rather than hides it: the turn stands while the agent waits for an answer - so
+   the cross is always visible rather than only under the cursor. */
+.askDismiss {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--acc-r-xs);
+  font-size: 13px;
+  line-height: 1;
+  color: var(--acc-fg-faint);
+}
+
+.askDismiss:hover {
+  background: var(--acc-branch-20);
+  color: var(--acc-fg);
+}
+
+/* Centred on the card's own top edge rather than in the head's flex row: the row's content is left-aligned,
+   so a flex child could never land in the true centre of the card. Sits inside the border (top: 0, no
+   negative offset) because .ask clips overflow for its rounded corners - a floating tab half outside it
+   would be cut off.
+   The padding at the top stands in for the border this tab does not have: with a border only along the
+   bottom the content box sits a pixel below the tab's own middle, and at twelve pixels a missed centre is
+   the whole difference between a handle and a chip of something. */
+.askCollapse {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 28px;
+  height: 12px;
+  padding-top: 1px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--acc-branch-32);
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+  background: var(--acc-branch-12);
+  /* In the card's own colour rather than grey: everything else here - the border, the label, the tint of
+     the background - belongs to the question, and the one grey thing among them read as something left
+     over from elsewhere rather than as a part of the card. */
+  color: var(--acc-branch);
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.askCollapse:hover {
+  background: var(--acc-branch-20);
+  border-color: var(--acc-branch-60);
+  color: var(--acc-branch-light);
+}
+
+/* Folding and unfolding are one drawing at two angles rather than two characters (see Chevron.tsx). Turned
+   rather than swapped, because the turn itself says the two states are the same thing - and because a
+   swapped glyph jumps where a rotation has somewhere to go. */
+.askCaret {
+  width: 10px;
+  height: 6px;
+  transition: transform 0.16s ease;
+}
+
+.askCaretUp {
+  transform: rotate(180deg);
+}
+
+/*
+ * The head and the send button stay in place - only the list of questions itself spins.
+ *
+ * How tall it may grow is not written here. It used to be (320px), and a fixed ceiling is wrong in both
+ * directions at once: on a tall panel it cut a card that had room to open, and on a short one it was still
+ * more height than the panel had to give - the input field went off the screen anyway, which is the whole
+ * reason it was put there. Now the card takes what the panel has left over after the field (see .dock), so
+ * on a short panel the list scrolls and on a tall one it opens as far as it goes.
+ */
+.askBody {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 11px;
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.question {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.questionHead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.questionTitle {
+  font: 600 12.5px var(--acc-font);
+  color: var(--acc-fg);
+}
+
+.questionHint {
+  font: 10.5px var(--acc-mono);
+  color: var(--acc-fg-faint);
+}
+
+.questionMulti {
+  font: 600 9.5px/1 var(--acc-mono);
+  letter-spacing: 0.06em;
+  color: var(--acc-branch-light);
+}
+
+.options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-lg);
+  background: var(--acc-bg);
+  text-align: left;
+}
+
+.option:hover {
+  border-color: var(--acc-branch);
+}
+
+.optionOn {
+  background: var(--acc-branch-12);
+  border-color: var(--acc-branch-60);
+}
+
+.optionKey {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  border: 1px solid var(--acc-line-strong);
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  font: 600 9px var(--acc-mono);
+  color: var(--acc-fg-faint);
+}
+
+.optionKeyOn {
+  border-color: var(--acc-branch);
+  background: var(--acc-branch);
+  color: var(--acc-on-accent);
+}
+
+/* A digit that does not belong to the question the hotkeys currently belong to: the number is kept (the
+   order of the options is visible by it) but dimmed - a press will go elsewhere, and there is nothing to
+   promise here with. */
+.optionKeyIdle {
+  opacity: 0.4;
+}
+
+.optionCheck {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  border: 1px solid var(--acc-line-strong);
+  border-radius: var(--acc-r-xs);
+  display: grid;
+  place-items: center;
+  font: 600 9px var(--acc-mono);
+  /* Until something is chosen, the option's number stands here - the same colour as the digit in the circle
+     of a single choice. A tick on a filled background is repainted below. */
+  color: var(--acc-fg-faint);
+}
+
+.optionCheckOn {
+  border-color: var(--acc-branch);
+  background: var(--acc-branch);
+  color: var(--acc-on-accent);
+}
+
+.optionLabel {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--acc-fg-soft);
+}
+
+.optionLabelOn {
+  color: var(--acc-fg);
+}
+
+.optionSub {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--acc-fg-faint);
+  margin-top: 1px;
+}
+
+/* Other is the same kind of option in the grid as the rest (see AskPanel.pickOther), only across the whole
+   row: one's own answer is not written inside a circle at the cost of the neighbouring options. */
+.optionOther {
+  grid-column: 1 / -1;
+  align-items: center;
+}
+
+.otherInput {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  font-size: 12px;
+  color: var(--acc-fg);
+}
+
+.askFoot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 11px;
+  background: var(--acc-shade);
+  border-top: 1px solid var(--acc-branch-20);
+}
+
+.askNote {
+  font-size: 11px;
+  color: var(--acc-fg-faint);
+}
+
+/* --- The task list ------------------------------------------------------------ */
+
+.taskPanel {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 8px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-xl);
+  background: var(--acc-bg-raised);
+  overflow: hidden;
+}
+
+/* On the baseline rather than centred: the label and the counter are of different sizes. */
+.taskPanelHead {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--acc-line);
+}
+
+.taskPanelLabel {
+  font: 600 9px/1 var(--acc-mono);
+  letter-spacing: 0.09em;
+  color: var(--acc-fg-faint);
+}
+
+.taskPanelProgress {
+  font: 10.5px var(--acc-mono);
+  color: var(--acc-fg-dim);
+}
+
+.taskPanelList {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 0;
+}
+
+/* Only while a long list is unfolded - so as not to push the input field off the screen. */
+.taskPanelListScroll {
+  overflow-y: auto;
+  max-height: 220px;
+}
+
+.taskPanelRow {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 3px 10px;
+}
+
+.taskPanelBox {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  border: 1px solid var(--acc-line-strong);
+  border-radius: var(--acc-r-xs);
+  display: grid;
+  place-items: center;
+  font-size: 9px;
+  color: var(--acc-on-accent);
+}
+
+.taskPanelBoxDone {
+  border-color: var(--acc-ok);
+  background: var(--acc-ok);
+}
+
+.taskPanelBoxActive {
+  border-color: var(--acc-accent);
+}
+
+/* The checkbox's box stays at the row's centre while the text with its caption aligns to the baseline:
+   otherwise the small mono RUNNING hangs above the task's line. */
+.taskPanelTextGroup {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  min-width: 0;
+}
+
+.taskPanelText {
+  font-size: 12px;
+  color: var(--acc-fg-soft);
+}
+
+.taskPanelTextDone {
+  color: var(--acc-fg-faint);
+  text-decoration: line-through;
+}
+
+.taskPanelTextActive {
+  color: var(--acc-fg);
+}
+
+.taskPanelRunning {
+  font: 9.5px var(--acc-mono);
+  letter-spacing: 0.06em;
+  color: var(--acc-accent);
+  animation: acc-pulse 1.6s infinite;
+}
+
+.taskPanelMore {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 10px;
+  border-top: 1px solid var(--acc-line);
+  font: 10.5px var(--acc-mono);
+  color: var(--acc-fg-faint);
+  text-align: left;
+}
+
+.taskPanelMore:hover {
+  color: var(--acc-fg);
+  background: var(--acc-bg-card);
+}
+
+/* --- The task list: compact -------------------------------------------------- */
+
+/*
+ * The compact rows run across the panel's full width rather than as a card with insets, as .taskPanel does
+ * above - right against the task row below them stands an equally full-width header (see .header) and an
+ * equally full-width composer (see .compactRow), and beside them the .dock inset would read as an alien
+ * frame in the middle of a dense column. The negative margins give the .dock inset back as padding on the
+ * rows themselves - the background stays full width while the text stands where it did before.
+ */
+.taskCompactBleed {
+  margin: 0 -10px;
+}
+
+.taskCompactExpanded {
+  display: flex;
+  flex-direction: column;
+  padding: 5px 0 6px;
+  background: var(--acc-bg-raised);
+  border-top: 1px solid var(--acc-line);
+  /* Like .taskPanelListScroll in the ordinary layout - otherwise a long list pushes the input field past the
+     bottom edge of a short docked panel. */
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+/* The left indent goes as far as the text of the row below rather than as far as its checkbox: a task from
+   this list does not run anywhere, it has no use for a checkbox. */
+.taskCompactExpandedRow {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 3px 10px 3px 30px;
+}
+
+.taskCompactRow {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 25px;
+  padding: 0 10px;
+  background: var(--acc-bg-raised);
+  border-top: 1px solid var(--acc-line);
+}
+
+/* min-width: 0 lets the task's text be clipped before the row starts losing the branch and the arrow on the
+   right - those matter more than the middle of a long task name. */
+.taskCompactCurrentText {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  min-width: 0;
+}
+
+.taskCompactCurrentText .taskPanelText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.taskCompactArrow {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--acc-r-xs);
+  color: var(--acc-fg-faint);
+}
+
+.taskCompactArrow:hover {
+  background: var(--acc-line-strong);
+  color: var(--acc-fg);
+}
+
+/* The list opens upwards - the input field below stays put - so folded the arrow points up: it shows where
+   the tasks will come back from rather than which way the row will move. */
+.taskCompactCaret {
+  width: 10px;
+  height: 6px;
+  transition: transform 0.16s ease;
+}
+
+.taskCompactCaretUp {
+  transform: rotate(180deg);
+}
+
+/* --- The queue ------------------------------------------------------------- */
+
+.queue {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+/* On the baseline rather than centred: the label and the counter are of different sizes. */
+.queueHead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 0 2px;
+}
+
+.queueLabel {
+  font: 600 9px/1 var(--acc-mono);
+  letter-spacing: 0.09em;
+  color: var(--acc-fg-faint);
+}
+
+.queueHint {
+  font: 10px var(--acc-mono);
+  color: var(--acc-fg-fainter);
+}
+
+.queueRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-lg);
+  background: var(--acc-bg-card);
+}
+
+.queueRow:hover {
+  border-color: var(--acc-line-hover);
+}
+
+.queueRowOver {
+  background: var(--acc-accent-12);
+  border-color: var(--acc-accent);
+}
+
+.queueRowDragging {
+  opacity: 0.45;
+}
+
+.grip {
+  flex: none;
+  font-size: 11px;
+  color: var(--acc-fg-ghost);
+  letter-spacing: 1px;
+  line-height: 1;
+  cursor: grab;
+  /* Without this the drag gesture itself is in some browsers (JCEF among them) intercepted for scrolling or
+     text selection before it reaches us. */
+  touch-action: none;
+  user-select: none;
+}
+
+.queueNum {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  border-radius: var(--acc-r-sm);
+  display: grid;
+  place-items: center;
+  background: var(--acc-bg-control);
+  font: 600 9px var(--acc-mono);
+  color: var(--acc-fg-dim);
+}
+
+.queueText {
+  min-width: 0;
+  flex: 1;
+  font-size: 12px;
+  color: var(--acc-fg-body);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.queueAttach {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: var(--acc-r-xs);
+  background: var(--acc-bg-control);
+  font: 10px var(--acc-mono);
+  color: var(--acc-fg-dim);
+}
+
+.iconButton {
+  flex: none;
+  width: 17px;
+  height: 17px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--acc-r-xs);
+  font-size: 12px;
+  color: var(--acc-fg-faint);
+}
+
+.iconButton:hover {
+  background: var(--acc-line-strong);
+  color: var(--acc-bad-light);
+}
+
+.iconButton:active {
+  background: var(--acc-bad-16);
+  color: var(--acc-bad-light);
+}
+
+.iconButton:disabled {
+  background: none;
+  color: var(--acc-fg-ghost);
+  opacity: 0.5;
+}
+
+/* --- The quotes ------------------------------------------------------------ */
+
+.quotes {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.quote {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: var(--acc-r-lg);
+  background: var(--acc-accent-08);
+  border-left: 2px solid var(--acc-accent);
+}
+
+.quoteLabel {
+  flex: none;
+  font: 600 9px/1.5 var(--acc-mono);
+  letter-spacing: 0.08em;
+  color: var(--acc-accent);
+}
+
+.quoteText {
+  flex: 1;
+  min-width: 0;
+  font: 11.5px/1.5 var(--acc-mono);
+  color: var(--acc-fg-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quoteSrc {
+  flex: none;
+  font: 10px var(--acc-mono);
+  color: var(--acc-fg-fainter);
+}
+
+/* --- The input field ------------------------------------------------------- */
+
+/* The command hint hangs above the field, so the wrapper has a coordinate system of its own. */
+.boxWrap {
+  position: relative;
+}
+
+.suggest {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 5px);
+  z-index: 25;
+  max-height: 216px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--acc-line-strong);
+  border-radius: var(--acc-r-xl);
+  background: var(--acc-bg-panel);
+  box-shadow: var(--acc-shadow-menu);
+}
+
+.suggestItem {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  border-radius: var(--acc-r-md);
+  text-align: left;
+}
+
+.suggestItemOn {
+  background: var(--acc-accent-12);
+}
+
+.suggestName {
+  flex: none;
+  font: 500 12px var(--acc-mono);
+  color: var(--acc-fg);
+  white-space: nowrap;
+}
+
+/* The explanation gives way: the command's name matters more, and the panel may be narrow. */
+.suggestHintText {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--acc-fg-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.suggestGroup {
+  flex: none;
+  margin-left: auto;
+  font: 9.5px var(--acc-mono);
+  letter-spacing: 0.04em;
+  color: var(--acc-fg-ghost);
+}
+
+/* The field's background goes through a variable rather than directly: the same background paints the
+   context gauge's ticks (see .contextMeterTick), and those two places have to change together. While the
+   highlight's background was set past it, the ticks stayed their previous colour and read as dark gaps in a
+   highlighted field. */
+.box {
+  --acc-field-bg: var(--acc-bg);
+  position: relative;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-2xl);
+  background: var(--acc-field-bg);
+  overflow: hidden;
+}
+
+/*
+ * The context bar is a detail of the field itself rather than of the status row under it (that one is left
+ * alone and takes its colour from the same source of truth - contextColor/contextGlow in StatusBar.tsx).
+ * top/left/right are the same 12px as .field's text padding: the gauge looks like part of the field rather
+ * than a separate strip above it.
+ */
+/* border-radius: 999px instead of a computed value in pixels - on a bar this thin a 2px rounding is barely
+   readable to the eye, while with this trick the track, the fill and the ticks are always capsules whatever
+   their thickness. */
+/*
+ * The row with the gauge is one of its own, above the input field, rather than a layer over the field's top
+ * padding. That padding scrolls along with the text, and in a long message the lines drove under the gauge,
+ * showing through it: the gauge read as a strikethrough. A separate row lives outside the scroll - there is
+ * nothing to drive under it.
+ */
+.contextMeterRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px 0;
+  pointer-events: none;
+}
+
+/* Four pixels rather than three, and the same four for the fill: the fill used to glow, and the glow
+   made it read as a thicker bar than the track under it. Flat, the two are one line of one weight. */
+.contextMeter {
+  flex: 1 1 auto;
+  position: relative;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--acc-meter-track);
+}
+
+/*
+ * The reading at the end of the bar: "ctx 42%", in the colour the fill has at that moment. It is what
+ * turns the stripe from decoration into an instrument - without it people did not know the panel showed
+ * the context at all (and asked for the feature it already had).
+ *
+ * flex: none plus tabular figures - so that the bar's right edge does not twitch left and right as the
+ * digits change; the same reason the usage rings' numbers are set this way. The line height is pressed
+ * down to the bar's own so the row does not grow taller than the figure itself needs.
+ *
+ * A step larger than the panel's smallest captions: at nine pixels the reading was there and went unread -
+ * the eye takes it for a mark on the gauge rather than for a number it is meant to make out.
+ *
+ * No opacity of its own: the figure promises to be the colour of the fill, and a fill dimmed by a quarter
+ * is simply a different, duller colour - which is exactly what made the number read as a caption beside
+ * the gauge rather than as its reading.
+ *
+ * The pixel up is optical alignment, not a fudge. The flex row centres the two boxes, and by the em box
+ * they are centred to a fraction of a pixel - but the ink of "ctx 35%" carries no descenders, so its
+ * weight sits between the x-height and the baseline, a whole pixel below the middle of its own box. The
+ * bar therefore crossed the letters at the top of the lowercase rather than through their middle. A pixel
+ * up puts it through the middle.
+ */
+.contextMeterValue {
+  flex: none;
+  position: relative;
+  top: -1px;
+  font-size: 10.5px;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * will-change: transform - the width changes on every tick of the context percentage, and the Chromium
+ * embedded in the IDE (an offscreen render) sometimes fails to finish drawing the rounded corner on the
+ * moving edge during a partial repaint - the static left edge always draws cleanly, while the right one
+ * sometimes looks square. transform rather than width: only it and opacity reliably move an element into a
+ * compositing layer of its own, which makes the browser repaint it whole on every change rather than only
+ * the "dirty" rectangle around the new edge.
+ */
+.contextMeterFill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.2s;
+  will-change: transform;
+}
+
+/* Four ticks at the fifths (20/40/60/80%) give the bar a scale to the eye - without them the fill reads as
+   an abstract stripe rather than a share of a whole. The colour is the field's own background (see
+   --acc-field-bg in .box): a tick does not paint itself but cuts through whatever is under it, be that an
+   empty track or an already painted part - and changes colour along with the field when a file is held over
+   it. */
+.contextMeterTick {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 4px;
+  border-radius: 999px;
+  background: var(--acc-field-bg);
+}
+
+/* The command argument's syntax right after its name, as in a terminal - not part of the field's contents
+   but a layer over it: it gets in the way of neither typing nor selecting. The font is the field's own: the
+   hint continues the typed line and with a different one would stand in the wrong place. */
+.ghostHint {
+  position: absolute;
+  white-space: nowrap;
+  pointer-events: none;
+  font: 13px/var(--acc-leading, 1.55) var(--acc-mono);
+  color: var(--acc-fg-fainter);
+  z-index: 1;
+}
+
+/*
+ * A box-shadow instead of changing border-color: the Chromium embedded in the IDE (an offscreen render) has
+ * a repaint quirk - after the focus is taken away and returned, a repainted border may draw crookedly on
+ * rounded corners. The border itself never changes here (see .box) - a shadow of the same thickness and
+ * colour lies down as a separate layer rather than repainting the existing stroke, so the corners stay even
+ * through any number of focus switches.
+ *
+ * Deliberately NOT inset: an inset shadow is drawn inside the frame but under the child elements - and
+ * .tools (the bottom row with the buttons) has an opaque background of its own and would cover it from
+ * below. An ordinary outer shadow is drawn beyond the border, where the children have physically nothing to
+ * cover it with.
+ */
+.boxFocused {
+  box-shadow: 0 0 0 1px var(--acc-accent);
+}
+
+/* A dragged file hangs over the field - the same frame as the focus one, but with a fill: it is visible
+   that the drop will land right here rather than in the feed above the field. The fill lies OVER the
+   ordinary background rather than in place of it: that way the field keeps a colour of its own and the
+   gauge's ticks (painted with that same background) are lit up along with it rather than left as dark
+   gaps. */
+.boxDropping {
+  --acc-field-bg: linear-gradient(var(--acc-accent-08), var(--acc-accent-08)), var(--acc-bg);
+  box-shadow: 0 0 0 1px var(--acc-accent);
+  background: var(--acc-field-bg);
+}
+
+/* A terminal command has been typed (a "!" at the start): it travels to the shell rather than to the agent,
+   and that has to be known before the press. Below .boxFocused - the mode's frame matters more than the
+   focus one, and in a field with a command the focus is almost always there anyway. */
+.boxBash {
+  box-shadow: 0 0 0 1px var(--acc-warn);
+}
+
+/* --- The input field: compact ------------------------------------------------ */
+
+/*
+ * A row of two parts: box (the context gauge + the field) takes all the room available, the column on the
+ * right (see .compactControls) exactly as much as its buttons ask for. Outside .box rather than inside it as
+ * in the ordinary layout (there .box's bottom is .tools, here .tools stands beyond its bounds already): in
+ * compact the field needs not a full-width strip below but a column beside it.
+ *
+ * The left and right margins are the same bleed as .taskCompactBleed's (see below): without it the .dock's
+ * side inset (10px) would add up with the row's own padding, and the composer would end up 10px narrower
+ * than the task row above it - their left edges would stop matching.
+ */
+.compactRow {
+  display: flex;
+  align-items: stretch;
+  gap: 9px;
+  margin: 0 -10px;
+  padding: 8px 10px;
+}
+
+/*
+ * When nothing was drawn in the dock before the composer (no permission, no question, no task or branch row,
+ * no queue, no quotes - see App.tsx), the .dock's top inset (8px, see below) already gives the needed gap
+ * from the feed itself. The row's own 8px on top would become a second gap over the first - twice as thick
+ * as the bottom one, where .dock gives no gap at all. When there is something before the composer, though,
+ * those same 8px of the row are the only gap FROM that neighbour, and they must be left alone.
+ */
+.dock[data-layout='compact'] > .boxWrap:first-child .compactRow,
+.dock[data-layout='left'] > .boxWrap:first-child .railRow,
+.dock[data-layout='right'] > .boxWrap:first-child .railRow {
+  padding-top: 0;
+}
+
+/* flex: 1 1 auto - it shrinks first when things get tight: the compact menu and the buttons have a fixed
+   width of their own by content (see .selectorAuto), while the field has room to give way. */
+.boxCompact {
+  display: flex;
+  align-items: stretch;
+  gap: 9px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 7px 11px 7px 9px;
+}
+
+/*
+ * The vertical context gauge - the same role as the horizontal .contextMeter above the field in the other
+ * layouts, but it takes height rather than width: compact and left/right save precisely the field's height,
+ * giving what is freed to the textarea itself.
+ */
+.compactMeter {
+  flex: none;
+  position: relative;
+  width: 3px;
+  min-height: 20px;
+}
+
+/*
+ * Five segments from the bottom up (column-reverse - the first in the markup stands at the bottom): their
+ * colour and glow are lit at once through an inline style, whole, rather than as a fill by percentage (see
+ * Composer.ContextMeterVertical) - that way every painted segment is of one height, with none cut off at
+ * the percentage's boundary.
+ */
+.compactMeterTrack {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 4px;
+}
+
+.compactMeterSeg {
+  flex: 1 1 0;
+  border-radius: 999px;
+  background: var(--acc-bg-control);
+}
+
+/* The column to the right of box: the top row is MODEL/EFFORT/MODE, the bottom one is
+   usage/attachments/sending (see .compactSelectors and .compactToolsRow). Pressed to the bottom - that way
+   the bottom row stands level with box's bottom edge regardless of how many lines are in the field right
+   now. */
+.compactControls {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+/* The same shape as the status line under the field in the ordinary layout (see .status in
+   shell.module.css): the selectors at their own width on the left, the bubble and the heart at the far
+   end, and the spacer between them taking whatever is left. They used to divide the row evenly among
+   themselves instead (.selectorAuto), because there was nothing at the far end for the emptiness to go to.
+   position+z-index are there for the same reason as .selectors in shell.module.css: above the menu's
+   scrim, otherwise a second click on a button's own self goes to the scrim. */
+.compactSelectors {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  position: relative;
+  z-index: 41;
+}
+
+/* The same children as in the ordinary layout's .tools (see Composer.toolsRow), but without its
+   background, border and padding - those are of no use here, the row already stands in a column of its own
+   with insets of its own (see .compactRow). justify-content is not needed: the four little buttons are
+   held at the left edge and Send at the right one by the .spacer between them, the same trick as in
+   .tools. The usage rides in this row too here, in front of Send: this layout has no status line to put it
+   in, and the row above is full. */
+.compactToolsRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* --- The input field: left/right (the side rail) ----------------------------- */
+
+/*
+ * The box wrapper (the context gauge + the field) is the only child: MODEL/EFFORT/MODE and the buttons
+ * travel through a portal into the side rail spanning the panel's full height (see .railColumn in
+ * shell.module.css and Composer.railContainer).
+ *
+ * The margin and the padding are the same trick as .compactRow's above (see its description).
+ */
+.railRow {
+  display: flex;
+  margin: 0 -10px;
+  padding: 8px 10px;
+}
+
+/* flex: 1 1 auto - the only child of .railRow stretches over its whole width rather than squeezing itself
+   to the width of its contents, as an ordinary flex item without an explicit flex-basis does. */
+.boxRail {
+  display: flex;
+  align-items: stretch;
+  gap: 9px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 7px 11px 7px 9px;
+}
+
+/* The same trick as .compactSelectors above - the shared .selectorAuto divides the row evenly among the
+   three buttons, while position+z-index lift them above the menu's scrim (see .compactSelectors and
+   .selectors in shell.module.css). Here that is not visible to the eye - the rail stands above the scrim's
+   zone anyway - but this way the behaviour is not tied to the buttons having happened to end up high
+   enough. */
+.railSelectors {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  position: relative;
+  z-index: 41;
+}
+
+/* The usage goes in a row of its own under the selectors rather than in one row with the buttons (see
+   .railToolsRow below): the rings do not arrive from the CLI at once and are shorter until they do (no
+   rings, only a "..."), while Stop/ForceStop show and hide on every turn of the agent - if all of that
+   shared one row, any of them would change its neighbours' positions when it appeared. Apart, each touches
+   only itself.
+
+   The bubble and the heart keep it company at the row's far end, exactly as they do in the status line
+   under the field in the ordinary layout: none of the three is about the message being written, and the
+   row of buttons below is. That end is the field's side, the same one Send holds a row lower - see
+   .railMirrored. */
+.railMeters {
+  display: flex;
+  align-items: center;
+}
+
+/* The same children as in the ordinary layout's .tools (see Composer.toolsRow), but without its
+   background, border and padding - those are of no use here, the row already stands in the side rail with
+   insets of its own (see .railColumn in shell.module.css). margin-top: auto presses precisely this row to
+   the rail's bottom, however many cards (a permission, a question, the tasks, the queue, the quotes) stand
+   above it: they have no special insets of their own, they simply run in order from the top.
+
+   justify-content defaults to flex-start - the four little buttons come first and always stand at that
+   edge, while Send holds the other one, whatever appears or disappears in front of it (Stop, ForceStop,
+   Queue). The row is written the way left needs it: there the first edge is the panel's outer one and the
+   other is the boundary with the feed, so Send ends up against the field. Under right the whole row is
+   reflected instead (see .railMirrored below), which puts Send against the field there too. */
+.railToolsRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: auto;
+}
+
+/*
+ * The rail reflected, for right: there the field stands to the LEFT of the rail, and the rows are written
+ * in the order left needs (see mirroredRail in Composer.tsx). Reflecting rather than reordering is the
+ * whole point - what has to stay put is not an order of buttons but a side: Send and the pair keep the
+ * edge the field is on, the little buttons and the figures keep the panel's outer edge, whichever side of
+ * the feed the rail was dragged to.
+ *
+ * row-reverse turns the order and the packing around at once, and it does it to the row's own children
+ * only - the four little buttons live inside a wrapper of their own (.toolGroups), so they come through
+ * this reflection in the order they are written in.
+ *
+ * Keyboard tabbing goes on following the DOM, which under right means walking the row from its right end
+ * to its left one. That is what a reflection is: the row is the same row, seen from the other side.
+ */
+.railMirrored {
+  flex-direction: row-reverse;
+}
+
+/*
+ * Under left it is the four little buttons that turn around instead, and nothing else: the row as a whole
+ * already reads the way it should (the buttons at the panel's outer edge, Send against the field), while
+ * the buttons themselves have to run towards the field rather than away from it - slash, paperclip,
+ * sparkle, microphone. Under right the same four run away from it, which is the same order seen in a
+ * mirror; between the two of them the rail is one arrangement reflected, not two arrangements.
+ */
+.railToolsRowLeft .toolGroups,
+.railToolsRowLeft .toolGroup {
+  flex-direction: row-reverse;
+}
+
+/*
+ * An ordinary block flow rather than flex: the chips are inline-flex inside it, so the text and the
+ * attachments wrap together, exactly where they stand in order, like words and pictures in a paragraph -
+ * rather than as two separate groups.
+ *
+ * The field is tall on purpose: several paragraphs are written in it, and a cramped line forces one to
+ * scroll text that is not even fully visible yet. Past the set limit it does not grow - a scroll appears
+ * inside.
+ *
+ * The font, the size and the leading are those of a sent message in the feed (feed.module.css, .userBody):
+ * what you typed is what you see. Different ones drifted apart noticeably - one and the same line took a
+ * different width in the field and in the feed.
+ *
+ * The top padding is larger than the rest: the context bar (.contextMeter) with its ticks lives precisely in
+ * it, and the text needs a gap of its own under it rather than sitting flush - otherwise the gauge looks
+ * glued to the first line.
+ */
+.field {
+  padding: 7px 12px 11px;
+  /*
+   * 3 lines by default, up to 5 and a scroll beyond that. lh is the genuine computed line height of the
+   * CURRENT font (rather than a bare multiplication of font-size by line-height): the panel takes its
+   * monospaced font from the IDE's settings (see applyTypography in App.tsx), and across fonts that height
+   * differs noticeably to the eye - a pixel count calibrated for one font would on another either show a
+   * spare empty line or clip the last one. The 81px/123px below are the fallback for a browser without lh
+   * support (a rule is thrown out whole if it does not understand lh rather than applied in part - the
+   * second declaration simply is not picked up).
+   */
+  min-height: 81px;
+  min-height: calc(3 * 1lh + 18px);
+  max-height: 123px;
+  max-height: calc(5 * 1lh + 18px);
+  overflow-y: auto;
+  cursor: text;
+  outline: none;
+  white-space: pre-wrap;
+  font-family: var(--acc-mono);
+  font-size: 13px;
+  line-height: var(--acc-leading, 1.55);
+  color: var(--acc-fg);
+}
+
+/*
+ * Compact: a height of its own instead of the one inherited from .field (79-160px) - 2 lines by default, up
+ * to 5 and a scroll beyond that. It comes later than .field in the file and therefore wins over its
+ * min-height/max-height/padding at equal specificity (see .selectorAuto in shell.module.css - the same
+ * trick).
+ *
+ * Pressed to the top rather than stretched over box's full height: the field's height is decided by its own
+ * contents (2-5 lines) rather than by a neighbour's height (the vertical context gauge).
+ *
+ * flex: 1 1 auto - without it the field as a flex item shrank to the width of its CONTENTS (the ordinary
+ * behaviour of a flex item with flex-basis: auto) rather than stretching over everything box had left after
+ * the context gauge on the left. A narrow field wrapped its text by its own narrow width rather than by
+ * box's, and the native scrollbar was drawn at the right edge of THAT narrow area - somewhere in the middle
+ * of an empty box rather than at its genuine right edge.
+ */
+.fieldCompact {
+  align-self: flex-start;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  min-height: 40px;
+  max-height: 100px;
+  overflow-y: auto;
+}
+
+/*
+ * left/right: the same trick as .fieldCompact above, only with a lower limit - 4 lines (84px = 4 x 21.06px)
+ * rather than 5: the rail beside it takes part of the panel's width anyway, and a tall field looks heavier
+ * here than in compact, which is given the whole width.
+ */
+.fieldRail {
+  align-self: flex-start;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  min-height: 40px;
+  max-height: 84px;
+  overflow-y: auto;
+}
+
+.field:empty::before {
+  content: attr(data-placeholder);
+  color: var(--acc-fg-fainter);
+  pointer-events: none;
+}
+
+/*
+ * A chip has no side margins of its own on purpose: to its left and right in the field a genuine space
+ * stands anyway - put there by the insertion itself so that the text does not stick to the attachment in
+ * what travels to the agent (see insertChipAtCursor). A margin added up with that space, and the gap
+ * between two chips in a row came out one and a half times wider than an ordinary word gap - neighbouring
+ * attachments read as torn apart rather than as words standing side by side. Now the gap is exactly one
+ * space, as between words.
+ */
+.token {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  /* Equal above and below, and narrower on the right than on the left: on the left stands text, on the
+     right a button with rounded corners of its own, and the same six pixels beside it read as too much air.
+     The vertical padding used to differ by one pixel between top and bottom - invisible under a single line
+     of text, plain as day once the button became a square centred in the row. */
+  padding: 2px 2px 2px 6px;
+  border: 1px solid;
+  border-radius: var(--acc-r-sm);
+  font: 11px var(--acc-mono);
+  vertical-align: middle;
+}
+
+/*
+ * The chip the caret has reached with an arrow: the next backspace will remove precisely it. The outline is
+ * in currentColor rather than a paint of its own for each kind of attachment: the chips are of different
+ * colours, and any chosen "selection colour" would read on some and blend into others. This way the trick
+ * is one for all - a frame around a chip in the chip's own colour - while brightness adds the same step of
+ * lightness over any backing.
+ */
+.tokenSelected {
+  box-shadow: 0 0 0 2px currentColor;
+  filter: brightness(1.25);
+}
+
+/*
+ * Both buttons on a chip are squares rather than a small glyph with nothing but an opacity behind it: a
+ * bare character has no hit area of its own, and on sight it reads as part of the caption rather than as
+ * something to press.
+ *
+ * The backing on hover is currentColor and not a grey of its own. Every kind of attachment has its own
+ * colour (CHIP_STYLE in composerDom.ts - file, image, directory, command, link, quote, paste), the button's
+ * glyph already inherits it, and so a translucent currentColor gives on every chip simply a brighter
+ * version of that chip's own colour instead of one and the same grey smudge over all of them.
+ */
+.tokenRemove,
+.tokenExpand {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 15px;
+  height: 15px;
+  border-radius: var(--acc-r-xs);
+  transition: background-color 80ms linear;
+}
+
+.tokenRemove:hover,
+.tokenExpand:hover {
+  background-color: color-mix(in srgb, currentColor 22%, transparent);
+}
+
+.tokenRemove:active,
+.tokenExpand:active {
+  background-color: color-mix(in srgb, currentColor 34%, transparent);
+}
+
+.tokenRemove {
+  opacity: 0.6;
+  font-size: 10px;
+}
+
+.tokenRemove:hover {
+  opacity: 1;
+}
+
+/* Unfolds a collapsed paste back into ordinary text. Quieter than the cross: deleting an attachment is
+   wanted more often than changing one's mind about folding it up, and two equally noticeable buttons on one
+   chip would compete for attention. */
+.tokenExpand {
+  opacity: 0.45;
+}
+
+.tokenExpand:hover {
+  opacity: 0.9;
+}
+
+/*
+ * The field's bottom row: what one does to the message on the left (dictating, rewriting, attaching,
+ * commanding), what one does with it on the right (Send, Queue, Stop). The usage used to stand at the left
+ * edge and has moved down into the status line, where the heart is - it is a fact about the day rather than
+ * about this draft (see StatusBar). The row does not wrap: a Send button that rode onto a second line reads
+ * as a breakage.
+ */
+.tools {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--acc-bg-control);
+  background: var(--acc-bg-raised);
+  min-width: 0;
+}
+
+/*
+ * The four little buttons of the row's leading edge, in two pairs: the microphone with the sparkle (words
+ * put into the field without one's hands), the paperclip with the slash (things put into it that are not
+ * words). The wider gap between the pairs is the only thing telling them apart - a divider between two
+ * pairs of borderless squares is a heavier line than the buttons themselves, and in a row this short it
+ * reads as the row being cut in half.
+ *
+ * A wrapper of its own rather than the row's own gap: the row spaces everything else at 5px, and the pause
+ * between the groups has to be wider than that without dragging Send and Queue apart with it.
+ */
+.toolGroups {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.toolGroup {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.attach {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--acc-r-md);
+  background: var(--acc-neutral-12);
+  color: var(--acc-fg-dim);
+  /* The colours travel rather than switch, and [data-hover] stands beside :hover - the whole reason is
+     written out at .selector in shell.module.css: offscreen, an instant swap asks for one repaint, and
+     one request is the one that gets lost between two neighbouring buttons. */
+  transition:
+    background-color 80ms linear,
+    color 80ms linear;
+}
+
+.attach:hover,
+.attach[data-hover] {
+  background: var(--acc-neutral-16);
+  color: var(--acc-fg);
+}
+
+.attach:active {
+  background: var(--acc-bg-control-hover);
+  color: var(--acc-fg);
+}
+
+/* The same recipe as .send:disabled, the dimming included - two kinds of dimmed buttons in one row have to
+   look like one pair. A grey background and text alone got confused to the eye with a button's ordinary
+   (unpressed) state - filled with nothing bright, it has almost nothing to stand out with anyway; the
+   transparency adds the very "clearly not now" that was missing. */
+.attach:disabled {
+  background: var(--acc-bg-control);
+  color: var(--acc-fg-ghost);
+  opacity: 0.55;
+}
+
+/*
+ * The paperclip stands upright rather than lying diagonally: it is drawn at a slant itself (see Paperclip),
+ * and the rotation brings it to the vertical. Its size is matched to the slash beside it - a drawing and a
+ * glyph have to weigh the same, and the rotation makes the icon taller than its frame, so the frame itself
+ * is a little smaller and does not clip it.
+ */
+.attachIcon {
+  width: 13px;
+  height: 13px;
+  overflow: visible;
+  transform: rotate(-45deg);
+}
+
+.attachSlash {
+  font: 13px/1 var(--acc-mono);
+}
+
+/* The sparkle of the improve button. A pixel wider than the paperclip and the slash rather than equal to
+   them: a four-pointed star is mostly the air between its points, so at the same box it read as the lightest
+   of the three. The eye matches ink, not frames. */
+.sparkleIcon {
+  width: 14px;
+  height: 14px;
+}
+
+/*
+ * The button while the rewrite is running. Nothing is added beside the icon: the row is tight, and a button
+ * that grew a spinner would shift the paperclip and the slash sideways for the three seconds it takes.
+ *
+ * The colour is the model's own (the same accent the agent's own cards carry), so that "this is being
+ * thought about right now" is legible without reading the shape - and it is the disabled button that is
+ * lit, which is otherwise a contradiction the eye notices.
+ */
+.attachBusy:disabled {
+  background: var(--acc-agent-12);
+  color: var(--acc-agent-light);
+  opacity: 1;
+}
+
+/*
+ * The two stars twinkle out of step instead of the whole icon turning.
+ *
+ * Turning was the first attempt and it was wrong twice over: a four-pointed star spinning about its own
+ * centre reads as a loading spinner that someone drew badly, and the small star swinging round the big one
+ * made the whole thing wobble. A twinkle is what a sparkle does - each star brightens and swells in its own
+ * time, the icon never leaves its place, and at fourteen pixels that is the only motion that stays legible.
+ *
+ * Each star scales about ITS OWN centre rather than the icon's - that is what fill-box buys; without it
+ * both would swell towards the top-left corner of the frame.
+ */
+.sparkleBig,
+.sparkleSmall {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.attachBusy .sparkleBig {
+  animation: acc-sparkle-twinkle 1.15s ease-in-out infinite;
+}
+
+/* Half a period behind, so the pair breathes in turn rather than pulsing as one lump. */
+.attachBusy .sparkleSmall {
+  animation: acc-sparkle-twinkle 1.15s ease-in-out infinite;
+  animation-delay: 0.57s;
+}
+
+@keyframes acc-sparkle-twinkle {
+  0%,
+  100% {
+    transform: scale(0.72);
+    opacity: 0.4;
+  }
+
+  50% {
+    transform: scale(1.14);
+    opacity: 1;
+  }
+}
+
+/* The microphone. A hair larger than the paperclip and the slash for the same reason the sparkle is: an
+   outlined shape made mostly of thin strokes weighs less to the eye than a glyph at the same size. */
+.voiceIcon {
+  width: 14px;
+  height: 14px;
+}
+
+/*
+ * The button while it is listening.
+ *
+ * Red, because that is what recording is everywhere - and the one place in this row where a warm colour is
+ * not decoration but a state somebody has to be able to see from across the desk. The ring around it grows
+ * with the room's loudness (--acc-voice-level, 0..100, set by the composer): a microphone that hears
+ * nothing is otherwise indistinguishable from one that works, which is the single most common way this
+ * kind of feature fails silently.
+ *
+ * box-shadow rather than a border or an extra element: it costs no layout, so a ring redrawn ten times a
+ * second cannot push the neighbouring buttons about.
+ */
+.voiceLive {
+  background: var(--acc-bad-16);
+  color: var(--acc-bad-light);
+  box-shadow: 0 0 0 calc(1px + var(--acc-voice-level, 0) * 0.04px) var(--acc-bad-24);
+  transition:
+    background-color 80ms linear,
+    color 80ms linear,
+    box-shadow 90ms ease-out;
+}
+
+.voiceLive:hover,
+.voiceLive[data-hover] {
+  background: var(--acc-bad-24);
+  color: var(--acc-bad-light);
+}
+
+/*
+ * The couple of tenths of a second after the key is released, while Deepgram counts the tail.
+ *
+ * Dimmed rather than spinning: it is short, and a spinner appearing for a quarter of a second reads as a
+ * flicker. The button refuses a press throughout - a second dictation started into the tail of the first
+ * would interleave two people's sentences.
+ */
+.voiceFinishing:disabled {
+  background: var(--acc-bad-12);
+  color: var(--acc-bad-light);
+  opacity: 1;
+}
+
+/*
+ * The phrase being dictated, in grey after everything in the field.
+ *
+ * A pseudo-element rather than a node: the field is a contentEditable whose contents ARE the draft (see
+ * composerDom), so a live node here would be read into the message, and replacing it while an input method
+ * was assembling a character would take that character out of its hands.
+ *
+ * The placeholder gets out of the way while it shows - the two would otherwise sit on top of each other in
+ * an empty field, which is exactly the case dictation starts from.
+ */
+.field[data-voice]::after {
+  content: attr(data-voice);
+  color: var(--acc-fg-ghost);
+  pointer-events: none;
+}
+
+.field[data-voice]:empty::before {
+  content: none;
+}
+
+/* What the sparkle button has to say - one line above the field (see Composer.improveNoteNode). It stands
+   in the flow rather than over the field: an explanation that covers what is being written is worse than
+   none. */
+.improveNote {
+  display: flex;
+  align-items: center;
+  /* In a narrow panel the way back drops to a line of its own rather than squeezing the reason for it: the
+     rail layouts leave the field about a hundred and forty pixels, and a row that cannot wrap spends them
+     on the button and leaves the sentence a sliver. */
+  flex-wrap: wrap;
+  gap: 7px;
+  max-width: 100%;
+  margin-bottom: 6px;
+  border: 1px solid;
+  border-radius: var(--acc-r-lg);
+}
+
+/* A rewrite that came to nothing: the width of the field, because the sentence explaining it is a sentence
+   and is allowed to wrap. */
+.improveNoteBad {
+  padding: 6px 10px;
+  border-color: var(--acc-bad-32);
+  background: var(--acc-bad-10);
+  color: var(--acc-bad-light);
+}
+
+/* The way back on its own: no wider than the words in it, and in the panel's quietest colours. A full-width
+   strip in an alert's shape, saying that everything went well, would be read as something having gone
+   wrong - and read that way every single time the button is pressed. */
+/*
+ * The way back to one's own words, when nothing has gone wrong - an ordinary button above the field.
+ *
+ * It used to borrow the strip above: a bordered pill with a sentence in it and the action as a word
+ * inside that. Read as a notice one has to look inside for, which it never was - there is no news here,
+ * only something to press. The failed-rewrite strip beside it stays as it is, because that one really is
+ * a sentence, with a way back offered at the end of it.
+ */
+.improveBack {
+  align-self: flex-start;
+  /* fit-content alone measures the words and ignores the box it stands in - in the rail layouts that is
+     fifteen pixels of button hanging past the field. */
+  max-width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  padding: 4px 9px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-md);
+  background: var(--acc-bg-control);
+  font: 11px var(--acc-font);
+  color: var(--acc-fg-body);
+  cursor: pointer;
+  transition: background-color 80ms linear, border-color 80ms linear, color 80ms linear;
+}
+
+.improveBack:hover,
+.improveBack[data-hover] {
+  border-color: var(--acc-line-hover);
+  background: var(--acc-bg-control-hover);
+  color: var(--acc-fg);
+}
+
+.improveBack .sparkleIcon {
+  flex: none;
+}
+
+.improveNote .sparkleIcon {
+  flex: none;
+}
+
+/* Takes the row when there is room and pushes the way back to the right; below about a hundred and twenty
+   pixels it keeps the whole line to itself and the button wraps under it. */
+.improveNoteText {
+  flex: 1 1 120px;
+  font: 11px var(--acc-font);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The way back itself. A word rather than an icon: an arrow beside a sparkle says "again" at least as
+   readily as it says "undo", and this is the one press in the panel that must not be guessed at. */
+.improveUndo {
+  /* May shrink and may wrap its own words: in the narrowest panels there is no width at which this phrase
+     fits on one line, and a button that refuses to wrap simply hangs outside the panel. */
+  flex: 0 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: 11px var(--acc-font);
+  color: var(--acc-fg-dim);
+  text-align: left;
+  cursor: pointer;
+  transition: color 80ms linear;
+}
+
+.improveUndo:hover,
+.improveUndo[data-hover] {
+  color: var(--acc-fg);
+}
+
+.improveNoteBad .improveUndo {
+  color: var(--acc-bad-light);
+  text-decoration: underline;
+}
+
+/* Beside an error the way back is still a button and still answers the cursor. Written out for the
+   combined state on purpose: `.improveNoteBad .improveUndo` and `.improveUndo:hover` weigh the same, so the
+   one written later would win every tie and leave the button dead under the pointer. */
+.improveNoteBad .improveUndo:hover,
+.improveNoteBad .improveUndo[data-hover] {
+  color: var(--acc-fg);
+}
+
+.spacer {
+  flex: 1;
+  min-width: 6px;
+}
+
+/* The hint gives way to the buttons: the panel may be narrow, and the row must not break. */
+.hint {
+  font: 10.5px var(--acc-mono);
+  color: var(--acc-fg-fainter);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex-shrink: 1;
+}
+
+.stop {
+  height: 26px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid var(--acc-line-strong);
+  border-radius: var(--acc-r-lg);
+  font: 500 11.5px var(--acc-font);
+  color: var(--acc-bad-light);
+  transition:
+    background-color 80ms linear,
+    border-color 80ms linear;
+}
+
+.stop:hover,
+.stop[data-hover] {
+  background: var(--acc-bad-16);
+  border-color: var(--acc-bad);
+}
+
+.stop:active {
+  background: var(--acc-bad-24);
+  border-color: var(--acc-bad-active);
+  color: var(--acc-bad-text);
+}
+
+/* An ordinary Stop was not confirmed - this button is deliberately more noticeable: a filled background
+   rather than merely an outline, so that it does not get lost beside the rest. */
+.forceStop {
+  height: 26px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid var(--acc-bad);
+  border-radius: var(--acc-r-lg);
+  background: var(--acc-bad-16);
+  font: 600 11.5px var(--acc-font);
+  color: var(--acc-bad-light);
+  transition: background-color 80ms linear;
+}
+
+.forceStop:hover,
+.forceStop[data-hover] {
+  background: var(--acc-bad-24);
+}
+
+.forceStop:active {
+  background: var(--acc-bad-32);
+  border-color: var(--acc-bad-active);
+  color: var(--acc-bad-text);
+}
+
+.send {
+  height: 26px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 11px;
+  border-radius: var(--acc-r-lg);
+  background: var(--acc-accent);
+  color: var(--acc-on-accent);
+  font: 600 11.5px var(--acc-font);
+  transition: background-color 80ms linear;
+}
+
+.send:hover,
+.send[data-hover] {
+  background: var(--acc-accent-hover);
+}
+
+.send:active {
+  background: var(--acc-accent-active);
+}
+
+/* Deferring is not the main action beside "send", so the button is a neutral one rather than filled with
+   the accent. */
+.sendQueued {
+  background: var(--acc-bg-control);
+  color: var(--acc-fg);
+}
+
+/* A hover of its own is a must: without it .send:hover would fire and put a light accent fill under light
+   text. A neutral button lightens along the neutral. */
+.sendQueued:hover,
+.sendQueued[data-hover] {
+  background: var(--acc-bg-control-hover);
+}
+
+.sendQueued:active {
+  background: var(--acc-bg-menu-hover);
+}
+
+/* A terminal command travels to the shell rather than to the agent - and the button's colour is the one the
+   panel marks everything genuinely done on the machine with: the BASH calls in the feed and the permission
+   requests. */
+.sendRun {
+  background: var(--acc-warn);
+}
+
+.sendRun:hover {
+  background: var(--acc-warn-hover);
+}
+
+.sendRun:active {
+  background: var(--acc-warn-active);
+}
+
+/*
+ * The holiday layer's third ornament: the Send button freezes over (see holiday.ts).
+ *
+ * The one control the eye already goes to, so the season lands on the thing being looked at anyway. The
+ * ice is the button's own fill rather than something laid over it - the whole 26px still take the click,
+ * and nothing decorative sits above a tap target.
+ *
+ * Three exclusions, and none of them is cosmetic. `Run` is orange because the draft is a shell command
+ * and the panel marks everything genuinely done on the machine that colour - that is meaning, not
+ * decoration. The queue button shares this class and is deliberately the neutral one beside `Send`. And a
+ * disabled button has its own dimmed look, which the rule below would otherwise outrank at higher
+ * specificity.
+ */
+[data-holiday] .send:not(.sendRun):not(.sendQueued):not(:disabled) {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--acc-ice-line);
+  background: var(--acc-ice);
+  /* Lit from above and settled at the bottom, then the button's own drop onto the row beneath. */
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 85%),
+    inset 0 -1px 0 rgb(18 58 88 / 30%),
+    0 1px 3px rgb(var(--acc-ch-shade) / 45%);
+  color: var(--acc-ice-ink);
+  text-shadow: 0 1px 0 rgb(255 255 255 / 45%);
+}
+
+/* The glaze along the top edge, and one slanted shine across the face. Pseudo-elements rather than nodes:
+   the button's markup is one word of text, and the ice has no business in Composer.tsx. */
+[data-holiday] .send:not(.sendRun):not(.sendQueued):not(:disabled)::before {
+  content: '';
+  position: absolute;
+  inset: 1px 2px auto;
+  height: 9px;
+  border-radius: 5px 5px 9px 9px;
+  background: linear-gradient(180deg, rgb(255 255 255 / 60%), rgb(255 255 255 / 0%));
+  pointer-events: none;
+}
+
+[data-holiday] .send:not(.sendRun):not(.sendQueued):not(:disabled)::after {
+  content: '';
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  left: 38%;
+  width: 7px;
+  transform: skewX(-22deg);
+  background: rgb(255 255 255 / 22%);
+  pointer-events: none;
+}
+
+[data-holiday] .send:not(.sendRun):not(.sendQueued):not(:disabled):hover,
+[data-holiday] .send:not(.sendRun):not(.sendQueued):not(:disabled)[data-hover] {
+  background: var(--acc-ice-hover);
+}
+
+[data-holiday] .send:not(.sendRun):not(.sendQueued):not(:disabled):active {
+  background: var(--acc-ice-active);
+}
+
+/* Below the variant :hover rules - otherwise they would override it at equal specificity. The dimmed
+   button's cursor is set once for all - see base.css. The same dimming as .attach:disabled - see the comment
+   there. */
+.send:disabled {
+  background: var(--acc-bg-control);
+  color: var(--acc-fg-ghost);
+  opacity: 0.55;
+}
+

@@ -1,0 +1,2756 @@
+/*
+ * The scenarios: the hub where they are written, the editor, and the timeline of one run.
+ *
+ * The same surfaces and paints as the rest of the panel, and the panel's own interface face - Instrument
+ * Sans - for everything that is language. The console font is kept for what is genuinely code or a
+ * reading off a dial: a card's prompt, a slot's name, a duration, a cost, an hour on a clock. It used to
+ * be console throughout, which made a screen of prose read like a log file.
+ *
+ * The panel is a tool window and may be a third as wide as a design would like, so everything folds by
+ * the tab's own width (container queries) rather than by the window's.
+ */
+
+.root {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--acc-bg);
+  container-type: inline-size;
+}
+
+/*
+ * The one thing on these screens that breathes: a dot on something waiting for a person.
+ *
+ * Declared here rather than in a shared file because a CSS module renames animations along with its
+ * classes - a keyframe named elsewhere and used here resolves to nothing at all, silently (the same
+ * reason the holiday layer keeps its own, see the note in shell.module.css).
+ */
+@keyframes accPulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+/* --- The head of every screen here ------------------------------------------------- */
+
+.head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px 9px;
+  border-bottom: 1px solid var(--acc-line);
+}
+
+.headBack {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--acc-r-sm);
+  color: var(--acc-fg-soft);
+}
+
+.headBack:hover,
+.headBack[data-hover] {
+  background: var(--acc-bg-menu-hover);
+  color: var(--acc-fg);
+}
+
+.headTitles {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* The hub's own name: a heading rather than a shouted label - it is the title of the screen. */
+.title {
+  font: 600 14px/1.2 var(--acc-font);
+  color: var(--acc-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* And the name of a scenario or a run, which is a proper noun and wears the same weight. */
+.editorName {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+  font: 600 14px/1.2 var(--acc-font);
+  color: var(--acc-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hint {
+  font: 11px var(--acc-font);
+  color: var(--acc-fg-ghost);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.headSpace {
+  flex: 1;
+  min-width: 4px;
+}
+
+.headButtons {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 14px 24px;
+}
+
+/* --- Buttons ----------------------------------------------------------------------- */
+
+.button {
+  flex: none;
+  min-height: var(--acc-hit);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-sm);
+  background: var(--acc-bg-control);
+  color: var(--acc-fg-body);
+  font: 11.5px var(--acc-font);
+  white-space: nowrap;
+}
+
+.button:hover:not(:disabled),
+.button[data-hover]:not(:disabled) {
+  background: var(--acc-bg-control-hover);
+  border-color: var(--acc-line-hover);
+  color: var(--acc-fg);
+}
+
+.button:disabled {
+  opacity: 0.45;
+}
+
+.buttonMain {
+  border-color: var(--acc-accent-line);
+  background: var(--acc-accent-12);
+  color: var(--acc-accent-light);
+}
+
+.buttonMain:hover:not(:disabled),
+.buttonMain[data-hover]:not(:disabled) {
+  background: var(--acc-accent-20);
+  border-color: var(--acc-accent-40);
+  color: var(--acc-accent-light);
+}
+
+/* Something is waiting for a person: answering a question, running an hour that was missed, fixing a
+   scenario that will not start. The warning tone rather than the accent - it is not the ordinary next
+   step, it is the one thing on the screen that is standing still. */
+.buttonWarn {
+  border-color: var(--acc-warn-32);
+  background: var(--acc-warn-12);
+  color: var(--acc-warn-light);
+}
+
+.buttonWarn:hover:not(:disabled),
+.buttonWarn[data-hover]:not(:disabled) {
+  background: var(--acc-warn-16);
+  border-color: var(--acc-warn-40);
+  color: var(--acc-warn-light);
+}
+
+/* Stop is the only irreversible thing on either screen, and it says so before the pointer arrives. */
+.buttonDanger {
+  border-color: var(--acc-bad-32);
+  background: var(--acc-bad-12);
+  color: var(--acc-bad-light);
+}
+
+.buttonDanger:hover:not(:disabled),
+.buttonDanger[data-hover]:not(:disabled) {
+  background: var(--acc-bad-24);
+  border-color: var(--acc-bad-40);
+  color: var(--acc-bad-text);
+}
+
+/*
+ * The question mark beside the button that makes a scenario: the very same button, with a mark where the
+ * word goes. Laid over .button rather than drawn again - a second set of numbers for the same capsule is
+ * a second set to keep in step, and the first thing that drifted was its height.
+ */
+.helpSquare {
+  width: 26px;
+  padding-left: 0;
+  padding-right: 0;
+  justify-content: center;
+}
+
+/*
+ * Squares for one drawn icon each (see icons.tsx): the grid centres the SVG, and no font is named here on
+ * purpose - a font is what these buttons used to show, and what put three glyphs at three heights.
+ */
+.iconButton {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  min-height: var(--acc-hit);
+  min-width: var(--acc-hit);
+  border-radius: var(--acc-r-sm);
+  color: var(--acc-fg-ghost);
+  font: 11px var(--acc-font);
+}
+
+.iconButton:hover:not(:disabled),
+.iconButton[data-hover]:not(:disabled) {
+  background: var(--acc-bg-menu-hover);
+  color: var(--acc-fg);
+}
+
+.iconButton:disabled {
+  opacity: 0.35;
+}
+
+.iconDanger:hover:not(:disabled),
+.iconDanger[data-hover]:not(:disabled) {
+  background: var(--acc-bad-16);
+  color: var(--acc-bad-light);
+}
+
+/* A clock on a scenario that has hours set: lit, so the row says it without being read. */
+.iconOn {
+  color: var(--acc-branch);
+}
+
+/* --- The three bands ---------------------------------------------------------------- */
+
+.bands {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--acc-line);
+  background: var(--acc-bg-deep);
+}
+
+/*
+ * The tabs, in one capsule: three questions rather than three separate buttons.
+ *
+ * The chosen one is told by its surface and its colour rather than by weight - a bold label is a wider
+ * label, and three tabs that shift sideways under the pointer read as a strip that cannot decide.
+ */
+.bandTabs {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-lg);
+  background: var(--acc-bg);
+}
+
+.bandTab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--acc-hit);
+  padding: 4px 10px;
+  border-radius: var(--acc-r-sm);
+  color: var(--acc-fg-faint);
+  font: 11.5px var(--acc-font);
+  white-space: nowrap;
+}
+
+.bandTab:hover,
+.bandTab[data-hover] {
+  color: var(--acc-fg-body);
+}
+
+.bandTabOn {
+  background: var(--acc-bg-control);
+  color: var(--acc-fg);
+}
+
+/* The count on every tab from the first draw, zero included: a badge that appears with the first answer
+   moves its neighbours sideways under the pointer. */
+.bandCount {
+  font: 10.5px var(--acc-mono);
+  color: var(--acc-fg-ghost);
+}
+
+/* Something is going, and the count is the only thing on the strip that says so. */
+.bandCountLive {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--acc-accent-light);
+}
+
+.bandCountLive::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--acc-accent);
+}
+
+/* The one fact that belongs to the band on screen: what was spent today, or that the IDE has to be open. */
+.bandNote {
+  flex: 1;
+  min-width: 0;
+  text-align: right;
+  font: 10.5px var(--acc-font);
+  color: var(--acc-fg-ghost);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* --- Sections and their headings ---------------------------------------------------- */
+
+.section {
+  margin-bottom: 16px;
+}
+
+.label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font: 600 9.5px/1 var(--acc-font);
+  letter-spacing: 0.09em;
+  color: var(--acc-fg-ghost);
+}
+
+/* Which shelf this is, said by a paint before it is read: aqua for the repository, iris for one's own -
+   the two the panel already spends on branches and on subagents. */
+.labelRail {
+  flex: none;
+  width: 2px;
+  height: 11px;
+  border-radius: 1px;
+}
+
+.railProject .labelRail,
+.labelRail.railProject {
+  background: var(--acc-branch);
+}
+
+.railUser .labelRail,
+.labelRail.railUser {
+  background: var(--acc-agent);
+}
+
+/* Half a line about what the heading means - not shouted, and not in the heading's own letterspacing. */
+.labelNote {
+  font: 10.5px var(--acc-font);
+  letter-spacing: 0;
+  color: var(--acc-fg-ghost);
+  opacity: 0.75;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.labelLine {
+  flex: 1;
+  min-width: 8px;
+  height: 1px;
+  background: var(--acc-line);
+}
+
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* --- A scenario's row --------------------------------------------------------------- */
+
+.shelfRow {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-md);
+  background: var(--acc-bg-card);
+  overflow: hidden;
+}
+
+/* The rail down the side, in the shelf's own paint. */
+.shelfRow::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+}
+
+.shelfRow.railProject::before {
+  background: var(--acc-branch);
+}
+
+.shelfRow.railUser::before {
+  background: var(--acc-agent);
+}
+
+.shelfRow:hover,
+.shelfRow[data-hover] {
+  border-color: var(--acc-line-hover);
+  background: var(--acc-bg-panel);
+}
+
+/* Centred, not top-aligned: the left half is two lines and the right half one, and a button hanging
+   off the top line of a two-line row reads as misplaced rather than as aligned to anything. The pointer
+   because the whole of it opens the editor (see Shelf). */
+.shelfMain {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  gap: 10px;
+  padding: 9px 9px 9px 12px;
+}
+
+/* A button, so the whole of the left half opens the editor - and left-aligned, because a button centres. */
+.shelfText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  text-align: left;
+}
+
+.shelfName {
+  max-width: 100%;
+  font: 500 12.5px var(--acc-font);
+  color: var(--acc-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.shelfFacts {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  max-width: 100%;
+  font: 11px var(--acc-font);
+  color: var(--acc-fg-ghost);
+}
+
+/* The separator between two facts, dimmer than either of them: it is punctuation, not a fact. */
+.factDot {
+  color: var(--acc-fg-ghost);
+  opacity: 0.5;
+}
+
+/* A fact that is a property rather than a count - "has a loop", "asks: ticket". */
+.factChip {
+  padding: 1px 6px;
+  border-radius: var(--acc-r-xs);
+  background: var(--acc-neutral-12);
+  color: var(--acc-fg-faint);
+  font: 10.5px var(--acc-font);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.shelfHours {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  text-align: right;
+  max-width: 45%;
+}
+
+.shelfHoursTop {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font: 11px var(--acc-font);
+  color: var(--acc-branch);
+  white-space: nowrap;
+}
+
+.shelfMissed {
+  color: var(--acc-warn);
+}
+
+.shelfHoursNext {
+  font: 10.5px var(--acc-font);
+  color: var(--acc-fg-ghost);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.shelfActions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The three that only tidy up, set apart from the one that starts a night's work: two pixels between
+   "run this round of work" and "delete it" is not a gap anybody can aim inside. */
+.shelfIcons {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-left: 8px;
+  border-left: 1px solid var(--acc-line);
+}
+
+/* What this scenario has going right now, under a rule of its own. */
+.shelfRuns {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 7px 9px 8px 12px;
+  border-top: 1px solid var(--acc-line);
+  background: var(--acc-shade);
+}
+
+.shelfRun {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: 11px var(--acc-font);
+  color: var(--acc-fg-faint);
+}
+
+.shelfRun:hover,
+.shelfRun[data-hover] {
+  color: var(--acc-fg);
+}
+
+.shelfRunDot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--acc-accent);
+}
+
+.shelfRunAsks {
+  background: var(--acc-warn);
+  animation: accPulse 2s ease-in-out infinite;
+}
+
+.shelfRunName {
+  color: var(--acc-accent-light);
+  max-width: 160px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.shelfRunFact {
+  color: var(--acc-fg-ghost);
+}
+
+.shelfRunsMore {
+  margin-left: auto;
+  font: 10.5px var(--acc-font);
+  color: var(--acc-fg-ghost);
+}
+
+/*
+ * An empty shelf drawn as the row that is missing from it, rather than as a line of prose.
+ *
+ * A dashed capsule the size of a row says what a row is and that there is none here, which is the whole
+ * of what an empty shelf has to say.
+ */
+.emptyShelf {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 9px 12px;
+  border: 1px dashed var(--acc-line);
+  border-radius: var(--acc-r-md);
+}
+
+.emptyText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.emptyTitle {
+  flex: 1;
+  min-width: 0;
+  font: 11.5px/1.5 var(--acc-font);
+  color: var(--acc-fg-faint);
+}
+
+.emptyNote {
+  font: 10.5px/1.5 var(--acc-font);
+  color: var(--acc-fg-ghost);
+}
+
+/* The mark on a scenario that cannot be run as it stands - the editor says what is wrong. */
+.broken {
+  color: var(--acc-warn);
+}
+
+/* --- The strip above everything: a run has stopped to ask ---------------------------- */
+
+.asksBand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 11px;
+  margin-bottom: 14px;
+  border: 1px solid var(--acc-warn-32);
+  border-radius: var(--acc-r-md);
+  background: var(--acc-warn-06);
+}
+
+.asksDot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--acc-warn);
+}
+
+.asksDot {
+  animation: accPulse 2s ease-in-out infinite;
+}
+
+.asksText {
+  flex: 1;
+  min-width: 0;
+  font: 11.5px/1.5 var(--acc-font);
+  color: var(--acc-warn-light);
+}
+
+/* Which run it is, after the sentence - a qualifier rather than a second sentence. */
+.asksWhich {
+  margin-left: 6px;
+  color: var(--acc-fg-faint);
+}
+
+/* --- What a finished run says at the top, and what can be done from there ------------ */
+
+/*
+ * One band, wrapping when the panel is narrow: the sentence about how it ended on the left, and on
+ * the right the two doors out of a finished run - picking it up where it stood, and carrying on with
+ * its main thread in an ordinary chat.
+ */
+.after {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-bottom: 12px;
+  padding: 9px 11px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-md);
+  background: var(--acc-bg-card);
+}
+
+.afterText {
+  flex: 1 1 200px;
+  min-width: 0;
+  font: 11.5px/1.5 var(--acc-font);
+  color: var(--acc-fg-body);
+}
+
+.afterButtons {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+/* --- What the IDE could not do ------------------------------------------------------ */
+
+.outcome {
+  margin-bottom: 12px;
+  padding: 8px 11px;
+  border: 1px solid var(--acc-bad-32);
+  border-radius: var(--acc-r-md);
+  background: var(--acc-bad-10);
+  font: 11px/1.5 var(--acc-font);
+  color: var(--acc-bad-text);
+  cursor: pointer;
+}
+
+/* --- The runs band: a card each while they go --------------------------------------- */
+
+.runCards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.runCard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 11px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-lg);
+  background: var(--acc-bg-card);
+}
+
+.runCardAsks {
+  border-color: var(--acc-warn-32);
+}
+
+.runCardHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.runCardTitles {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  text-align: left;
+}
+
+.runCardName {
+  font: 500 12.5px var(--acc-font);
+  color: var(--acc-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Which run of the scenario this is - a ticket, or the minute it started (see runMarks). */
+.runCardMark,
+.runMark,
+.tableMark {
+  flex: none;
+  min-width: 0;
+  padding: 1px 6px;
+  border-radius: var(--acc-r-xs);
+  background: var(--acc-neutral-12);
+  color: var(--acc-fg-faint);
+  font: 10.5px var(--acc-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/*
+ * In the table the mark gives way to the name, never the other way round.
+ *
+ * A branch pasted into the start form is sixty characters of answer, and left unshrinkable it took the
+ * whole column: the row read "R." and a ticket - which is a table of runs that has stopped saying which
+ * scenario they were.
+ */
+.tableMark {
+  flex: 0 1 auto;
+  max-width: 45%;
+}
+
+.runCardButtons {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+}
+
+.runCardWhere {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  font: 11px var(--acc-font);
+  color: var(--acc-fg-ghost);
+}
+
+.runCardStep {
+  color: var(--acc-fg-body);
+}
+
+.runCardNudge {
+  color: var(--acc-warn);
+}
+
+.runCardFacts {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+/* What it has stopped to ask, under a rule and in the warning tone: the one thing here waiting for a
+   person. The whole strip opens the run, which is where it is answered. */
+.runCardAsk {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 8px 10px;
+  border-radius: var(--acc-r-md);
+  border: 1px solid var(--acc-warn-32);
+  background: var(--acc-warn-06);
+  text-align: left;
+}
+
+.runCardAsk:hover,
+.runCardAsk[data-hover] {
+  background: var(--acc-warn-12);
+}
+
+.runCardAskLabel {
+  flex: none;
+  font: 600 9px/1.5 var(--acc-font);
+  letter-spacing: 0.09em;
+  color: var(--acc-warn);
+  padding-top: 1px;
+}
+
+.runCardAskText {
+  flex: 1;
+  min-width: 0;
+  font: 11.5px/1.55 var(--acc-font);
+  color: var(--acc-warn-light);
+}
+
+/* --- The runs band: a table once they are over -------------------------------------- */
+
+.table {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-md);
+  background: var(--acc-bg-card);
+  overflow: hidden;
+}
+
+.tableRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px 56px 72px 60px 108px 26px;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--acc-line);
+  font: 11px var(--acc-font);
+  color: var(--acc-fg-faint);
+}
+
+.tableRow:last-child {
+  border-bottom: 0;
+}
+
+.tableRow:not(.tableHead):hover,
+.tableRow:not(.tableHead)[data-hover] {
+  background: var(--acc-bg-panel);
+}
+
+.tableHead {
+  background: var(--acc-bg-deep);
+  font: 600 9px/1 var(--acc-font);
+  letter-spacing: 0.09em;
+  color: var(--acc-fg-ghost);
+}
+
+.colRun {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  text-align: left;
+}
+
+.tableOpen {
+  color: inherit;
+}
+
+.tableName {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--acc-fg-body);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tableOpen:hover .tableName,
+.tableOpen[data-hover] .tableName {
+  color: var(--acc-fg);
+}
+
+/* Readings, so they line up down the column and can be compared without being read. */
+.colStarted,
+.colCards,
+.colTook,
+.colCost {
+  font: 10.5px var(--acc-mono);
+  color: var(--acc-fg-ghost);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.colCards,
+.colTook,
+.colCost {
+  text-align: right;
+}
+
+.colState {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.colDrop {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/*
+ * The row that opens more of them, inside the table: the gap between it and the last run is the one
+ * between two runs, and a row that opens more of them belongs to them.
+ */
+.moreRuns {
+  padding: 8px;
+  border-top: 1px solid var(--acc-line);
+  font: 11px var(--acc-font);
+  color: var(--acc-fg-ghost);
+  text-align: center;
+}
+
+.moreRuns:hover,
+.moreRuns[data-hover] {
+  color: var(--acc-fg-body);
+  background: var(--acc-bg-panel);
+}
+
+/* --- The timetable ------------------------------------------------------------------ */
+
+.hourRows {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.hourRow {
+  display: flex;
+  align-items: stretch;
+  gap: 11px;
+  padding: 8px 9px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-md);
+  background: var(--acc-bg-card);
+}
+
+.hourRow:hover,
+.hourRow[data-hover] {
+  border-color: var(--acc-line-hover);
+  background: var(--acc-bg-panel);
+}
+
+.hourMissed {
+  border-color: var(--acc-warn-32);
+  background: var(--acc-warn-06);
+}
+
+/* The hour in a gutter of its own: the question a timetable answers before anything is read. Centred
+   both ways in the gutter, and no bigger than the name beside it: the row is about the scenario, and a
+   clock set in the top left corner in a larger type read as the heading of the row. */
+.hourGutter {
+  flex: none;
+  width: 58px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding-right: 11px;
+  border-right: 1px solid var(--acc-line);
+  text-align: center;
+}
+
+.hourClock {
+  font: 500 11.5px/1.2 var(--acc-mono);
+  color: var(--acc-fg);
+}
+
+.hourMissed .hourClock {
+  color: var(--acc-warn-light);
+}
+
+.hourAway {
+  font: 10px var(--acc-font);
+  color: var(--acc-fg-ghost);
+}
+
+.hourMissed .hourAway {
+  color: var(--acc-warn);
+}
+
+.hourText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  text-align: left;
+}
+
+.hourName {
+  max-width: 100%;
+  font: 500 12.5px var(--acc-font);
+  color: var(--acc-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hourFacts {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  max-width: 100%;
+  font: 11px var(--acc-font);
+  color: var(--acc-fg-ghost);
+}
+
+.hourNoAnswers {
+  opacity: 0.8;
+}
+
+.hourActions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* --- The queue: what is lined up, and what the queue is doing about it ---------------- */
+
+/*
+ * A queue that has stopped, and it is the loudest thing on this screen on purpose.
+ *
+ * The same paint as the strip about a run asking a question, because it is the same kind of news: work
+ * that a person and only a person can start again. Everything else on this band is a list.
+ */
+/* The buttons go under the words when both do not fit on one line, rather than squeezing the words into a
+   column one word wide: in a panel of 400px the sentence about why the queue stopped - the only thing here a
+   person has to read - came out eleven lines tall beside two buttons that had all the room. */
+.queueHeld {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 9px;
+  padding: 9px 11px;
+  margin-bottom: 12px;
+  border: 1px solid var(--acc-warn-32);
+  border-radius: var(--acc-r-md);
+  background: var(--acc-warn-06);
+}
+
+.queueHeldDot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--acc-warn);
+}
+
+.queueHeldText {
+  flex: 1 1 220px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* The same text, pressable when there is a run to open - and saying so on hover. */
+.queueHeldOpen {
+  text-align: left;
+}
+
+.queueHeldOpen:hover .queueHeldWhy {
+  color: var(--acc-fg-dim);
+}
+
+.queueHeldTitle {
+  font: 500 11.5px/1.4 var(--acc-font);
+  color: var(--acc-warn-light);
+}
+
+.queueHeldWhy {
+  font: 11px/1.5 var(--acc-font);
+  color: var(--acc-fg-faint);
+}
+
+.queueHeldButtons {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+/* The turn the queue raised, while it is going: a line rather than a card, because the run itself has a
+   card of its own on the band next door and a tab of its own besides. */
+.queueGoing {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 11px;
+  margin-bottom: 12px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-md);
+  background: var(--acc-bg-card);
+}
+
+.queueGoingDot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--acc-ok);
+  animation: accPulse 2s ease-in-out infinite;
+}
+
+.queueGoingText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  text-align: left;
+}
+
+.queueGoingTitle {
+  flex: none;
+  font: 500 11.5px var(--acc-font);
+  color: var(--acc-fg);
+}
+
+.queueGoingName {
+  min-width: 0;
+  font: 11px var(--acc-font);
+  color: var(--acc-fg-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.queueGoingFact {
+  flex: none;
+  font: 10.5px var(--acc-mono);
+  color: var(--acc-fg-ghost);
+}
+
+.queueRows {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+/* A waiting turn. The shape of an hour's row, because it answers the same kind of question - what will
+   run, and what it is waiting for - and two lists in one screen that read differently for no reason are
+   two lists to learn. */
+.queueRow {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  gap: 11px;
+  padding: 8px 9px 8px 11px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-md);
+  background: var(--acc-bg-card);
+  overflow: hidden;
+}
+
+/* The rail down the side, in the shelf's own paint - the same two colours the shelves wear. */
+.queueRow::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+}
+
+.queueRow.railProject::before {
+  background: var(--acc-branch);
+}
+
+.queueRow.railUser::before {
+  background: var(--acc-agent);
+}
+
+.queueRow:hover,
+.queueRow[data-hover] {
+  border-color: var(--acc-line-hover);
+  background: var(--acc-bg-panel);
+}
+
+/* The place in the line, in a gutter of its own - the timetable's shape, with a number where it keeps
+   the hour. Order read off a figure is order read without counting rows. */
+.queueGutter {
+  flex: none;
+  width: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-right: 11px;
+  border-right: 1px solid var(--acc-line);
+}
+
+.queuePlace {
+  font: 500 11.5px/1.2 var(--acc-mono);
+  color: var(--acc-fg-ghost);
+}
+
+.queueText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.queueName {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  max-width: 100%;
+  font: 500 12.5px var(--acc-font);
+  color: var(--acc-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Which turn of this scenario it is - empty when it is the only one, see queueMarks. */
+.queueMark {
+  min-width: 0;
+  font: 400 11px var(--acc-mono);
+  color: var(--acc-fg-ghost);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.queueFacts {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  max-width: 100%;
+  font: 11px var(--acc-font);
+  color: var(--acc-fg-ghost);
+}
+
+/* What this turn waits for, and it is pressable: the queue is where the whole night is read at once,
+   which is the moment somebody realises the third one need not wait for the second. */
+.queueWaits {
+  padding: 1px 6px;
+  border-radius: var(--acc-r-xs);
+  background: var(--acc-neutral-12);
+  color: var(--acc-fg-faint);
+  font: 10.5px var(--acc-font);
+  white-space: nowrap;
+}
+
+.queueWaits:hover,
+.queueWaits[data-hover] {
+  background: var(--acc-neutral-16);
+  color: var(--acc-fg);
+}
+
+/* The other half of the same choice, in the paint of something that goes on regardless. */
+.queueWaitsAny {
+  background: var(--acc-warn-12);
+  color: var(--acc-warn-light);
+}
+
+.queueFailed {
+  color: var(--acc-warn-light);
+}
+
+.queueActions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* The choice in the form: two rows, each saying what it does. What is being chosen is what happens to the
+   REST of the night when this turn's predecessor falls over, and that does not fit beside a tick box. */
+.queueChoice {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.queueChoiceLabel {
+  font: 500 10px var(--acc-font);
+  letter-spacing: 0.08em;
+  color: var(--acc-fg-ghost);
+}
+
+.queueOption {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-md);
+  background: var(--acc-bg-card);
+  text-align: left;
+}
+
+.queueOption:hover,
+.queueOption[data-hover] {
+  border-color: var(--acc-line-hover);
+}
+
+.queueOptionOn {
+  border-color: var(--acc-branch-line);
+  background: var(--acc-branch-10);
+}
+
+.queueOptionName {
+  font: 500 12px var(--acc-font);
+  color: var(--acc-fg);
+}
+
+.queueOptionNote {
+  font: 11px/1.5 var(--acc-font);
+  color: var(--acc-fg-ghost);
+}
+
+/* --- The overlay the three forms stand on ------------------------------------------- */
+
+.overlayScrim {
+  position: absolute;
+  top: var(--header-height);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 46;
+  background: rgb(0 0 0 / 40%);
+}
+
+/*
+ * Centred by its own margins, and NEVER by a transform.
+ *
+ * A transformed box becomes the containing block of every fixed-positioned thing inside it, and the menu
+ * of a selector is fixed (see .menu in shell.module.css): it is placed by the window's coordinates,
+ * because that is what its button is measured in. Under translateX(-50%) those coordinates were read
+ * against the card instead - the hour's two little menus opened hundreds of pixels off the left of the
+ * screen, and the overflow below clipped what was left. On the screen that is a pair of buttons that do
+ * nothing at all, which is exactly how it was reported.
+ *
+ * The same goes for filter, will-change and contain: anything that makes a containing block here breaks
+ * every menu the forms open, silently and all at once.
+ */
+.overlay {
+  position: absolute;
+  z-index: 47;
+  top: calc(var(--header-height) + 36px);
+  left: 0;
+  right: 0;
+  margin-inline: auto;
+  width: min(440px, calc(100% - 28px));
+  max-height: calc(100% - var(--header-height) - 72px);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--acc-line-strong);
+  border-radius: var(--acc-r-2xl);
+  background: var(--acc-bg-panel);
+  box-shadow: var(--acc-shadow-card);
+  overflow: hidden;
+}
+
+.overlayHead {
+  flex: none;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 12px 10px 14px;
+  border-bottom: 1px solid var(--acc-line);
+}
+
+.overlayTitles {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.overlayTitle {
+  font: 600 12.5px var(--acc-font);
+  color: var(--acc-fg);
+}
+
+.overlaySubtitle {
+  font: 11px var(--acc-font);
+  color: var(--acc-fg-ghost);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.overlayBody {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.overlayFoot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px 12px;
+  border-top: 1px solid var(--acc-line);
+}
+
+.overlayNote {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font: 10.5px/1.5 var(--acc-font);
+  color: var(--acc-fg-ghost);
+}
+
+.overlayButtons {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.overlayLabel {
+  margin-top: 2px;
+  font: 600 9px/1 var(--acc-font);
+  letter-spacing: 0.09em;
+  color: var(--acc-fg-ghost);
+}
+
+.overlayHint {
+  margin: 0;
+  font: 10.5px/1.5 var(--acc-font);
+  color: var(--acc-fg-ghost);
+}
+
+/* --- Fields ------------------------------------------------------------------------- */
+
+/*
+ * A field is as wide as what holds it and no taller than itself.
+ *
+ * It used to say `flex: 1`, which is what a field wants inside a ROW - and this screen puts fields in
+ * columns too, where the same line told the name of a scenario to fill the whole pane. So the growing is
+ * asked for by the rows that want it, one rule each, and the fixed-width ones follow so they win.
+ */
+.field {
+  flex: none;
+  width: 100%;
+  min-width: 0;
+  min-height: var(--acc-hit);
+  padding: 6px 9px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-sm);
+  background: var(--acc-bg-sunken);
+  color: var(--acc-fg-body);
+  font: 12px var(--acc-font);
+}
+
+.field:focus {
+  outline: none;
+  border-color: var(--acc-accent-40);
+}
+
+/* A name that is written into a prompt as {{this}} or [[this]] - code, so it keeps the console font. */
+.fieldMono {
+  font: 11.5px var(--acc-mono);
+  color: var(--acc-branch);
+}
+
+.formRow .field,
+.questionRow .field,
+.stageHead .field {
+  flex: 1 1 0;
+  width: auto;
+}
+
+.formRow .fieldName {
+  flex: none;
+  width: 130px;
+}
+
+.fieldName {
+  flex: none;
+  width: 130px;
+}
+
+.field2Row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.fieldLabel {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  font: 600 9px/1 var(--acc-font);
+  letter-spacing: 0.09em;
+  color: var(--acc-fg-ghost);
+}
+
+.fieldRequired {
+  letter-spacing: 0;
+  color: var(--acc-warn);
+  font-weight: 400;
+}
+
+.area {
+  width: 100%;
+  min-height: 84px;
+  padding: 8px 10px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-sm);
+  background: var(--acc-bg-sunken);
+  color: var(--acc-fg-body);
+  font: 12px/1.6 var(--acc-font);
+  resize: vertical;
+}
+
+.areaShort {
+  min-height: 52px;
+}
+
+.area:focus {
+  outline: none;
+  border-color: var(--acc-accent-40);
+}
+
+.area:disabled {
+  opacity: 0.55;
+}
+
+/* The same grey every other field of the panel greets with: the browser's own is a shade lighter and
+   read as a field already holding text. */
+.area::placeholder,
+.field::placeholder {
+  color: var(--acc-fg-ghost);
+}
+
+.draftArea {
+  min-height: 96px;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.formRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: 11px var(--acc-font);
+  color: var(--acc-fg-faint);
+  white-space: nowrap;
+}
+
+/*
+ * A row of choices as one capsule: the shelf, the rhythm, the day.
+ *
+ * A segmented control rather than four loose buttons, because the four are one answer. The chosen one
+ * is told by its fill alone: a paint down its side was the one thing on these screens the other tabs
+ * did not have, and it read as a stray rather than as a meaning.
+ */
+.segmented {
+  display: inline-flex;
+  align-items: stretch;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-lg);
+  background: var(--acc-bg-sunken);
+}
+
+.segment {
+  flex: 1;
+  min-width: 0;
+  min-height: var(--acc-hit);
+  padding: 5px 11px;
+  border-radius: var(--acc-r-sm);
+  color: var(--acc-fg-faint);
+  font: 11.5px var(--acc-font);
+  white-space: nowrap;
+}
+
+.segment:hover:not(:disabled),
+.segment[data-hover]:not(:disabled) {
+  color: var(--acc-fg-body);
+}
+
+.segment:disabled {
+  opacity: 0.4;
+}
+
+.segmentOn {
+  background: var(--acc-bg-control);
+  color: var(--acc-fg);
+}
+
+.timeRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.timeColon {
+  font: 12px var(--acc-mono);
+  color: var(--acc-fg-ghost);
+}
+
+/* When the hour being set would actually land - said while it is being chosen, not afterwards. */
+.timeDue {
+  font: 10.5px var(--acc-font);
+  color: var(--acc-fg-ghost);
+}
+
+/* --- The new-scenario overlay while a model writes ---------------------------------- */
+
+.draftGoing {
+  color: var(--acc-accent-light);
+  animation: accPulse 1.8s ease-in-out infinite;
+}
+
+.draftElapsed {
+  font: 10.5px var(--acc-mono);
+  color: var(--acc-fg-ghost);
+}
+
+.draftError {
+  margin: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--acc-bad-32);
+  border-radius: var(--acc-r-sm);
+  background: var(--acc-bad-10);
+  font: 10.5px/1.5 var(--acc-font);
+  color: var(--acc-bad-text);
+}
+
+/*
+ * An indeterminate bar: how long it takes is not known by anybody, and a percentage that is made up is
+ * worse than a bar that admits it is only saying "still going".
+ */
+.draftBar {
+  position: relative;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--acc-bg-control);
+  overflow: hidden;
+}
+
+.draftBar::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 34%;
+  border-radius: 1px;
+  background: var(--acc-accent);
+  animation: accDraftSlide 1.4s ease-in-out infinite;
+}
+
+@keyframes accDraftSlide {
+  0% {
+    left: -34%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+
+/* --- The editor: an outline and a pane ---------------------------------------------- */
+
+.editor {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+.outline {
+  flex: none;
+  width: 190px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 8px 16px;
+  border-right: 1px solid var(--acc-line);
+  background: var(--acc-bg-deep);
+  overflow-y: auto;
+}
+
+.outlineLabel {
+  margin: 8px 6px 4px;
+  font: 600 9px/1 var(--acc-font);
+  letter-spacing: 0.09em;
+  color: var(--acc-fg-ghost);
+}
+
+.outlineLabel:first-child {
+  margin-top: 0;
+}
+
+.outlineRow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-height: var(--acc-hit);
+  padding: 6px 8px;
+  border-radius: var(--acc-r-sm);
+  color: var(--acc-fg-faint);
+  font: 11.5px var(--acc-font);
+  text-align: left;
+}
+
+.outlineRow:hover,
+.outlineRow[data-hover] {
+  background: var(--acc-bg-panel);
+  color: var(--acc-fg-body);
+}
+
+.outlineOn {
+  background: var(--acc-bg-card);
+  color: var(--acc-fg);
+}
+
+.outlineNumber {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--acc-r-xs);
+  background: var(--acc-bg-control);
+  font: 10px var(--acc-mono);
+  color: var(--acc-fg-faint);
+}
+
+.outlineOn .outlineNumber {
+  background: var(--acc-accent-20);
+  color: var(--acc-accent-light);
+}
+
+.outlineText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.outlineTitle {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.outlineNote {
+  font: 10px var(--acc-mono);
+  color: var(--acc-fg-ghost);
+}
+
+.outlineCount {
+  flex: none;
+  margin-left: auto;
+  font: 10px var(--acc-mono);
+  color: var(--acc-fg-ghost);
+}
+
+/* A card under its stage, set in by a step rather than to the stage's own text: lined up with the
+   title it looked like a second stage, and a tab of that size under one word read as a hole. */
+.outlineCard {
+  display: block;
+  width: 100%;
+  min-height: var(--acc-hit);
+  padding: 5px 8px 5px 18px;
+  border-radius: var(--acc-r-sm);
+  color: var(--acc-fg-ghost);
+  font: 11px var(--acc-font);
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.outlineCard:hover,
+.outlineCard[data-hover] {
+  color: var(--acc-fg-body);
+}
+
+.outlineCardOn {
+  color: var(--acc-accent-light);
+}
+
+.outlineAdd {
+  margin-top: 4px;
+  padding: 7px 8px;
+  border: 1px dashed var(--acc-line);
+  border-radius: var(--acc-r-sm);
+  color: var(--acc-fg-ghost);
+  font: 11px var(--acc-font);
+  text-align: left;
+}
+
+.outlineAdd:hover,
+.outlineAdd[data-hover] {
+  border-color: var(--acc-line-hover);
+  color: var(--acc-fg-body);
+}
+
+/* What is worth tidying, at the foot of the outline: each names a card, and the card is one click away
+   in this very column. */
+.tidy {
+  margin-top: auto;
+  padding-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+/* As wide as the rows under it: set in by the six pixels the other captions of the outline wear, its two
+   wrapped lines read as a narrower block standing beside a wider card. */
+.tidyLabel {
+  margin: 0 0 3px;
+  font: 600 9px/1 var(--acc-font);
+  letter-spacing: 0.09em;
+  color: var(--acc-warn);
+}
+
+.tidyRow {
+  padding: 6px 8px;
+  border-radius: var(--acc-r-sm);
+  border-left: 2px solid var(--acc-warn-32);
+  background: var(--acc-warn-06);
+  color: var(--acc-fg-faint);
+  font: 10.5px/1.5 var(--acc-font);
+  text-align: left;
+}
+
+.tidyRow:hover,
+.tidyRow[data-hover] {
+  background: var(--acc-warn-12);
+  color: var(--acc-fg-body);
+}
+
+.tidyBad {
+  border-left-color: var(--acc-bad-32);
+}
+
+/* How many issues it has, in the header: a count, with the list of them at the foot of the outline. */
+.issueCount {
+  flex: none;
+  padding: 3px 8px;
+  border: 1px solid var(--acc-warn-32);
+  border-radius: var(--acc-r-sm);
+  background: var(--acc-warn-06);
+  font: 10.5px var(--acc-font);
+  color: var(--acc-warn-light);
+  white-space: nowrap;
+}
+
+.issueCountBad {
+  border-color: var(--acc-bad-32);
+  background: var(--acc-bad-10);
+  color: var(--acc-bad-text);
+}
+
+.pane {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 14px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.paneLabel {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 6px;
+  font: 600 9.5px/1 var(--acc-font);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--acc-fg-soft);
+}
+
+.paneLabel:first-child {
+  margin-top: 0;
+}
+
+/* The same row for a heading that is a name rather than a label: the main thread is what the person
+   calls the orchestrator, and shouted it read as a warning over the field. */
+.paneLabelPlain {
+  text-transform: none;
+  letter-spacing: 0;
+  font: 600 12px/1.2 var(--acc-font);
+  color: var(--acc-fg);
+}
+
+.paneNote {
+  letter-spacing: 0;
+  font: 10.5px var(--acc-font);
+  font-weight: 400;
+  color: var(--acc-fg-ghost);
+}
+
+.paneLine {
+  flex: 1;
+  min-width: 8px;
+  height: 1px;
+  background: var(--acc-line);
+}
+
+.stageHead {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* --- A card in the editor ----------------------------------------------------------- */
+
+.cardBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 11px 12px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-lg);
+  background: var(--acc-bg-card);
+}
+
+.cardOpen {
+  border-color: var(--acc-accent-40);
+}
+
+.cardHead {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.cardNumber {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--acc-r-xs);
+  background: var(--acc-bg-control);
+  font: 10px var(--acc-mono);
+  color: var(--acc-fg-faint);
+}
+
+/* The title reads as a title and edits as a field: no border until the pointer is on it. */
+.cardTitle {
+  flex: 1;
+  min-width: 0;
+  min-height: var(--acc-hit);
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--acc-r-sm);
+  background: transparent;
+  color: var(--acc-fg);
+  font: 500 12px var(--acc-font);
+}
+
+.cardTitle:hover {
+  border-color: var(--acc-line);
+}
+
+.cardTitle:focus {
+  outline: none;
+  border-color: var(--acc-accent-40);
+  background: var(--acc-bg-sunken);
+}
+
+.cardInherits {
+  flex: none;
+  font: 10.5px var(--acc-font);
+  color: var(--acc-fg-ghost);
+  white-space: nowrap;
+}
+
+.cardLabel {
+  margin-top: 4px;
+  font: 600 9px/1 var(--acc-font);
+  letter-spacing: 0.09em;
+  color: var(--acc-fg-ghost);
+}
+
+.cardNote {
+  margin: 0;
+  font: 10.5px/1.5 var(--acc-font);
+  color: var(--acc-fg-ghost);
+}
+
+.cardPair {
+  display: flex;
+  gap: 8px;
+}
+
+.cardHalf {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.addSlot {
+  align-self: flex-start;
+}
+
+.addCard {
+  align-self: flex-start;
+  padding: 7px 11px;
+  border: 1px dashed var(--acc-line);
+  border-radius: var(--acc-r-sm);
+  color: var(--acc-fg-ghost);
+  font: 11px var(--acc-font);
+}
+
+.addCard:hover,
+.addCard[data-hover] {
+  border-color: var(--acc-line-hover);
+  color: var(--acc-fg-body);
+}
+
+/* --- The prompt: the one field here that is genuinely code -------------------------- */
+
+.prompt {
+  position: relative;
+  min-height: 96px;
+}
+
+/*
+ * The backdrop and the field share one set of metrics, and that is the whole of why the light lands
+ * under the letters: two boxes with the same font, padding, leading and wrapping.
+ */
+.promptBack,
+.promptField {
+  width: 100%;
+  min-height: 96px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--acc-r-sm);
+  font: 11.5px/1.65 var(--acc-mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  /*
+   * The scrollbar's lane is kept on both boxes whether or not there is anything to scroll.
+   *
+   * In the IDE the scrollbars are the panel's own (see base.css) and take their width out of the box
+   * rather than floating over it: once a prompt grew past the field, the field's lines wrapped a
+   * scrollbar's width earlier than the backdrop's, and from the third line down every lit name sat
+   * under the wrong words. A headless browser hides its scrollbars, which is why the harness never
+   * showed it.
+   */
+  scrollbar-gutter: stable;
+}
+
+.promptBack {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-color: var(--acc-line);
+  background: var(--acc-bg-sunken);
+  color: transparent;
+  pointer-events: none;
+}
+
+.promptField {
+  position: relative;
+  display: block;
+  border-color: var(--acc-line);
+  background: transparent;
+  color: var(--acc-fg-body);
+  caret-color: var(--acc-accent);
+  resize: vertical;
+}
+
+.promptField:focus {
+  outline: none;
+  border-color: var(--acc-accent-40);
+}
+
+/* What the run is asked for before it starts, and what the main thread fills in - two kinds of name, two
+   paints, both of them the ones those two things already wear elsewhere in the panel. */
+.promptInput {
+  color: var(--acc-warn);
+  background: var(--acc-warn-12);
+  border-radius: 2px;
+}
+
+.promptSlot {
+  color: var(--acc-agent);
+  background: var(--acc-agent-12);
+  border-radius: 2px;
+}
+
+/* --- The run's own strip ------------------------------------------------------------ */
+
+.runBar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--acc-line);
+  background: var(--acc-bg-deep);
+}
+
+.runSegment {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font: 10.5px var(--acc-font);
+  color: var(--acc-fg-ghost);
+}
+
+.runKey {
+  color: var(--acc-fg-ghost);
+}
+
+/* A reading: a duration, a count, a sum of money. */
+.runValue {
+  font: 10.5px var(--acc-mono);
+  color: var(--acc-fg-soft);
+  white-space: nowrap;
+}
+
+.progress {
+  flex: 1;
+  min-width: 90px;
+  max-width: 240px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--acc-meter-track);
+  overflow: hidden;
+}
+
+.progressFill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--acc-accent);
+  transition: width 0.3s ease;
+}
+
+.progressDone {
+  background: var(--acc-accent);
+}
+
+.progressFailed {
+  background: var(--acc-bad);
+}
+
+/* --- The question the run is standing on -------------------------------------------- */
+
+.question {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--acc-warn-32);
+  border-radius: var(--acc-r-lg);
+  background: var(--acc-warn-06);
+}
+
+.questionLabel {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  font: 600 9px/1 var(--acc-font);
+  letter-spacing: 0.09em;
+  color: var(--acc-warn);
+}
+
+.questionNote {
+  letter-spacing: 0;
+  font: 10.5px var(--acc-font);
+  font-weight: 400;
+  color: var(--acc-fg-ghost);
+}
+
+.questionTitle {
+  font: 12.5px/1.55 var(--acc-font);
+  color: var(--acc-warn-light);
+}
+
+.questionDetail {
+  padding: 7px 9px;
+  border-radius: var(--acc-r-sm);
+  background: var(--acc-bg-sunken);
+  font: 10.5px/1.6 var(--acc-mono);
+  color: var(--acc-fg-mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 140px;
+  overflow: auto;
+}
+
+.questionRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* --- The timeline ------------------------------------------------------------------- */
+
+.timeline {
+  display: flex;
+  flex-direction: column;
+}
+
+/*
+ * A stage is a chapter, and its heading carries its own verdict - done in eight minutes, here now, not
+ * reached - so the rows under it do not have to be counted to work out where the run is.
+ */
+.stageRow {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 14px 0 8px;
+  font: 600 9.5px/1 var(--acc-font);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--acc-fg-soft);
+}
+
+.stageRow:first-child {
+  margin-top: 0;
+}
+
+.stageNumber {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  border: 1px solid var(--acc-line-strong);
+  font: 10px/1 var(--acc-mono);
+  letter-spacing: 0;
+  color: var(--acc-fg-faint);
+}
+
+.stageHere .stageNumber {
+  border-color: var(--acc-accent-40);
+  color: var(--acc-accent-light);
+}
+
+.stageDone .stageNumber {
+  border-color: var(--acc-ok-32);
+  color: var(--acc-ok);
+}
+
+.stageAhead {
+  color: var(--acc-fg-ghost);
+}
+
+.stageTitle {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stageLine {
+  flex: 1;
+  min-width: 8px;
+  height: 1px;
+  background: var(--acc-line);
+}
+
+.stageVerdict {
+  flex: none;
+  letter-spacing: 0;
+  font: 10.5px var(--acc-font);
+  font-weight: 400;
+  color: var(--acc-fg-ghost);
+}
+
+.stageHere .stageVerdict {
+  color: var(--acc-accent-light);
+}
+
+/* --- One step, hanging off the rail -------------------------------------------------- */
+
+.stepRow {
+  display: flex;
+  align-items: stretch;
+  gap: 9px;
+}
+
+/*
+ * The rail: a line down the column with a dot where this step sits.
+ *
+ * A position rather than a word - where the run is reads off the dots before any state is read. The line
+ * runs the whole height of the row so consecutive steps join up, and stops at a stage heading, which has
+ * a margin of its own.
+ */
+.stepRail {
+  position: relative;
+  flex: none;
+  width: 17px;
+}
+
+.stepRail::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 8px;
+  width: 1px;
+  background: var(--acc-line);
+}
+
+.stepRail::after {
+  content: '';
+  position: absolute;
+  top: 13px;
+  left: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--acc-ok);
+  box-shadow: 0 0 0 3px var(--acc-bg);
+}
+
+.railAhead::after {
+  background: transparent;
+  border: 1px solid var(--acc-line-strong);
+}
+
+.railGoing::after {
+  background: var(--acc-warn);
+  animation: accPulse 2s ease-in-out infinite;
+}
+
+.railFailed::after {
+  background: var(--acc-bad);
+}
+
+.railDone::after {
+  background: var(--acc-ok);
+}
+
+.step {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  margin-bottom: 6px;
+  padding: 8px 10px 9px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-md);
+  background: var(--acc-bg-card);
+  text-align: left;
+}
+
+.step:hover,
+.step[data-hover] {
+  border-color: var(--acc-line-hover);
+  background: var(--acc-bg-panel);
+}
+
+/* A step nothing has begun in is drawn as a plan: outlined rather than filled. */
+.stepWaiting {
+  background: transparent;
+  border-style: dashed;
+}
+
+.stepRunning {
+  border-color: var(--acc-accent-40);
+}
+
+.stepFailed {
+  border-color: var(--acc-bad-32);
+}
+
+.stepHead {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-width: 0;
+}
+
+.stepTitle {
+  min-width: 0;
+  font: 500 12px var(--acc-font);
+  color: var(--acc-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stepWaiting .stepTitle {
+  color: var(--acc-fg-ghost);
+  font-weight: 400;
+}
+
+.stagePass {
+  flex: none;
+  font: 10.5px var(--acc-font);
+  color: var(--acc-fg-ghost);
+  white-space: nowrap;
+}
+
+.stepSpace {
+  flex: 1;
+  min-width: 4px;
+}
+
+.stepTime {
+  flex: none;
+  font: 10.5px var(--acc-mono);
+  color: var(--acc-fg-ghost);
+  white-space: nowrap;
+}
+
+.stepTimeGoing {
+  color: var(--acc-accent-light);
+}
+
+.stepLine {
+  max-width: 100%;
+  font: 11px/1.55 var(--acc-font);
+  color: var(--acc-fg-faint);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+/* What the agent is saying at this very second - lit, because it is the difference between a step
+   thinking and a step that has hung. */
+.stepSaying {
+  color: var(--acc-fg-body);
+}
+
+.stepVerdict {
+  max-width: 100%;
+  font: 10.5px/1.5 var(--acc-font);
+  color: var(--acc-ok);
+}
+
+.stepVerdictBad {
+  color: var(--acc-bad-light);
+}
+
+.stepNudge {
+  font: 10.5px var(--acc-font);
+  color: var(--acc-warn);
+}
+
+.stepSlots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: 100%;
+}
+
+/* A slot the main thread filled: its name and what went in it - code, so the console font. */
+.slot {
+  padding: 1px 6px;
+  border-radius: var(--acc-r-xs);
+  background: var(--acc-agent-12);
+  color: var(--acc-agent);
+  font: 10px var(--acc-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/*
+ * What the main thread said, between the cards.
+ *
+ * A tinted block with a label of its own: it is not a step, and it used to look like one. Who said it
+ * stands ABOVE the words rather than in front of them - beside them it took its width off every line of
+ * a paragraph that is already narrow.
+ */
+.note {
+  display: flex;
+  align-items: stretch;
+  gap: 9px;
+}
+
+.noteRail {
+  position: relative;
+  flex: none;
+  width: 17px;
+}
+
+.noteRail::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 8px;
+  width: 1px;
+  background: var(--acc-line);
+}
+
+.noteBody {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 6px;
+  padding: 8px 10px 9px;
+  border-left: 2px solid var(--acc-agent-dark);
+  border-radius: 0 var(--acc-r-md) var(--acc-r-md) 0;
+  background: var(--acc-agent-12);
+}
+
+.noteWho {
+  align-self: flex-start;
+  font: 600 9px/1 var(--acc-font);
+  letter-spacing: 0.09em;
+  color: var(--acc-agent);
+}
+
+.noteText {
+  min-width: 0;
+  font: 11px/1.55 var(--acc-font);
+  color: var(--acc-fg-faint);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* --- One step's whole log, in place of the timeline ---------------------------------- */
+
+.logFacts {
+  flex: none;
+  font: 10px var(--acc-mono);
+  color: var(--acc-fg-ghost);
+}
+
+.logBody {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.logEmpty {
+  padding: 16px 12px;
+  font: 11px var(--acc-font);
+  color: var(--acc-fg-ghost);
+}
+
+/* --- What scenarios are, behind a question mark -------------------------------------- */
+
+.helpScrim {
+  position: absolute;
+  top: var(--header-height);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 46;
+  background: rgb(0 0 0 / 40%);
+}
+
+.help {
+  position: absolute;
+  z-index: 47;
+  top: calc(var(--header-height) + 40px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(420px, calc(100% - 32px));
+  max-height: calc(100% - var(--header-height) - 80px);
+  overflow-y: auto;
+  padding: 14px 16px 15px;
+  border: 1px solid var(--acc-line-strong);
+  border-radius: var(--acc-r-2xl);
+  background: var(--acc-bg-panel);
+  box-shadow: var(--acc-shadow-card);
+}
+
+.helpHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.helpTitle {
+  flex: 1;
+  min-width: 0;
+  font: 600 12px var(--acc-font);
+  color: var(--acc-fg);
+}
+
+.helpList {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  font: 11.5px/1.6 var(--acc-font);
+  color: var(--acc-fg-body);
+}
+
+/* The gap above is the whole of the spacing: a paragraph's own margin on top of it doubled every one. */
+.helpList p {
+  margin: 0;
+}
+
+/* The lead word of a line, so four of them read as four answers rather than as a paragraph. */
+.helpLead {
+  color: var(--acc-accent-light);
+}
+
+/* --- Folding, by the tab's own width ------------------------------------------------- */
+
+/*
+ * A tool window may be a third of a monitor wide, so everything that stands in a row gets a fallback.
+ * The editor's two columns are the first thing to go: an outline 190px wide inside a panel of 320 leaves
+ * the pane too narrow for a prompt.
+ */
+@container (max-width: 560px) {
+  .outline {
+    width: 148px;
+  }
+
+  .tableRow {
+    grid-template-columns: minmax(0, 1fr) 74px 46px 100px 26px;
+  }
+
+  .colTook,
+  .colCost {
+    display: none;
+  }
+
+  .cardPair {
+    flex-direction: column;
+  }
+}
+
+@container (max-width: 420px) {
+  .editor {
+    flex-direction: column;
+  }
+
+  .outline {
+    width: 100%;
+    max-height: 40%;
+    border-right: 0;
+    border-bottom: 1px solid var(--acc-line);
+  }
+
+  .tidy {
+    margin-top: 10px;
+  }
+
+  .shelfMain {
+    flex-wrap: wrap;
+  }
+
+  .shelfHours {
+    max-width: 100%;
+    align-items: flex-start;
+    text-align: left;
+  }
+
+  .bands {
+    flex-wrap: wrap;
+  }
+
+  .bandNote {
+    text-align: left;
+  }
+}

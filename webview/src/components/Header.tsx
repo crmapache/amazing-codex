@@ -1,0 +1,804 @@
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { isSideComposerLayout, type ComposerLayout } from '../composerLayout'
+import { BranchChip } from './StatusBar'
+import s from './shell.module.css'
+import { useT } from '../i18n'
+import type { Dict } from '../i18n/en'
+
+/**
+ * What is happening in a tab: nothing, work under way, work finished, or someone being waited for. The
+ * circle is one and the same, the colour and the breathing differ - that way the state is visible out of
+ * the corner of the eye, without reading a caption.
+ */
+export type SessionState = 'idle' | 'running' | 'done' | 'attention' | 'crashed'
+
+/**
+ * Where a tab's name came from - it decides whether it may be overwritten. 'default' means not a word
+ * has been said yet and a stand-in is in place ('main session' / 'new session'). 'heuristic' is an
+ * instant guess from the first message, which the LLM's answer arriving after it may replace. 'llm' is
+ * what the generation sent (see sessionTitle in protocol.ts): the next answer no longer overwrites it,
+ * only a reset on /clear does.
+ */
+export type TitleSource = 'default' | 'heuristic' | 'llm'
+
+export interface Session {
+  id: string
+  title: string
+  state: SessionState
+  /** The root conversation: forks and forks of forks carry one and the same one. */
+  groupId: string
+  /** The branching depth: 0 is the root, 1 a fork, 2 a fork of a fork. */
+  depth: number
+  titleSource: TitleSource
+}
+
+/**
+ * The groups' colours, but not simply a hue around the circle: two neighbouring hues at the same
+ * lightness and saturation are almost indistinguishable to the eye (the first attempt came out exactly
+ * that way) - the golden angle between hues loosens that neighbourhood, while alternating three bands of
+ * lightness and saturation separates by contrast even the pairs of hues that still ended up side by
+ * side.
+ *
+ * A rainbow across all 360° was the one piece of colour noise in the panel: the tabs shouted over the
+ * feed the panel is opened for. Now the hues live in the theme's cool arc (aquamarine → moon blue →
+ * iris) - the groups are still distinguishable but no longer argue with the accents.
+ */
+const GROUP_COLOR_COUNT = 18
+const GOLDEN_ANGLE = 137.508
+/** The cool arc: aquamarine → moon blue → iris. The arc is 114° wide. */
+const HUE_START = 178
+const HUE_SPAN = 114
+const COLOR_BANDS = [
+  { s: 62, l: 70 },
+  { s: 55, l: 58 },
+  { s: 45, l: 78 },
+]
+const GROUP_COLORS = Array.from({ length: GROUP_COLOR_COUNT }, (_, index) => {
+  const hue = Math.round(HUE_START + ((index * GOLDEN_ANGLE) % HUE_SPAN))
+  const band = COLOR_BANDS[index % COLOR_BANDS.length]!
+  return `hsl(${hue}, ${band.s}%, ${band.l}%)`
+})
+
+/**
+ * By the group's own id rather than by a tab count - the colour does not slide when others are opened
+ * and closed beside it. A plain multiplication by 31 mixes similar strings poorly (in
+ * "session-<timestamp>" only the last digits differ) - tabs close in time got neighbouring hues around
+ * the circle, that is, visually identical ones. MurmurHash3's finalizer below is the avalanche mixing
+ * step after which a small difference in the input gives an entirely different colour number in the
+ * output.
+ */
+const colorForGroup = (groupId: string): string => {
+  let hash = 0
+  for (let i = 0; i < groupId.length; i++) hash = Math.imul(hash ^ groupId.charCodeAt(i), 0x01000193)
+
+  hash ^= hash >>> 16
+  hash = Math.imul(hash, 0x85ebca6b)
+  hash ^= hash >>> 13
+  hash = Math.imul(hash, 0xc2b2ae35)
+  hash ^= hash >>> 16
+
+  return GROUP_COLORS[Math.abs(hash) % GROUP_COLORS.length] ?? GROUP_COLORS[0]!
+}
+
+interface HeaderProps {
+  sessions: Session[]
+  activeSession: string
+  onPickSession: (id: string) => void
+  onCloseSession: (id: string) => void
+  onNewSession: () => void
+  /**
+   * The tab order after a drag: put the group `groupId` before the group `beforeGroupId` (or at the end,
+   * when there is none).
+   *
+   * What moves is the whole group - a conversation together with its forks. They cannot be dragged apart
+   * one by one and someone else's tab cannot be inserted inside: a group is one topic, and a tab in the
+   * middle of someone else's topic would mean nothing but confusion.
+   *
+   * The tabs that hold no conversation travel through here too, each as a group of one (see tabs.ts):
+   * the strip knows a single kind of rearrangement, and whoever is above sorts out what of it the shell
+   * should hear.
+   */
+  onReorderGroups: (groupId: string, beforeGroupId: string | null) => void
+  /**
+   * The other half of the same gesture: a fork dragged inside its own group, to stand before the tab
+   * `beforeSessionId` (or last in the group, when there is none).
+   *
+   * A fork never leaves its group and never steps in front of the conversation it grew out of - see
+   * moveWithinGroup in tabs.ts, which this hands the decision to. Which of the two a press starts is
+   * decided by what is under it: the head of a group carries the group, a fork carries itself.
+   */
+  onReorderTabs: (sessionId: string, beforeSessionId: string | null) => void
+  /**
+   * The history, MCP, plugins, sounds, remote access and the preferences are gathered into one menu
+   * behind the burger button on the right of the header - there was no longer room in the header for a
+   * button per entry. It opens down the panel's right-hand edge and is drawn by App.tsx (see SideMenu):
+   * unlike MODEL/EFFORT/MODE it does not stand next to its button, so there is no point to hand over.
+   */
+  onOpenMenu: () => void
+  /**
+   * The same layout as the whole panel's (see App.tsx) - what matters here is whether it is a tight one
+   * (compact and left/right both save height with the same side rail, see isSideComposerLayout): the
+   * header is lower (32px instead of 34px) and its icons smaller (26px instead of 28px). A modifier on
+   * the header itself rather than props on every button - that edits one cascade in the styles rather
+   * than a dozen places here.
+   */
+  layout: ComposerLayout
+  /**
+   * The branch and its PR live in one and the same place in every layout: on the right of the header,
+   * before the burger. They used to live in three different places depending on the layout (the status
+   * line, the task line, the composer itself) - now there is one source of truth rather than three copies
+   * that would have to be kept in agreement.
+   */
+  gitBranch?: string
+  pullRequest?: string
+  onOpenPullRequest?: () => void
+  /**
+   * How many others are watching this project - a browser page beside the IDE, later a phone. Zero
+   * hides the mark entirely: the ordinary case is nobody, and a permanent "0" would be noise.
+   */
+  watchers?: number
+  /**
+   * The tabs of the strip that hold no conversation: the statistics, the scenarios, a run being watched.
+   *
+   * Not sessions and not in the sessions list on purpose: the shell owns that list and overwrites it
+   * whole, while these belong to this screen alone - they hold no conversation, and closing one kills
+   * nothing. Dragged they are all the same, each a group of one (see tabs.ts): `at` is how many
+   * conversation groups stand to its left, and the order of this array breaks a tie between two that
+   * work out to the same place.
+   */
+  panelTabs?: PanelTab[]
+  onPickPanelTab?: (id: string) => void
+  onClosePanelTab?: (id: string) => void
+}
+
+/** One of those tabs, as the strip needs it - see [HeaderProps.panelTabs]. */
+export interface PanelTab {
+  id: string
+  title: string
+  at: number
+  active: boolean
+  /**
+   * The stripe over it. A colour out of the same cool arc the groups draw from, but fixed rather than
+   * hashed: the statistics is always the statistics, and it should always look it.
+   */
+  color: string
+  closeLabel: string
+  /**
+   * What its dot says, for the tabs that have something to say - a run of a scenario, and the hub over
+   * the runs of this project (see runDot in scenarios/runs.ts). Absent is the grey of the statistics,
+   * which is a screen rather than work and is never busy.
+   */
+  state?: SessionState
+  /** The word under the pointer for that dot. Empty leaves the dot without a hint at all. */
+  hint?: string
+}
+
+/** A stable empty default, so a header without such tabs does not rebuild its list on every draw. */
+const EMPTY_PANEL_TABS: PanelTab[] = []
+
+/** Past this offset a press stops being a click and becomes a drag. */
+const DRAG_THRESHOLD_PX = 4
+
+/**
+ * What a press moves: a whole group past its neighbours, or one fork inside its own group.
+ *
+ * Which of the two it is is decided by what is under the hand (see sessionTab): the head of a group
+ * carries the group with all its forks, a fork carries only itself. A group of two has nothing to
+ * rearrange inside it, so there a fork carries the group as well - the strip would otherwise hold a
+ * gesture that visibly does nothing.
+ */
+type DragKind = 'group' | 'tab'
+
+interface Drag {
+  kind: DragKind
+  /** The group's id, or the tab's - whichever this gesture moves. */
+  id: string
+  /** The group the gesture happens in. For a group drag it is the same as [id]. */
+  groupId: string
+}
+
+/** Where a unit of the row stands and how wide it is - see unitRow. */
+interface Unit {
+  id: string
+  left: number
+  right: number
+  top: number
+  bottom: number
+}
+
+/**
+ * Which unit of the row a tab belongs to, for the gesture at hand - and nothing at all when it stands
+ * outside it: a fork being dragged inside its group has no business with anybody else's tabs, and they
+ * have none stepping aside for it.
+ */
+const unitIdOf = (node: HTMLElement, drag: Drag): string | undefined => {
+  const groupId = node.dataset.group
+  if (!groupId) return undefined
+  if (drag.kind === 'group') return groupId
+  return groupId === drag.groupId ? node.dataset.tab : undefined
+}
+
+/**
+ * The margin a change of place is checked against: a hand on the boundary trembles, and without it the
+ * neighbours would tremble along with it (see startDrag).
+ */
+const SWAP_GAP_PX = 8
+
+/** How long a dropped tab's landing lasts. The same as the transition in shell.module.css. */
+const LANDING_MS = 160
+
+const DOT_CLASS: Record<SessionState, string> = {
+  idle: '',
+  running: s.dotRunning ?? '',
+  done: s.dotDone ?? '',
+  attention: s.dotAttention ?? '',
+  crashed: s.dotCrashed ?? '',
+}
+
+/** What the dot on a tab says when the pointer rests on it - see SessionState. */
+const dotTitle = (t: Dict): Record<SessionState, string> => ({
+  idle: t.header.idle,
+  running: t.header.running,
+  done: t.header.done,
+  attention: t.header.attention,
+  crashed: t.header.crashed,
+})
+
+/**
+ * Three lines as a drawing rather than the "☰" character: the typographic version has a seat of its own
+ * in the font and sits below the middle of its line - next to the branch (see BranchChip), whose centre
+ * is honest, the difference read to the eye as an unpainted row. Drawn, the lines stand strictly in the
+ * centre of the viewBox, and with it of the button.
+ */
+const HamburgerIcon = () => (
+  <svg className={s.menuIcon} viewBox="0 0 16 16" aria-hidden="true">
+    <path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+  </svg>
+)
+
+export const Header = ({
+  sessions,
+  activeSession,
+  onPickSession,
+  onCloseSession,
+  onNewSession,
+  onReorderGroups,
+  onReorderTabs,
+  onOpenMenu,
+  layout,
+  gitBranch,
+  watchers = 0,
+  pullRequest,
+  onOpenPullRequest,
+  panelTabs = EMPTY_PANEL_TABS,
+  onPickPanelTab,
+  onClosePanelTab,
+}: HeaderProps) => {
+  const t = useT()
+  const compact = layout === 'compact' || isSideComposerLayout(layout)
+  const header = useRef<HTMLElement>(null)
+  const tabs = useRef<HTMLDivElement>(null)
+
+  /** The tab has just been dragged - the next click on it is the gesture's tail rather than a choice. */
+  const dragged = useRef(false)
+  /**
+   * What is being dragged right now - it travels with the cursor and is lifted.
+   *
+   * Two kinds of gesture live in one piece of arithmetic: 'group' moves a conversation with all its forks
+   * past its neighbours, 'tab' rearranges one group's forks between themselves. The difference is only in
+   * what counts as a unit of the row - everything below works over units and asks no further questions.
+   */
+  const [dragging, setDragging] = useState<Drag | null>(null)
+  /** How far to shift it: as far as the hand has travelled from where it pressed. */
+  const [offset, setOffset] = useState(0)
+  /**
+   * How far to move each of the other groups to make room.
+   *
+   * We move them by an offset rather than by rearranging the row: while the gesture lasts, the order in
+   * the state does not change at all. Rearranging on the fly created a feedback loop - a neighbour moved
+   * away, the geometry changed, the condition fired again, and the tabs started darting about. Here the
+   * whole calculation runs off one snapshot taken at the gesture's start, and there is nothing to dart
+   * about.
+   */
+  const [shifts, setShifts] = useState<Record<string, number>>({})
+
+  /**
+   * Where the groups stood on screen at the moment the tab was released.
+   *
+   * Without this snapshot the landing jerked: rearranging the row and dropping the offsets happen in one
+   * frame, and the browser saw only the final layout. The tab teleported from under the hand into its
+   * slot, while the neighbours on top of that played out an offset that had already been cancelled - a
+   * jump by a tab's width and a slow return. With the snapshot that same frame starts from the previous
+   * picture and travels to the new one.
+   */
+  const landing = useRef<{ drag: Drag; places: Map<string, { x: number; y: number }> } | null>(null)
+
+  /**
+   * A snapshot of the row in the units this gesture moves: where each stands and how wide it is.
+   *
+   * It is taken once, at the gesture's start, and does not change after that - which is exactly why the
+   * pushing apart comes out calm: every decision is made from a motionless picture rather than from the
+   * one we are moving ourselves.
+   *
+   * A group drag sees the whole strip, group by group; a fork dragged inside its group sees that group's
+   * tabs and nothing else - the rest of the strip is not part of the gesture and does not budge.
+   */
+  const unitRow = (drag: Drag): Unit[] => {
+    const root = tabs.current
+    if (!root) return []
+
+    const units: Unit[] = []
+
+    for (const node of Array.from(root.querySelectorAll<HTMLElement>('[data-group]'))) {
+      const id = unitIdOf(node, drag)
+      if (!id) continue
+
+      const left = node.offsetLeft
+      const right = left + node.offsetWidth
+      const top = node.offsetTop
+      const bottom = top + node.offsetHeight
+      const last = units.at(-1)
+
+      // Only a group spans several tabs; inside one group every tab is a unit of its own, so this arm
+      // never fires there.
+      if (last?.id === id) {
+        last.left = Math.min(last.left, left)
+        last.right = Math.max(last.right, right)
+        last.top = Math.min(last.top, top)
+        last.bottom = Math.max(last.bottom, bottom)
+        continue
+      }
+
+      units.push({ id, left, right, top, bottom })
+    }
+
+    return units
+  }
+
+  /** The tabs by unit: a group holds as many as the conversation has forks, a single tab holds one. */
+  const unitNodes = (kind: DragKind): Map<string, HTMLElement[]> => {
+    const root = tabs.current
+    const nodes = new Map<string, HTMLElement[]>()
+    if (!root) return nodes
+
+    for (const node of Array.from(root.querySelectorAll<HTMLElement>('[data-group]'))) {
+      const id = kind === 'tab' ? node.dataset.tab : node.dataset.group
+      if (!id) continue
+
+      const list = nodes.get(id)
+      if (list) list.push(node)
+      else nodes.set(id, [node])
+    }
+
+    return nodes
+  }
+
+  /**
+   * How far a tab is currently offset from its place in the layout.
+   *
+   * We ask the browser rather than compute it ourselves: if a neighbour is still travelling at that
+   * moment, this gives its real position halfway there rather than where it is only about to arrive.
+   * Otherwise a drop in the middle of someone else's move would snap that neighbour to its end point.
+   */
+  const liveShift = (node: HTMLElement): { x: number; y: number } => {
+    const transform = getComputedStyle(node).transform
+    if (!transform || transform === 'none') return { x: 0, y: 0 }
+
+    try {
+      const matrix = new DOMMatrixReadOnly(transform)
+      return { x: matrix.m41, y: matrix.m42 }
+    } catch {
+      return { x: 0, y: 0 }
+    }
+  }
+
+  /**
+   * Where a tab is asking to go at such an offset: its place number in the row.
+   *
+   * A neighbour gives way when the tab has covered more than half of it - that is, when its edge has
+   * passed the neighbour's middle. The answer depends only on the hand's position and the motionless
+   * snapshot of the row: one and the same hand gives one and the same answer, however many times it is
+   * asked.
+   */
+  const placeFor = (row: Unit[], from: number, shift: number): number => {
+    const own = row[from]
+    if (!own) return from
+
+    const left = own.left + shift
+    const right = own.right + shift
+    let place = from
+
+    for (const [index, group] of row.entries()) {
+      if (index === from) continue
+      // Neighbours from other rows do not step aside: a horizontal offset is meaningless for them, and
+      // the row wraps when there is not enough space.
+      if (group.bottom <= own.top || group.top >= own.bottom) continue
+
+      const middle = (group.left + group.right) / 2
+      if (index < from && left < middle) place = Math.min(place, index)
+      if (index > from && right > middle) place = Math.max(place, index)
+    }
+
+    return place
+  }
+
+  /**
+   * The start of a drag.
+   *
+   * Ordinary mouse events and listeners on the window itself rather than pointer events with capture:
+   * the IDE's embedded browser renders offscreen and synthesizes input itself - pointer capture there
+   * never reaches the tab, and a drag simply did not begin. Listeners on the window work in both cases
+   * and go on catching the mouse when it has left the row of tabs.
+   *
+   * preventDefault straight away: otherwise the browser reads a held button as a text selection and
+   * highlights the tab's caption instead of moving it.
+   */
+  const startDrag = (event: ReactMouseEvent<HTMLDivElement>, drag: Drag) => {
+    // A new press is a new story: the previous drag's tail has nothing to do with it. We clear it here
+    // rather than in the tab's click handler: that one does not always run - releasing a tab outside the
+    // row sends the click to a common ancestor, and a raised flag would swallow the next genuine click on
+    // a tab.
+    dragged.current = false
+
+    // We drag with the left button only and by the tab itself only: the close cross stays a button
+    // rather than a drag handle.
+    if (event.button !== 0) return
+    if ((event.target as HTMLElement).closest('button')) return
+
+    event.preventDefault()
+
+    const row = unitRow(drag)
+    const from = row.findIndex((unit) => unit.id === drag.id)
+    if (from < 0) return
+
+    /**
+     * The head of a group stays the head: a fork may be dragged among the other forks and no further (see
+     * moveWithinGroup). The floor is set here as well as there, or the neighbours would step aside for a
+     * place the drop is going to refuse.
+     */
+    const floor = drag.kind === 'tab' ? 1 : 0
+
+    const own = row[from]!
+    const width = own.right - own.left
+    const startX = event.clientX
+    let started = false
+    let place = from
+
+    const onMove = (move: MouseEvent) => {
+      if (!started) {
+        // Below the threshold this is still an ordinary click on a tab rather than a drag.
+        if (Math.abs(move.clientX - startX) < DRAG_THRESHOLD_PX) return
+        started = true
+        setDragging(drag)
+      }
+
+      const shift = move.clientX - startX
+      setOffset(shift)
+
+      /**
+       * A new place is accepted only if it holds at a slightly smaller offset too: right on the
+       * boundary a hand trembles by a couple of pixels, and without this check the neighbours started
+       * trembling back and forth along with it.
+       */
+      const wanted = Math.max(floor, placeFor(row, from, shift))
+      if (wanted !== place) {
+        const backOff = wanted > place ? -SWAP_GAP_PX : SWAP_GAP_PX
+        if (Math.max(floor, placeFor(row, from, shift + backOff)) === wanted) place = wanted
+      }
+
+      /**
+       * The neighbours between the old place and the new one move aside by a tab's width - exactly
+       * enough to make room for it. They move by an offset while the row itself stays as it is: the
+       * order changes once, when the tab is released.
+       */
+      const next: Record<string, number> = {}
+      for (const [index, unit] of row.entries()) {
+        if (index === from) continue
+        if (index > from && index <= place) next[unit.id] = -width
+        if (index < from && index >= place) next[unit.id] = width
+      }
+      setShifts(next)
+    }
+
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+
+      if (started) {
+        // The picture on screen before the drop - the landing starts from it. The layout did not change
+        // during the gesture, so it is enough to add to the snapshot's places the offset each group is
+        // currently drawn with.
+        const nodes = unitNodes(drag.kind)
+        const rendered = new Map<string, { x: number; y: number }>()
+        for (const unit of row) {
+          const node = nodes.get(unit.id)?.[0]
+          const live = node ? liveShift(node) : { x: 0, y: 0 }
+          rendered.set(unit.id, { x: unit.left + live.x, y: unit.top + live.y })
+        }
+        landing.current = { drag, places: rendered }
+
+        // The destination in the original row: having travelled to the right, we stand before the unit
+        // that came after the last one to step aside.
+        const before = place > from ? (row[place + 1]?.id ?? null) : row[place]?.id ?? null
+        if (place !== from) {
+          if (drag.kind === 'tab') onReorderTabs(drag.id, before)
+          else onReorderGroups(drag.id, before)
+        }
+
+        // A click after a drag does not switch the tab: the hand was moving it rather than choosing it.
+        // The click event arrives right after mouseup - we suppress it there.
+        dragged.current = true
+      }
+
+      setDragging(null)
+      setOffset(0)
+      setShifts({})
+    }
+
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
+  /**
+   * The landing after a drop.
+   *
+   * The frame in which the order changes starts from the previous picture: every group gets a short
+   * journey from where it stood under the hand to its new place. The neighbours meanwhile stand rooted
+   * (they have nowhere to travel - they are already where they belong), while the dropped tab calmly
+   * travels from under the hand into the freed slot.
+   *
+   * An ordinary effect will not do here: it would fire after the browser had already drawn the frame in
+   * the new places - that is, after the jerk itself.
+   */
+  useLayoutEffect(() => {
+    const before = landing.current
+    if (!before) return
+    landing.current = null
+
+    const nodes = unitNodes(before.drag.kind)
+
+    for (const unit of unitRow(before.drag)) {
+      const was = before.places.get(unit.id)
+      if (!was) continue
+
+      const dx = was.x - unit.left
+      const dy = was.y - unit.top
+
+      for (const node of nodes.get(unit.id) ?? []) {
+        // The journey goes as an animation rather than a transition: for the neighbours the offset comes
+        // out zero, and without one they would play out a cancelled transition - a jump by a tab's width
+        // and a slow return. An animation stands above a transition in the cascade and holds them in
+        // place while that one plays out for nothing.
+        node.animate?.([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }], {
+          duration: LANDING_MS,
+          easing: 'ease',
+        })
+      }
+    }
+  })
+
+  /**
+   * When there is not enough room the tabs wrap onto a second line - the header grows. The overlays
+   * (history, MCP, plugins, the menu) are positioned from its real height through a variable rather than
+   * a number: otherwise, with a second line, they would lie over the tabs.
+   */
+  useEffect(() => {
+    const element = header.current
+    if (!element) return
+
+    const updateHeight = () => {
+      document.documentElement.style.setProperty('--header-height', `${element.offsetHeight}px`)
+    }
+
+    updateHeight()
+    const observer = new ResizeObserver(updateHeight)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
+
+  /**
+   * How far a tab stands from its place in the layout while a gesture lasts: the group under the hand
+   * travels with it, the rest step aside to make room (see shifts). One and the same for a conversation
+   * and for the tabs that hold no conversation - as far as the strip is concerned they are one kind of
+   * thing.
+   */
+  const dragStyle = (groupId: string, tabId?: string) => {
+    // The gesture in progress decides what the row is made of: while a fork travels inside its group, the
+    // units are that group's tabs, and every other tab in the strip stands perfectly still.
+    const key = dragging?.kind === 'tab' ? tabId : groupId
+    if (!key) return {}
+
+    if (dragging?.id === key) return { transform: `translateX(${offset}px)` }
+    const shift = shifts[key]
+    return shift ? { transform: `translateX(${shift}px)` } : {}
+  }
+
+  /**
+   * The strip block by block: a conversation with its forks, and the panel's own tabs standing wherever
+   * they were left. Drawn from one list rather than from "the sessions, and then the others after them" -
+   * otherwise those tabs could be dragged anywhere and would still snap back to the end.
+   */
+  const groups: { groupId: string; tabs: Session[] }[] = []
+  for (const session of sessions) {
+    const last = groups.at(-1)
+    if (last?.groupId === session.groupId) last.tabs.push(session)
+    else groups.push({ groupId: session.groupId, tabs: [session] })
+  }
+  /** Every such tab clamped to the strip it is actually in - a stale place must not point past its end. */
+  const panels = panelTabs.map((tab) => ({ ...tab, at: Math.min(Math.max(tab.at, 0), groups.length) }))
+
+  const sessionTab = (session: Session, startsGroup: boolean, groupSize: number) => {
+    const color = colorForGroup(session.groupId)
+    /**
+     * A fork carries itself, everything else carries the group. Two tabs in a group are left to the group
+     * gesture on purpose: with a single fork under an unmovable head there is nothing to rearrange, and a
+     * press that visibly does nothing reads as a broken strip.
+     */
+    const drag: Drag = startsGroup || groupSize < 3
+      ? { kind: 'group', id: session.groupId, groupId: session.groupId }
+      : { kind: 'tab', id: session.id, groupId: session.groupId }
+
+    return (
+      <div
+        key={session.id}
+        data-group={session.groupId}
+        data-tab={session.id}
+        role="tab"
+        tabIndex={0}
+        aria-selected={session.id === activeSession}
+        className={[
+          s.tab,
+          session.id === activeSession ? s.tabActive : '',
+          startsGroup ? s.tabGroupStart : '',
+          // Everything the gesture carries is lifted, not only the tab under the hand: a group travels
+          // whole, so all its tabs rise with it, while a fork moved inside its group rises alone.
+          (dragging?.kind === 'tab' ? dragging.id === session.id : dragging?.id === session.groupId)
+            ? s.tabDragging
+            : '',
+        ]
+          .filter(Boolean)
+          .join(' ')}
+        style={{
+          paddingLeft: 11 + session.depth * 9,
+          // The whole group travels at once, unless the hand took a fork by itself - see [drag] above.
+          ...dragStyle(session.groupId, session.id),
+        }}
+        onMouseDown={(event) => startDrag(event, drag)}
+        onClick={() => {
+          // The drag's tail rather than a tab being chosen - see startDrag, where the flag is also
+          // cleared by the next press.
+          if (dragged.current) return
+          onPickSession(session.id)
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return
+          // Space scrolls the strip otherwise, and the tab under the finger never opens.
+          event.preventDefault()
+          onPickSession(session.id)
+        }}
+      >
+        <span className={s.tabGroupBar} style={{ background: color }} />
+        <span className={`${s.dot} ${DOT_CLASS[session.state]}`} data-tooltip={dotTitle(t)[session.state]} />
+        {session.depth > 0 ? (
+          <span className={s.tabFork} style={{ color }}>
+            ⑂
+          </span>
+        ) : null}
+        <span className={s.tabTitle}>{session.title}</span>
+        <button
+          type="button"
+          className={s.tabClose}
+          aria-label={`Close ${session.title}`}
+          onClick={(event) => {
+            event.stopPropagation()
+            onCloseSession(session.id)
+          }}
+        >
+          ×
+        </button>
+      </div>
+    )
+  }
+
+  // A data-group of its own and the same press handler as the rest: the strip's drag arithmetic walks
+  // [data-group], and each of these is a group of one in it (see tabs.ts).
+  const panelTab = (tab: PanelTab) => (
+    <div
+      key={tab.id}
+      data-group={tab.id}
+      role="tab"
+      tabIndex={0}
+      aria-selected={tab.active}
+      className={[
+        s.tab,
+        s.tabStatistics,
+        s.tabGroupStart,
+        tab.active ? s.tabActive : '',
+        dragging?.id === tab.id ? s.tabDragging : '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
+      style={dragStyle(tab.id)}
+      onMouseDown={(event) => startDrag(event, { kind: 'group', id: tab.id, groupId: tab.id })}
+      onClick={() => {
+        if (dragged.current) return
+        onPickPanelTab?.(tab.id)
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return
+        event.preventDefault()
+        onPickPanelTab?.(tab.id)
+      }}
+    >
+      <span className={s.tabGroupBar} style={{ background: tab.color }} />
+      {/* A run of a scenario is work, and its dot answers for it exactly as a conversation's does: the
+          word beside it is the name of the scenario, so the state is written nowhere else in the strip.
+          The statistics passes neither, and its dot stays grey and silent - a hint there would answer
+          with the word standing next to it. */}
+      <span
+        className={`${s.dot} ${DOT_CLASS[tab.state ?? 'idle']}`}
+        data-tooltip={tab.hint || undefined}
+      />
+      <span className={s.tabTitle}>{tab.title}</span>
+      <button
+        type="button"
+        className={s.tabClose}
+        aria-label={tab.closeLabel}
+        onClick={(event) => {
+          event.stopPropagation()
+          onClosePanelTab?.(tab.id)
+        }}
+      >
+        ×
+      </button>
+    </div>
+  )
+
+  return (
+    <header className={`${s.header} ${compact ? s.headerCompact : ''}`} ref={header}>
+      {/* A strip of tabs, and said to be one: without it a screen reader announces a row of nameless
+          boxes, and nothing in here could be reached by keyboard at all - neither a conversation nor the
+          panel's own tabs beside them. */}
+      <div className={s.tabs} ref={tabs} role="tablist" aria-label={t.header.conversations}>
+        {groups.map((group, index) => (
+          <Fragment key={group.groupId}>
+            {panels.filter((tab) => tab.at === index).map(panelTab)}
+            {/* A group is set off from its neighbour by a gap: colour is not enough when the tabs are
+                stuck together. The first tab of the strip gets no gap - the styles see to that. */}
+            {group.tabs.map((session, place) => sessionTab(session, place === 0, group.tabs.length))}
+          </Fragment>
+        ))}
+        {panels.filter((tab) => tab.at >= groups.length).map(panelTab)}
+
+        <button type="button" className={s.tabAdd} data-tooltip={t.header.newSession} onClick={onNewSession}>
+          +
+        </button>
+      </div>
+
+      <div className={s.spacer} />
+
+      <div className={s.headerTools}>
+        {watchers > 0 && (
+          <span
+            className={s.watchers}
+            data-tooltip={t.header.watchers(watchers)}
+          >
+            ◉ {watchers}
+          </span>
+        )}
+
+        <BranchChip gitBranch={gitBranch} pullRequest={pullRequest} onOpenPullRequest={onOpenPullRequest} />
+
+        <button
+          type="button"
+          className={s.historyButton}
+          aria-label={t.header.menu}
+          data-tooltip={t.header.menu}
+          onClick={onOpenMenu}
+        >
+          <HamburgerIcon />
+        </button>
+      </div>
+    </header>
+  )
+}
