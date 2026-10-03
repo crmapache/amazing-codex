@@ -1561,14 +1561,25 @@ const applyAgentEvent = (
       // means the CLI will start the next turn itself the moment it reports back (see
       // PanelState.stintStartedAt).
       const stintOver = !workGoesOn(settled)
+      // The whole stint's time, and only where that is the truth. A turn ending mid-work speaks for itself
+      // alone - the figure from the CLI - and in a replay there is no stint at all: a past conversation's
+      // events carry the moment they are replayed, not the moment they happened.
+      const ownCount =
+        stintOver && !replay && state.stintStartedAt !== undefined ? stintElapsed(state, now) : undefined
+      // A count shorter than the agent's own figure for this one turn, with no wait for the person in it,
+      // began after the turn did: the tab or the phone came in while the work was already under way. The
+      // agent saw the whole turn, so its figure is the truer one then.
+      const sawOnlyTheEnd =
+        ownCount !== undefined &&
+        state.pausedMs === 0 &&
+        state.waitStartedAt === undefined &&
+        typeof event.duration_ms === 'number' &&
+        ownCount < event.duration_ms
       const outcome = resultOutcome(
         event,
         cancelled,
         state.stoppedForAccount === true,
-        // The whole stint's time, and only where that is the truth. A turn ending mid-work speaks for
-        // itself alone - the figure from the CLI - and in a replay there is no stint at all: a past
-        // conversation's events carry the moment they are replayed, not the moment they happened.
-        stintOver && !replay && state.stintStartedAt !== undefined ? stintElapsed(state, now) : undefined,
+        sawOnlyTheEnd ? event.duration_ms : ownCount,
       )
       const stats = resultStats(outcome)
 

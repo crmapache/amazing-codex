@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { AccountInfo, UsageWindow } from '../../protocol'
 import type { UsageFacts } from '../../feed/usage'
-import { FIVE_HOUR_MS, WEEK_MS, paceColor } from '../../feed/usage'
+import { FIVE_HOUR_MS, MONTH_MS, WEEK_MS, paceColor, spendingWindow } from '../../feed/usage'
 import { Ring } from '../../components/StatusBar'
 import { Back } from './Back'
 import m from '../mobile.module.css'
@@ -161,13 +161,21 @@ export const Accounts = ({
                   {/* Real figures rather than a tick: a stored credential proves only that a credential
                       is stored, while a percentage had to be fetched with it (see UsageProbes). */}
                   <div className={m.accountMeters}>
-                    <Meter name={t.accounts.fiveHour} window={facts.session} span={FIVE_HOUR_MS} />
-                    <Meter name={t.accounts.weekly} window={facts.week} span={WEEK_MS} />
-                    {/* A model's own week (Fable), where the plan keeps one - the same rule as the
-                        panel's accounts screen. */}
-                    {(facts.models ?? []).map((model) => (
-                      <Meter key={model.label} name={model.label} window={model} span={WEEK_MS} />
-                    ))}
+                    {/* A business seat has neither window, only the workspace's spending cap - the same
+                        rule as the panel's accounts screen, or two dashes would stand there for ever. */}
+                    {!facts.session && !facts.week && spendingWindow(facts.extra) ? (
+                      <Meter name={t.accounts.spending} window={spendingWindow(facts.extra) ?? undefined} span={MONTH_MS} />
+                    ) : (
+                      <>
+                        <Meter name={t.accounts.fiveHour} window={facts.session} span={FIVE_HOUR_MS} />
+                        <Meter name={t.accounts.weekly} window={facts.week} span={WEEK_MS} />
+                        {/* A limit of its own beside the plan's, where the plan keeps one - the same rule
+                            as the panel's accounts screen. */}
+                        {(facts.models ?? []).map((model) => (
+                          <Meter key={model.label} name={model.label} window={model} span={WEEK_MS} />
+                        ))}
+                      </>
+                    )}
                   </div>
 
                   {account.health === 'absent' && <p className={m.noteBad}>{t.accounts.absent}</p>}

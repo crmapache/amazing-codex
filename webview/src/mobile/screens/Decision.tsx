@@ -5,6 +5,7 @@ import type { PanelState } from '../../feed/panelState'
 import { awaiting } from '../../feed/streamStatus'
 import type { AskItem, AskQuestion, FeedItem, PermItem, PlanItem, TextItem } from '../../feed/types'
 import { useT } from '../../i18n'
+import { Markdown } from '../../components/items/Markdown'
 import { Back } from './Back'
 import m from '../mobile.module.css'
 
@@ -133,7 +134,16 @@ export const Decision = ({
           </>
         )}
 
-        {plan && <h1 className={m.decisionVerb}>{t.mobile.decision.planWaiting}</h1>}
+        {/* The plan itself, as the card in the feed draws it: approving is approving these steps, and a
+            line of what the agent said before it - often "I'll look around first" - is no ground for that. */}
+        {plan && (
+          <>
+            <h1 className={m.decisionVerb}>{t.mobile.decision.planWaiting}</h1>
+            <div className={m.decisionPlan}>
+              <Markdown paragraphs={plan.paragraphs} onOpenLink={(url) => window.open(url, '_blank', 'noopener,noreferrer')} />
+            </div>
+          </>
+        )}
 
         {/* The question in full rather than its heading alone: what an option means is in the line under
             it, and choosing between two labels without them is guessing. When a call asks several, the
@@ -159,7 +169,7 @@ export const Decision = ({
 
         {/* One line of what the agent was doing. This is what makes reading the conversation optional
             rather than necessary, which is the difference between two taps and two minutes. */}
-        {doing && <p className={m.decisionDoing}>{doing}</p>}
+        {doing && !plan && <p className={m.decisionDoing}>{doing}</p>}
 
         <button type="button" className={m.decisionLink} onClick={onOpenThread}>
           {t.mobile.decision.openConversation}

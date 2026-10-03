@@ -4143,4 +4143,13 @@ describe('the time under an answer counts the request rather than its last turn'
 
     expect(durations(state)).toEqual(['1m 00s'])
   })
+
+  // The same tab coming in late: the turn had been going for ten minutes before this tab saw it, and its
+  // own count would caption ten minutes of work "1m 00s".
+  it('takes the agent\'s figure for a turn it saw only the end of', () => {
+    let state = reducePanel(initialPanelState, { kind: 'status', status: 'running' }, minute(4))
+    state = reducePanel(state, { kind: 'agent', event: resultEvent(600_000) }, minute(5))
+
+    expect(durations(state)).toEqual(['10m 00s'])
+  })
 })
