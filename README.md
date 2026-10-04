@@ -1,5 +1,7 @@
 # Amazing Codex GUI
 
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/K7R4280V03)
+
 An OpenAI Codex panel for JetBrains IDEs: a real chat with an input field and parsed
 output, instead of a terminal session. The button lives on the side bar and can be
 moved to any edge of the window.
@@ -202,6 +204,13 @@ read. See `PRIVACY.md`.
 The speech bubble beside the heart opens a form: a bug, an idea, or nothing in particular,
 with an optional address, files, and a technical debug report you can read in full before
 sending. See `PRIVACY.md` for exactly what it contains.
+
+## Saying thanks
+
+The plugin is free and built by one person. If it saves you time, a tip on Ko-fi lets me spend more
+hours on it. Bug reports and ideas help just as much.
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/K7R4280V03)
 
 ## License
 
