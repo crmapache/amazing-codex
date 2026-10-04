@@ -152,13 +152,22 @@
 /* The top gap used to come from the first group's caption. With the captions gone the list would
    otherwise start flush against the header. */
 .levelRoot {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   padding-top: 13px;
   padding-bottom: 14px;
 }
 
+.rootScroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
 .levelRootHeld {
   transform: translateX(-22%);
-  overflow-y: hidden;
 }
 
 .levelRootShown {
@@ -296,9 +305,9 @@
   color: var(--acc-accent);
 }
 
-/* The bars share the chip's neutral: the effort is a level, and a colour of its own would read as one of
-   the levels being flagged. */
-.rowIconEffort {
+/* Effort and context are choices without a colour-coded state. */
+.rowIconEffort,
+.rowIconContext {
   background: var(--acc-neutral-12);
   color: var(--acc-fg-dim);
 }
@@ -548,6 +557,7 @@
 }
 
 .footer {
+  flex: none;
   margin: 16px 12px 0;
   padding-top: 12px;
   border-top: 1px solid var(--acc-line);

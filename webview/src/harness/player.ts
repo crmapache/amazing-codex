@@ -48,7 +48,15 @@ let modelPicks = 0
  * in the harness, so the answer is the pin over the last pick: what the IDE says on a machine whose
  * account remembers nothing of its own.
  */
-const newTab = { pinnedModel: '', pinnedEffort: '', lastModel: '', lastEffort: '', mode: '' }
+const newTab = {
+  pinnedModel: '',
+  pinnedEffort: '',
+  pinnedContextMode: '' as '' | 'standard' | 'long',
+  lastModel: '',
+  lastEffort: '',
+  lastContextMode: 'standard' as 'standard' | 'long',
+  mode: '',
+}
 /** The hand-added list as it last came in - what a removal is measured against (see setCustomModels). */
 let customList: string[] = []
 
@@ -62,6 +70,9 @@ const announceNewTabDefaults = (): void => {
     startingEffort: newTab.pinnedEffort || newTab.lastEffort,
     unpinnedModel: newTab.lastModel,
     unpinnedEffort: newTab.lastEffort,
+    contextMode: newTab.lastContextMode,
+    newTabContextMode: newTab.pinnedContextMode,
+    startingContextMode: newTab.pinnedContextMode || newTab.lastContextMode,
   })
 }
 /**
@@ -1257,7 +1268,15 @@ const listenToPanel = () => {
       announceNewTabDefaults()
     }
 
-    // The three halves of the "New chats" screen, answered as the IDE answers them.
+    if (message?.type === 'setContextMode') {
+      setTimeout(() => {
+        window.__accReceive?.({ type: 'contextMode', sessionId: message.sessionId, mode: message.mode })
+        newTab.lastContextMode = message.mode
+        announceNewTabDefaults()
+      }, 0)
+    }
+
+    // The defaults of the "New chats" screen, answered as the IDE answers them.
     if (message?.type === 'setDefaultModel') {
       newTab.pinnedModel = message.model
       announceNewTabDefaults()
@@ -1265,6 +1284,11 @@ const listenToPanel = () => {
 
     if (message?.type === 'setDefaultEffort') {
       newTab.pinnedEffort = message.effort
+      announceNewTabDefaults()
+    }
+
+    if (message?.type === 'setDefaultContextMode') {
+      newTab.pinnedContextMode = message.mode
       announceNewTabDefaults()
     }
 

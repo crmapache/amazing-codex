@@ -34,6 +34,7 @@ class UsageFeaturesTest {
         assertEquals(listOf("improve_prompt"), ofMessage("improvePrompt", "draft" to "whatever was typed"))
         assertEquals(listOf("setting:theme"), ofMessage("setTheme", "theme" to "dark"))
         assertEquals(listOf("setting:new_chat"), ofMessage("setDefaultModel", "model" to "gpt-5.6-sol"))
+        assertEquals(listOf("setting:new_chat"), ofMessage("setDefaultContextMode", "mode" to "long"))
         assertEquals(listOf("plugins_manage"), ofMessage("marketplaceAdd"))
         // Codex's own settings, written from the panel's screen of them.
         assertEquals(listOf("setting:codex_config"), ofMessage("setCodexConfig", "key" to "model_reasoning_summary", "value" to "auto"))
@@ -86,7 +87,7 @@ class UsageFeaturesTest {
             "accountAdd", "accountUse", "feedbackSend", "setTheme", "setTextSize", "setLanguage",
             "setComposerLayout", "setSendKey", "setPasteCollapse", "setCalmColors", "setHiddenIndicators",
             "soundSettings", "setShareEditor", "setRestoreTabs", "setImproveInstructions", "setCustomModels",
-            "setDefaultModel", "setCodexConfig", "setProjectTrust", "setExecutablePath", "voiceEnabled",
+            "setDefaultModel", "setDefaultContextMode", "setCodexConfig", "setProjectTrust", "setExecutablePath", "voiceEnabled",
             "setRelayUrl",
         )
         for (type in types) {

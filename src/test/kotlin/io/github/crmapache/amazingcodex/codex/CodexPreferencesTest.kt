@@ -9,6 +9,25 @@ import com.intellij.testFramework.fixtures.BasePlatformTestCase
  */
 class CodexPreferencesTest : BasePlatformTestCase() {
 
+    fun testContextPinIsSavedSeparatelyFromTheLastChoiceAndCanBeCleared() {
+        try {
+            CodexPreferences.contextMode = "standard"
+            CodexPreferences.newTabContextMode = " LONG "
+
+            assertEquals("long", CodexPreferences.newTabContextMode)
+            assertEquals("long", CodexPreferences.snapshot().newTabContextMode)
+            assertEquals("standard", CodexPreferences.contextMode)
+
+            CodexPreferences.newTabContextMode = " "
+
+            assertEquals("", CodexPreferences.newTabContextMode)
+            assertEquals("", CodexPreferences.snapshot().newTabContextMode)
+        } finally {
+            CodexPreferences.newTabContextMode = ""
+            CodexPreferences.contextMode = "standard"
+        }
+    }
+
     fun testSnapshotKeepsWhatWasWritten() {
         CodexPreferences.mode = "acceptEdits"
         CodexPreferences.composerLayout = "right"

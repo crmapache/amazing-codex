@@ -8,6 +8,8 @@ import {
   contextLimits,
   contextOptions,
   contextShortLabel,
+  LAST_USED,
+  newTabContextOptions,
   effortFits,
   effortOptions,
   levelsOf,
@@ -489,5 +491,26 @@ describe('context windows', () => {
   it('disables long context when the model has no larger window', () => {
     const options = contextOptions(en, contextLimits(models, 'gpt-5.5'))
     expect(options.find((option) => option.id === 'long')?.disabled).toBe(true)
+  })
+
+  it('offers context pins and names the last choice with the new model\'s window size', () => {
+    const limits = contextLimits(models, 'default')
+    const options = newTabContextOptions(en, limits, 'long')
+
+    expect(options[0]).toEqual({
+      id: LAST_USED,
+      label: en.newChat.lastUsed,
+      sub: en.newChat.lastUsedNow('Long (828K)'),
+    })
+    expect(options.slice(1)).toEqual(contextOptions(en, limits))
+  })
+
+  it('keeps unavailable long context disabled in the new-chat defaults', () => {
+    for (const limits of [contextLimits(models, 'gpt-5.5'), null]) {
+      const options = newTabContextOptions(ru, limits, 'standard')
+
+      expect(options[0].disabled).not.toBe(true)
+      expect(options.find((option) => option.id === 'long')?.disabled).toBe(true)
+    }
   })
 })

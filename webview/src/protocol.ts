@@ -789,6 +789,7 @@ type ShellMessageBody =
          */
         newTabModel?: string
         newTabEffort?: string
+        newTabContextMode?: '' | 'standard' | 'long'
         /**
          * What an untouched tab is drawn by - the answer itself, worked out by the IDE and only there: it
          * reads the pins, the account in use and what it remembers, and which models that account can
@@ -798,6 +799,7 @@ type ShellMessageBody =
          */
         startingModel?: string
         startingEffort?: string
+        startingContextMode?: 'standard' | 'long'
         /** Where the input field sits. Unset means a panel opened for the first time, behaving as before (at the bottom). */
         composerLayout?: string
         /**
@@ -924,8 +926,9 @@ type ShellMessageBody =
    * whenever anything the answer reads changes - a pin, a pick, the account chosen, what an account
    * remembers, which models it can run, the hand-added list (see ClaudeSessionHub.announceNewTabDefaults).
    *
-   * `model` and `effort` are the pins and travel empty when nothing is pinned - empty means "whatever
-   * was last chosen". `startingModel`/`startingEffort` are what an untouched tab is drawn by, and
+   * `model`, `effort` and `newTabContextMode` are the pins and travel empty when nothing is pinned.
+   * `contextMode` is the last context choice and `startingContextMode` its resolved default.
+   * `startingModel`/`startingEffort` are what an untouched tab is drawn by, and
    * `unpinnedModel`/`unpinnedEffort` what "as last chosen" comes to - both worked out by the IDE, the
    * same way `init` carries them. `mode` is resolved rather than raw: a mode nobody ever chose is Claude
    * Code's own default for that directory, and the selector has to name what the process will genuinely
@@ -937,6 +940,8 @@ type ShellMessageBody =
       effort: string
       mode: string
       contextMode?: 'standard' | 'long'
+      newTabContextMode?: '' | 'standard' | 'long'
+      startingContextMode?: 'standard' | 'long'
       startingModel: string
       startingEffort: string
       unpinnedModel: string
@@ -2199,7 +2204,7 @@ export type WebviewMessage =
    */
   | { type: 'setDefaultMode'; mode: string }
   /**
-   * And what a new tab starts ON - the other two thirds of the same screen.
+   * The model, effort and context window pinned for new tabs.
    *
    * An empty string is a value here rather than a missing one: it means "whatever was last chosen",
    * which is what the first entry of each list sets and what the panel did before the setting existed.
@@ -2208,6 +2213,7 @@ export type WebviewMessage =
    */
   | { type: 'setDefaultModel'; model: string }
   | { type: 'setDefaultEffort'; effort: string }
+  | { type: 'setDefaultContextMode'; mode: '' | 'standard' | 'long' }
   /** The model and the effort are held by the shell too: new conversations inherit them. */
   | { type: 'setModel'; sessionId: string; model: string }
   | { type: 'setEffort'; sessionId: string; effort: string }

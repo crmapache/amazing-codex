@@ -234,6 +234,8 @@ internal class ProjectCatalog(
                 put("unpinnedModel", StartingChoice.unpinnedModel())
                 put("unpinnedEffort", StartingChoice.unpinnedEffort())
                 put("contextMode", CodexPreferences.contextMode)
+                put("newTabContextMode", CodexPreferences.newTabContextMode)
+                put("startingContextMode", StartingChoice.contextMode())
                 put(
                     "mode",
                     PermissionModes.resolve(
@@ -272,10 +274,12 @@ internal class ProjectCatalog(
                     // (see CodexPreferences.newTabModel).
                     put("newTabModel", preferences.newTabModel)
                     put("newTabEffort", preferences.newTabEffort)
+                    put("newTabContextMode", preferences.newTabContextMode)
                     // And the answer an untouched tab is drawn by, worked out here and only here - the
                     // chip over it promises the process the IDE will launch (see sendNewTabDefaults).
                     put("startingModel", StartingChoice.model())
                     put("startingEffort", StartingChoice.effort())
+                    put("startingContextMode", StartingChoice.contextMode())
                     // With the same value the process will genuinely come up with: the selector in the
                     // panel has to tell the truth from the first second. Never chosen at all - we take
                     // Codex's own default, the way the terminal takes it (see

@@ -16,6 +16,7 @@ import io.github.crmapache.amazingcodex.codex.accounts.CodexAccounts
 class StartingChoiceTest : BasePlatformTestCase() {
 
     private val accounts: CodexAccounts get() = CodexAccounts.getInstance()
+    private var bornContextMode = "unborn"
 
     private fun account(id: String, model: String = "", effort: String = "") = AccountsState.Account().apply {
         this.id = id
@@ -31,7 +32,7 @@ class StartingChoiceTest : BasePlatformTestCase() {
     }
 
     /** The model and the effort a conversation is born with in a tab nobody chose anything for. */
-    private fun born(): Pair<String, String> {
+    private fun born(launch: SessionLaunch = SessionLaunch()): Pair<String, String> {
         var model = "unborn"
         var effort = "unborn"
         val sessions = CodexSessions(
@@ -40,11 +41,13 @@ class StartingChoiceTest : BasePlatformTestCase() {
             onEvent = { _, _ -> },
             onError = { _, _ -> },
             onFinished = {},
-            onBorn = { _, bornEffort, bornModel, _, _ ->
+            onBorn = { _, bornEffort, bornModel, bornContext, _ ->
                 effort = bornEffort
                 model = bornModel
+                bornContextMode = bornContext
             },
         )
+        sessions.rememberLaunch("main", launch)
         // Brings the conversation into being without raising a process: a tab with no process only
         // records an effort (see CodexSession.setEffort). Not remembered, so nothing it does is an input.
         sessions.setEffort("main", "max", remember = false)
@@ -58,6 +61,8 @@ class StartingChoiceTest : BasePlatformTestCase() {
         CodexPreferences.effort = ""
         CodexPreferences.newTabModel = ""
         CodexPreferences.newTabEffort = ""
+        CodexPreferences.contextMode = ModelContexts.STANDARD
+        CodexPreferences.newTabContextMode = ""
         CodexPreferences.customModels = emptyList()
     }
 
@@ -94,6 +99,65 @@ class StartingChoiceTest : BasePlatformTestCase() {
 
         assertEquals("opus", StartingChoice.unpinnedModel())
         assertEquals("high", StartingChoice.unpinnedEffort())
+    }
+
+    fun testUnpinnedContextFollowsTheLastChoiceAndIsLaunchedAsShown() {
+        assertEquals(ModelContexts.STANDARD, StartingChoice.contextMode())
+        CodexPreferences.contextMode = ModelContexts.LONG
+
+        born()
+
+        assertEquals(ModelContexts.LONG, StartingChoice.contextMode())
+        assertEquals(StartingChoice.contextMode(), bornContextMode)
+    }
+
+    fun testPinnedContextBeatsTheLastChoiceAndClearingItFollowsTheLastChoiceAgain() {
+        CodexPreferences.contextMode = ModelContexts.LONG
+        CodexPreferences.newTabContextMode = ModelContexts.STANDARD
+
+        born()
+
+        assertEquals(ModelContexts.STANDARD, StartingChoice.contextMode())
+        assertEquals(StartingChoice.contextMode(), bornContextMode)
+        assertEquals(ModelContexts.LONG, CodexPreferences.contextMode)
+
+        CodexPreferences.newTabContextMode = ""
+        born()
+
+        assertEquals(ModelContexts.LONG, bornContextMode)
+    }
+
+    fun testAContextRequestOrRestoredTabOutranksThePin() {
+        CodexPreferences.newTabContextMode = ModelContexts.LONG
+
+        born(SessionLaunch(contextMode = ModelContexts.STANDARD))
+
+        assertEquals(ModelContexts.STANDARD, bornContextMode)
+        assertEquals(ModelContexts.LONG, StartingChoice.contextMode())
+    }
+
+    fun testChangingAnOpenChatsContextDoesNotOverwriteThePin() {
+        CodexPreferences.newTabContextMode = ModelContexts.LONG
+        val born = mutableMapOf<String, String>()
+        val sessions = CodexSessions(
+            workingDirectory = null,
+            parentDisposable = testRootDisposable,
+            onEvent = { _, _ -> },
+            onError = { _, _ -> },
+            onFinished = {},
+            onBorn = { id, _, _, context, _ -> born[id] = context },
+        )
+
+        sessions.setContextMode("main", ModelContexts.STANDARD)
+        sessions.setEffort("next", "max", remember = false)
+
+        assertEquals(ModelContexts.STANDARD, sessions.contextMode("main"))
+        assertEquals(ModelContexts.STANDARD, CodexPreferences.contextMode)
+        assertEquals(ModelContexts.LONG, CodexPreferences.newTabContextMode)
+        assertEquals(ModelContexts.LONG, born["next"])
+
+        sessions.branchFrom("main", "fork")
+        assertEquals(ModelContexts.STANDARD, sessions.contextMode("fork"))
     }
 
     /** The pin was said in words, and it is stronger than any memory - shown and launched alike. */

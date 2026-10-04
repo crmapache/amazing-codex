@@ -2,6 +2,7 @@ import { useEffect, useRef, type CSSProperties, type ReactNode } from 'react'
 import snakeinHero from '../assets/snakein-hero.webp'
 import { AuthorCard } from './AuthorCard'
 import { Microphone } from './Microphone'
+import { ContextWindowIcon } from './icons/ContextWindowIcon'
 import { useHoverTarget } from '../hooks/useHoverTarget'
 import { useWheelScroll } from '../hooks/useWheelScroll'
 import { useT } from '../i18n'
@@ -30,6 +31,7 @@ export type MenuScreen =
   | 'shareEditor'
   | 'newChatModel'
   | 'newChatEffort'
+  | 'newChatContext'
   | 'newChatMode'
   | 'composerLayout'
   | 'pasteCollapse'
@@ -75,11 +77,11 @@ export interface MenuSummary {
   /** How many of the indicators around the input field are on - "6 on", the sounds' words. */
   indicators: string
   /**
-   * What a new tab starts with - the three values of the screen behind "New chats", each written the way
+   * What a new tab starts with - the values of the screen behind "New chats", each written the way
    * its own row writes it. "As last chosen" is one of the answers here rather than an absence of one:
    * that IS the setting, and a row saying nothing would read as a row that has not loaded.
    */
-  newChat: { model: string; effort: string; mode: string }
+  newChat: { model: string; effort: string; context: string; mode: string }
   /** Whether the tabs come back after a restart - "On" or "Off". */
   restoreTabs: string
   /** Whether a message carries the open file and the selected lines - "On" or "Off". */
@@ -167,8 +169,8 @@ const SETTINGS_SCREENS: MenuScreen[] = [
   'usageStats',
 ]
 
-/** The three lists behind "New chats" - one level deeper than the settings themselves (see parentOf). */
-const NEW_CHAT_SCREENS: MenuScreen[] = ['newChatModel', 'newChatEffort', 'newChatMode']
+/** The lists behind "New chats", one level deeper than the settings themselves (see parentOf). */
+const NEW_CHAT_SCREENS: MenuScreen[] = ['newChatModel', 'newChatEffort', 'newChatContext', 'newChatMode']
 
 /**
  * Where a step back leads from each screen. Three of them stand one level deeper than the rest: the
@@ -185,8 +187,7 @@ export const parentOf = (screen: MenuScreen): MenuScreen => {
   // own - sixty-odd languages will not fit beside a key field, and coming back from either belongs to the
   // voice screen rather than to the settings list two steps up.
   if (screen === 'voiceLanguage' || screen === 'voiceDevice') return 'voice'
-  // The three lists of "new chats" belong to that screen rather than to the settings two steps up, for
-  // the same reason: what one was in the middle of is the list of three, not the list of ten.
+  // The lists of "new chats" return to their own screen, one step above them.
   if (NEW_CHAT_SCREENS.includes(screen)) return 'newChat'
   if (SETTINGS_SCREENS.includes(screen)) return 'settings'
   return 'menu'
@@ -330,6 +331,7 @@ const ICONS: Record<string, ReactNode> = {
       <path d="M3.6 11.4V9.2M8 11.4V6.4M12.4 11.4V3.9" />
     </svg>
   ),
+  context: <ContextWindowIcon />,
   /* A disc half in shadow: the light and the dark side of one thing, which is what a theme is. */
   appearance: (
     <svg viewBox="0 0 16 16" aria-hidden="true" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.4">
@@ -545,114 +547,115 @@ export const SideMenu = ({
 
         <div className={s.stage}>
           <div
-            ref={root}
             className={`${s.level} ${s.levelRoot} ${inDetail ? s.levelRootHeld : s.levelRootShown}`}
             // Nothing under the detail screen is reachable by keyboard either: the eye sees one screen,
             // and Tab has to agree with it.
             inert={inDetail}
           >
-            <div className={s.rows}>
-              <Row
-                icon="history"
-                iconClass={s.rowIconHistory}
-                label={t.menu.rows.history.label}
-                sub={t.menu.rows.history.sub}
-                value={summary.history === null ? '' : String(summary.history)}
-                onClick={() => onPick('history')}
-              />
-              <Row
-                icon="mcp"
-                iconClass={s.rowIconMcp}
-                label={t.menu.rows.mcp.label}
-                sub={t.menu.rows.mcp.sub}
-                value={summary.mcp ? `${summary.mcp.connected}/${summary.mcp.total}` : ''}
-                // The count is worth a dot of its own only when everything is up: "4/5" in the same grey
-                // as the rest says nothing about whether that is fine.
-                valueTone={
-                  summary.mcp && summary.mcp.connected === summary.mcp.total && summary.mcp.total > 0
-                    ? VALUE_OK
-                    : undefined
-                }
-                onClick={() => onPick('mcp')}
-              />
-              <Row
-                icon="plugins"
-                iconClass={s.rowIconPlugins}
-                label={t.menu.rows.plugins.label}
-                sub={t.menu.rows.plugins.sub}
-                value={summary.plugins === null ? '' : String(summary.plugins)}
-                onClick={() => onPick('plugins')}
-              />
-              <Row
-                icon="accounts"
-                // Tinted like remote below rather than fixed like the rest, and for the same reason: the
-                // colour answers "is this working" from across the panel, without being read.
-                iconStyle={TONE_ICON[summary.accounts.tone]}
-                label={t.menu.rows.accounts.label}
-                sub={t.menu.rows.accounts.sub}
-                value={summary.accounts.label}
-                valueTone={TONE_VALUE[summary.accounts.tone]}
-                onClick={() => onPick('accounts')}
-              />
-              {/* A row like the ones above it, not the tinted card it used to be. The card carried a whole
-                  sentence about the state and stood three lines tall for it - in a list whose every other
-                  entry says its piece in one. What the sentence explained is on the screen behind the row;
-                  what is worth knowing without opening it is the state itself, and that fits where the
-                  other rows keep their counts. */}
-              <Row
-                icon="remote"
-                iconStyle={TONE_ICON[summary.remote.tone]}
-                label={t.menu.rows.remote.label}
-                sub={t.menu.rows.remote.sub}
-                value={summary.remote.label}
-                valueTone={TONE_VALUE[summary.remote.tone]}
-                onClick={() => onPick('remote')}
-              />
-              {/* Not a screen of the menu but a tab of the strip: the row opens that tab and the menu
-                  closes behind it (see the note on onOpenStatistics). It stands down here with the
-                  settings rather than up with the history because it is read now and then, not worked in. */}
-              <Row
-                icon="statistics"
-                iconClass={s.rowIconStatistics}
-                label={t.menu.rows.statistics.label}
-                sub={t.menu.rows.statistics.sub}
-                value={summary.statistics}
-                onClick={onOpenStatistics}
-              />
-              {/* The plugin's own two, last before the version in the footer: the settings configure the
-                  plugin and the feedback is about it, so neither belongs among the rows above. */}
-              <Row
-                icon="settings"
-                iconClass={s.rowIconSettings}
-                label={t.menu.rows.settings.label}
-                sub={t.menu.rows.settings.sub}
-                value=""
-                onClick={() => onPick('settings')}
-              />
-              <Row
-                icon="feedback"
-                iconClass={s.rowIconFeedback}
-                label={t.menu.rows.feedback.label}
-                sub={t.menu.rows.feedback.sub}
-                value=""
-                onClick={() => onPick('feedback')}
-              />
-            </div>
+            <div ref={root} className={s.rootScroll}>
+              <div className={s.rows}>
+                <Row
+                  icon="history"
+                  iconClass={s.rowIconHistory}
+                  label={t.menu.rows.history.label}
+                  sub={t.menu.rows.history.sub}
+                  value={summary.history === null ? '' : String(summary.history)}
+                  onClick={() => onPick('history')}
+                />
+                <Row
+                  icon="mcp"
+                  iconClass={s.rowIconMcp}
+                  label={t.menu.rows.mcp.label}
+                  sub={t.menu.rows.mcp.sub}
+                  value={summary.mcp ? `${summary.mcp.connected}/${summary.mcp.total}` : ''}
+                  // The count is worth a dot of its own only when everything is up: "4/5" in the same grey
+                  // as the rest says nothing about whether that is fine.
+                  valueTone={
+                    summary.mcp && summary.mcp.connected === summary.mcp.total && summary.mcp.total > 0
+                      ? VALUE_OK
+                      : undefined
+                  }
+                  onClick={() => onPick('mcp')}
+                />
+                <Row
+                  icon="plugins"
+                  iconClass={s.rowIconPlugins}
+                  label={t.menu.rows.plugins.label}
+                  sub={t.menu.rows.plugins.sub}
+                  value={summary.plugins === null ? '' : String(summary.plugins)}
+                  onClick={() => onPick('plugins')}
+                />
+                <Row
+                  icon="accounts"
+                  // Tinted like remote below rather than fixed like the rest, and for the same reason: the
+                  // colour answers "is this working" from across the panel, without being read.
+                  iconStyle={TONE_ICON[summary.accounts.tone]}
+                  label={t.menu.rows.accounts.label}
+                  sub={t.menu.rows.accounts.sub}
+                  value={summary.accounts.label}
+                  valueTone={TONE_VALUE[summary.accounts.tone]}
+                  onClick={() => onPick('accounts')}
+                />
+                {/* A row like the ones above it, not the tinted card it used to be. The card carried a whole
+                    sentence about the state and stood three lines tall for it - in a list whose every other
+                    entry says its piece in one. What the sentence explained is on the screen behind the row;
+                    what is worth knowing without opening it is the state itself, and that fits where the
+                    other rows keep their counts. */}
+                <Row
+                  icon="remote"
+                  iconStyle={TONE_ICON[summary.remote.tone]}
+                  label={t.menu.rows.remote.label}
+                  sub={t.menu.rows.remote.sub}
+                  value={summary.remote.label}
+                  valueTone={TONE_VALUE[summary.remote.tone]}
+                  onClick={() => onPick('remote')}
+                />
+                {/* Not a screen of the menu but a tab of the strip: the row opens that tab and the menu
+                    closes behind it (see the note on onOpenStatistics). It stands down here with the
+                    settings rather than up with the history because it is read now and then, not worked in. */}
+                <Row
+                  icon="statistics"
+                  iconClass={s.rowIconStatistics}
+                  label={t.menu.rows.statistics.label}
+                  sub={t.menu.rows.statistics.sub}
+                  value={summary.statistics}
+                  onClick={onOpenStatistics}
+                />
+                {/* The plugin's own two, last before the version in the footer: the settings configure the
+                    plugin and the feedback is about it, so neither belongs among the rows above. */}
+                <Row
+                  icon="settings"
+                  iconClass={s.rowIconSettings}
+                  label={t.menu.rows.settings.label}
+                  sub={t.menu.rows.settings.sub}
+                  value=""
+                  onClick={() => onPick('settings')}
+                />
+                <Row
+                  icon="feedback"
+                  iconClass={s.rowIconFeedback}
+                  label={t.menu.rows.feedback.label}
+                  sub={t.menu.rows.feedback.sub}
+                  value=""
+                  onClick={() => onPick('feedback')}
+                />
+              </div>
 
-            {/* An advertisement standing where one can be walked past: at the foot of a menu, under
-                everything the menu is actually opened for. The card itself is shared with the voice
-                screen, which carries the other one (see AuthorCard). */}
-            <div className={`${s.rows} ${s.authorRows}`}>
-              <AuthorCard
-                title={t.menu.author.title}
-                body={t.menu.author.body}
-                heart
-                shot={snakeinHero}
-                name={AUTHOR_PRODUCT}
-                tagline={t.menu.author.tagline}
-                url={AUTHOR_URL}
-                onOpenLink={onOpenLink}
-              />
+              {/* An advertisement standing where one can be walked past: at the foot of a menu, under
+                  everything the menu is actually opened for. The card itself is shared with the voice
+                  screen, which carries the other one (see AuthorCard). */}
+              <div className={`${s.rows} ${s.authorRows}`}>
+                <AuthorCard
+                  title={t.menu.author.title}
+                  body={t.menu.author.body}
+                  heart
+                  shot={snakeinHero}
+                  name={AUTHOR_PRODUCT}
+                  tagline={t.menu.author.tagline}
+                  url={AUTHOR_URL}
+                  onOpenLink={onOpenLink}
+                />
+              </div>
             </div>
 
             <div className={s.footer}>
@@ -733,12 +736,7 @@ export const SettingsScreen = ({
           value={summary.indicators}
           onClick={() => onPick('indicators')}
         />
-        {/* One row for the three things a tab is born with, rather than three rows scattered down this
-            list. They are one decision - "how does my work begin" - and the model and the effort had no
-            row here at all: they were written only by picking them in a tab, which meant the way to
-            change what new tabs start on was to change the tab you were in. No value beside it on
-            purpose: three answers do not fold into one word, and naming any one of them would say the
-            other two are not there. */}
+        {/* One entry for the settings a tab is born with. Each value is named on the screen behind it. */}
         <Row
           icon="newChat"
           iconClass={s.rowIconNewChat}
@@ -851,15 +849,8 @@ export const SettingsScreen = ({
 }
 
 /**
- * What a new tab starts with: the model, the effort and the permission mode.
- *
- * Three rows rather than three lists stacked on one screen, and the lists are the reason: the models
- * alone run to a dozen entries with a sentence under each, and all three at once would be thirty of them
- * in a panel 350 pixels wide - a screen nobody reads to the end of, to change one thing at its foot.
- *
- * The permission mode used to live one level up, alone, as "Default mode". It moved because the other two
- * exist now: the three answer the same question and disagreeing about where that question is asked would
- * be the only thing anybody had to remember here.
+ * What a new tab starts with: model, effort, context window and permission mode.
+ * Each row opens its own list so the model catalogue does not crowd the other choices.
  */
 export const NewChatScreen = ({
   summary,
@@ -888,6 +879,14 @@ export const NewChatScreen = ({
           sub={t.newChat.rows.effort.sub}
           value={summary.newChat.effort}
           onClick={() => onPick('newChatEffort')}
+        />
+        <Row
+          icon="context"
+          iconClass={s.rowIconContext}
+          label={t.newChat.rows.context.label}
+          sub={t.newChat.rows.context.sub}
+          value={summary.newChat.context}
+          onClick={() => onPick('newChatContext')}
         />
         <Row
           icon="mode"

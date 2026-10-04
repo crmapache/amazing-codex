@@ -51,6 +51,7 @@ export const en = {
       shareEditor: { title: 'EDITOR IN MESSAGES', hint: 'what goes along with a message' },
       newChatModel: { title: 'DEFAULT MODEL', hint: 'what a new tab starts on' },
       newChatEffort: { title: 'DEFAULT EFFORT', hint: 'how hard a new tab thinks' },
+      newChatContext: { title: 'DEFAULT CONTEXT', hint: 'how much a new tab can hold' },
       newChatMode: { title: 'DEFAULT MODE', hint: 'what new tabs start in' },
       composerLayout: { title: 'COMPOSER LAYOUT', hint: 'where the input sits' },
       pasteCollapse: { title: 'PASTED TEXT', hint: 'when a paste folds into a chip' },
@@ -100,7 +101,7 @@ export const en = {
       sounds: { label: 'Sound alerts', sub: 'When the panel calls you' },
       calmColors: { label: 'No-stress colors', sub: 'How much colour the gauges keep' },
       indicators: { label: 'Indicators', sub: 'Which readings stay around the field' },
-      newChat: { label: 'New chats', sub: 'Model, effort and permission mode' },
+      newChat: { label: 'New chats', sub: 'Model, effort, context and mode' },
       restoreTabs: { label: 'Tabs on start', sub: 'Reopen what was open, drafts included' },
       shareEditor: { label: 'Open file and selection', sub: 'What goes along with each message' },
       composerLayout: { label: 'Composer layout', sub: 'Where the input sits' },
@@ -119,16 +120,17 @@ export const en = {
   },
 
   /**
-   * What a new tab is born with. The three rows lead to three lists; the model and the effort share a
-   * first entry that pins nothing at all.
+   * What a new tab is born with. Each row leads to its own list; the model, effort and context lists
+   * share a first entry that pins nothing.
    */
   newChat: {
     rows: {
       model: { label: 'Model', sub: 'What a new tab starts on' },
       effort: { label: 'Effort', sub: 'How hard a new tab thinks' },
+      context: { label: 'Context length', sub: 'How much a new tab can hold' },
       mode: { label: 'Mode', sub: 'What new tabs start in' },
     },
-    /** The first entry of the model and effort lists, and the value beside their rows. */
+    /** The first entry of the pin lists, and the value beside their rows. */
     lastUsed: 'As last chosen',
     /**
      * Under that entry: what it amounts to right now. Without it the entry promises something unnamed -

@@ -336,7 +336,7 @@ internal object RemoteCommands {
         "refreshModels",
         "setDefaultMode",
         /**
-         * The other two thirds of the same screen: what a new tab starts ON.
+         * The pinned model, effort and context window of new tabs.
          *
          * Refused for the reason `setDefaultMode` is, and it is the reason `setModel` and `setEffort` are
          * allowed with `remember = local`: a pick made from a sofa is about the conversation on screen,
@@ -346,6 +346,7 @@ internal object RemoteCommands {
          */
         "setDefaultModel",
         "setDefaultEffort",
+        "setDefaultContextMode",
         "setComposerLayout",
         /**
          * How a pasted text behaves in the input field - a machine-wide setting like the layout above,

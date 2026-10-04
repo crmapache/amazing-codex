@@ -99,6 +99,7 @@ internal object UsageFeatures {
         "shareEditor",
         "newChatModel",
         "newChatEffort",
+        "newChatContext",
         "newChatMode",
         "composerLayout",
         "pasteCollapse",
@@ -318,7 +319,7 @@ internal object UsageFeatures {
         "setRestoreTabs" -> "restore_tabs"
         "setImproveInstructions" -> "improve_prompt"
         "setCustomModels" -> "custom_models"
-        "setDefaultModel", "setDefaultEffort", "setDefaultMode" -> "new_chat"
+        "setDefaultModel", "setDefaultEffort", "setDefaultContextMode", "setDefaultMode" -> "new_chat"
         // One of Codex's own settings written into its config.toml from the panel's screen - which key, and
         // to what, stays on the machine.
         "setCodexConfig" -> "codex_config"

@@ -16,6 +16,7 @@ internal object CodexPreferences {
         val contextMode: String,
         val newTabModel: String,
         val newTabEffort: String,
+        val newTabContextMode: String,
         val composerLayout: String,
         val pasteCollapse: String,
         val sendKey: String,
@@ -32,6 +33,7 @@ internal object CodexPreferences {
         contextMode = contextMode,
         newTabModel = newTabModel,
         newTabEffort = newTabEffort,
+        newTabContextMode = newTabContextMode,
         composerLayout = composerLayout,
         pasteCollapse = pasteCollapse,
         sendKey = sendKey,
@@ -87,6 +89,11 @@ internal object CodexPreferences {
     var newTabEffort: String
         get() = EffortLevels.normalize(read(NEW_TAB_EFFORT_KEY))
         set(value) = write(NEW_TAB_EFFORT_KEY, EffortLevels.normalize(value))
+
+    /** The pinned context window of new tabs. Empty follows [contextMode], the last applied choice. */
+    var newTabContextMode: String
+        get() = read(NEW_TAB_CONTEXT_MODE_KEY).takeIf { it.isNotBlank() }?.let(ModelContexts::normalize).orEmpty()
+        set(value) = write(NEW_TAB_CONTEXT_MODE_KEY, value.takeIf { it.isNotBlank() }?.let(ModelContexts::normalize).orEmpty())
 
     /**
      * Where the input field sits: 'left' | 'bottom' | 'right' | 'compact'. Empty means a panel opened
@@ -441,6 +448,7 @@ internal object CodexPreferences {
     private const val CONTEXT_MODE_KEY = "acx.contextMode"
     private const val NEW_TAB_MODEL_KEY = "acx.newTab.model"
     private const val NEW_TAB_EFFORT_KEY = "acx.newTab.effort"
+    private const val NEW_TAB_CONTEXT_MODE_KEY = "acx.newTab.contextMode"
     private const val COMPOSER_LAYOUT_KEY = "acx.composerLayout"
     private const val PASTE_COLLAPSE_KEY = "acx.pasteCollapse"
     private const val SEND_KEY_KEY = "acx.sendKey"

@@ -1156,7 +1156,7 @@ internal class CodexSessions(
         // moment later, once its transcript has been read (see adoptModel).
         val effort = StartingChoice.effort(account, requested = launch.effort)
         val model = StartingChoice.model(account, requested = launch.model)
-        val contextMode = ModelContexts.normalize(launch.contextMode.ifEmpty { CodexPreferences.contextMode })
+        val contextMode = StartingChoice.contextMode(requested = launch.contextMode)
 
         onBorn(sessionId, effort, model, contextMode, account)
 

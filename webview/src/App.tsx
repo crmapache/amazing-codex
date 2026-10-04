@@ -16,6 +16,7 @@ import {
   modelMenu,
   type ModeAvailability,
   newTabEffortOptions,
+  newTabContextOptions,
   newTabModelOptions,
   nextMode,
   resolvePanelModel,
@@ -570,19 +571,13 @@ export const App = () => {
   /** Whether the line about the plugin is in the clipboard - the thanks menu's only way of saying so. */
   const [shared, setShared] = useState(false)
   /**
-   * The choice of model, effort and mode. It arrives from the shell at startup and is saved there too: a
-   * new tab, a fork and the IDE's next start begin from it.
-   */
-  /**
    * What a new tab starts with, in halves that are deliberately not one.
    *
-   * `newTabModel` and `newTabEffort` are the pins from the "New chats" screen, and empty - the usual case
-   * - means "whatever was last picked". `model` and `effort` are what that comes to right now, and
-   * `startingModel`/`startingEffort` the answer an untouched tab is drawn by. The last four are the IDE's
-   * and only the IDE's: they read the account in use, what it remembers and which models it can run (see
-   * StartingChoice), and a formula of the panel's own, a pin over the machine's last pick, drew Sonnet
-   * over a tab that came up on Opus whenever the account remembered otherwise. So a pick here writes
-   * none of them - the IDE remembers it and tells every window what a new tab starts on now.
+   * `newTabModel`, `newTabEffort` and `newTabContextMode` are the pins from the "New chats" screen.
+   * Empty means "whatever was last picked". The IDE resolves the unpinned and starting values
+   * (see StartingChoice), including the account's model and effort memory. Context follows the machine's
+   * last pick. A pick here writes none of these resolved values; the IDE remembers it and tells every
+   * window what a new tab starts on now.
    */
   const [prefs, setPrefs] = useState({
     model: '',
@@ -594,8 +589,10 @@ export const App = () => {
     contextMode: 'standard' as ContextMode,
     newTabModel: '',
     newTabEffort: '',
+    newTabContextMode: '' as '' | ContextMode,
     startingModel: '',
     startingEffort: 'high',
+    startingContextMode: 'standard' as ContextMode,
   })
   /**
    * What language the panel speaks, in two halves: the choice somebody made and what the IDE itself is
@@ -1379,7 +1376,7 @@ export const App = () => {
   // And the effort of this tab rather than of the window: the setting is only what a tab that has not
   // started yet will start on (see PanelState.effort).
   const effort = panel.pendingEffort ?? panel.effort ?? startingEffort
-  const contextMode = panel.pendingContextMode ?? panel.contextMode ?? prefs.contextMode
+  const contextMode = panel.pendingContextMode ?? panel.contextMode ?? prefs.startingContextMode
 
   // Which of the optional things the Shift+Tab cycle may reach: the permission for bypass arrives from
   // the shell, auto through a refusal of its own on the current model (see autoRefusedModels).
@@ -2126,8 +2123,11 @@ export const App = () => {
                 // cleared (see newTabDefaults below, which is the same read).
                 newTabModel: message.preferences?.newTabModel ?? '',
                 newTabEffort: message.preferences?.newTabEffort ?? '',
+                newTabContextMode: message.preferences?.newTabContextMode ?? '',
                 startingModel: message.preferences?.startingModel ?? current.startingModel,
                 startingEffort: message.preferences?.startingEffort || current.startingEffort,
+                startingContextMode:
+                  message.preferences?.startingContextMode ?? message.preferences?.contextMode ?? current.startingContextMode,
               }))
               if (message.preferences.composerLayout) {
                 setComposerLayoutState(normalizeComposerLayout(message.preferences.composerLayout))
@@ -3210,12 +3210,14 @@ export const App = () => {
               ...current,
               newTabModel: message.model,
               newTabEffort: message.effort,
+              newTabContextMode: message.newTabContextMode ?? '',
               mode: normalizeMode(message.mode),
               contextMode: message.contextMode ?? current.contextMode,
               model: message.unpinnedModel,
               effort: message.unpinnedEffort || current.effort,
               startingModel: message.startingModel,
               startingEffort: message.startingEffort || current.startingEffort,
+              startingContextMode: message.startingContextMode ?? message.contextMode ?? current.startingContextMode,
             }))
             break
 
@@ -3367,7 +3369,7 @@ export const App = () => {
   }, [])
 
   /**
-   * And what a new tab starts ON: the model and the effort it is pinned to.
+   * The model, effort and context window pinned for new tabs.
    *
    * The sentinel means "no pin at all" and travels as an empty string - that is how the setting spells it
    * (see LAST_USED in catalog.ts). Set here as well as sent, like every machine-wide preference: the row
@@ -3388,6 +3390,12 @@ export const App = () => {
     const pinned = next === LAST_USED ? '' : next
     send({ type: 'setDefaultEffort', effort: pinned })
     setPrefs((current) => ({ ...current, newTabEffort: pinned }))
+  }, [])
+
+  const setDefaultContextMode = useCallback((next: string) => {
+    const pinned = next === LAST_USED ? '' : next === 'long' ? 'long' : 'standard'
+    send({ type: 'setDefaultContextMode', mode: pinned })
+    setPrefs((current) => ({ ...current, newTabContextMode: pinned }))
   }, [])
 
   /**
@@ -5413,7 +5421,7 @@ export const App = () => {
     plugins: pluginsInstalled?.length ?? null,
     appearance: appearanceSummary(t, theme?.choice ?? '', textSize),
     sounds: t.common.countOn(SOUND_IDS.filter((sound) => !isMuted(soundPrefs, sound)).length),
-    // The three values behind "New chats", each named the way its own list names it. "As last chosen" is
+    // The values behind "New chats", each named the way its own list names it. "As last chosen" is
     // an answer here rather than a blank: it IS what is set, and it is what most of these rows say.
     newChat: {
       model: prefs.newTabModel
@@ -5422,6 +5430,9 @@ export const App = () => {
           )?.label ?? prefs.newTabModel
         : t.newChat.lastUsed,
       effort: prefs.newTabEffort || t.newChat.lastUsed,
+      context: prefs.newTabContextMode
+        ? prefs.newTabContextMode === 'long' ? t.selectors.context.long : t.selectors.context.standard
+        : t.newChat.lastUsed,
       mode: modeMenuOptions(t, availableModes).find((option) => option.id === normalizeMode(prefs.mode))?.label ?? '',
     },
     restoreTabs: restoreTabs ? t.restoreTabs.on : t.restoreTabs.off,
@@ -6429,6 +6440,14 @@ export const App = () => {
             options={newTabEffortOptions(t, prefs.effort)}
             selected={prefs.newTabEffort || LAST_USED}
             onPick={setDefaultEffort}
+          />
+        ) : null}
+
+        {sideMenu.open && sideMenu.screen === 'newChatContext' ? (
+          <ChoiceList
+            options={newTabContextOptions(t, contextLimits(models, prefs.startingModel), prefs.contextMode)}
+            selected={prefs.newTabContextMode || LAST_USED}
+            onPick={setDefaultContextMode}
           />
         ) : null}
 

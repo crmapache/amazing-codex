@@ -3,7 +3,7 @@ package io.github.crmapache.amazingcodex.codex
 import io.github.crmapache.amazingcodex.codex.accounts.CodexAccounts
 
 /**
- * What a conversation starts on when nothing was chosen for it in particular: the model and the effort.
+ * What a conversation starts on when nothing was chosen for it: model, effort and context window.
  *
  * One answer for everybody who has to give it, and that is the reason this is a file of its own. The launch
  * (CodexSessions.newSession) used to know a longer road than everything that SHOWED its answer: it read
@@ -21,6 +21,7 @@ import io.github.crmapache.amazingcodex.codex.accounts.CodexAccounts
  *   which has no record at all, among them.
  *
  * The model is then held to what that account can run ([clamp]); the effort has nothing to be held to.
+ * Context uses the request, then its pin, then the machine's last pick; it has no account-specific memory.
  */
 internal object StartingChoice {
 
@@ -30,6 +31,10 @@ internal object StartingChoice {
 
     fun effort(accountId: String = current(), requested: String = ""): String =
         requested.ifEmpty { CodexPreferences.newTabEffort }.ifEmpty { lastEffort(accountId) }
+
+    /** A request or a restored tab outranks the pin; without a pin, keep following the last choice. */
+    fun contextMode(requested: String = ""): String =
+        ModelContexts.normalize(requested.ifBlank { CodexPreferences.newTabContextMode }.ifBlank { CodexPreferences.contextMode })
 
     /**
      * What "as last chosen" comes to right now - the model a new tab starts on with nothing pinned.

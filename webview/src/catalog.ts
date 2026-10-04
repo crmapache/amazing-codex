@@ -320,7 +320,7 @@ export const contextShortLabel = (mode: ContextMode, limits: ContextLimits | nul
 }
 
 /**
- * The first entry of both "new chats" lists: nothing pinned at all, so a new tab starts on whatever was
+ * The first entry of the "new chats" pin lists: nothing pinned, so a new tab starts on whatever was
  * last chosen in one - which is what the panel did before the setting existed.
  *
  * A sentinel rather than an empty id, and prefixed the way ADD_MODEL is, for the same reason: it travels
@@ -355,6 +355,16 @@ export const newTabEffortOptions = (t: Dict, lastPick: string): MenuOption[] => 
   { id: LAST_USED, label: t.newChat.lastUsed, sub: t.newChat.lastUsedNow(lastPick) },
   ...effortOptions(t),
 ]
+
+/** The same context windows as the chat selector, with an entry that follows the last choice. */
+export const newTabContextOptions = (t: Dict, limits: ContextLimits | null, lastPick: ContextMode): MenuOption[] => {
+  const options = contextOptions(t, limits)
+  const named = lastPick === 'long' ? t.selectors.context.long : t.selectors.context.standard
+  const size = lastPick === 'long' ? limits?.long : limits?.standard
+  const current = size ? `${named} (${formatContextWindow(size)})` : named
+
+  return [{ id: LAST_USED, label: t.newChat.lastUsed, sub: t.newChat.lastUsedNow(current) }, ...options]
+}
 
 /**
  * The five modes the MODE chip offers - each one a preset of Codex's approval policy and sandbox (see

@@ -278,8 +278,7 @@ internal class SessionCommands(private val hub: CodexSessionHub) {
             }
 
             /*
-             * And what a new tab starts ON, beside what it starts IN - the other two thirds of the same
-             * screen (see CodexPreferences.newTabModel).
+             * The model, effort and context window pinned for new tabs (see CodexPreferences.newTabModel).
              *
              * An empty value is the value here rather than a missing one: it means "whatever was last
              * chosen", which is what the panel did before the setting existed and what the first entry of
@@ -294,6 +293,11 @@ internal class SessionCommands(private val hub: CodexSessionHub) {
 
             "setDefaultEffort" -> {
                 CodexPreferences.newTabEffort = field("effort")
+                CodexSessionHub.announceNewTabDefaults()
+            }
+
+            "setDefaultContextMode" -> {
+                CodexPreferences.newTabContextMode = field("mode")
                 CodexSessionHub.announceNewTabDefaults()
             }
 
