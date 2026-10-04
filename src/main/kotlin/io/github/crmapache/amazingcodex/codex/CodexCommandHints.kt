@@ -149,13 +149,14 @@ internal object CodexCommandHints {
         val candidates = LinkedHashMap<String, Candidate>()
         var whole = true
 
-        // The order below is the order of Codex's own precedence: a skill of the repository outranks a
-        // personal one of the same name, and both outrank a plugin's. The first name found wins, so the
-        // walk order IS the rule - nothing here may be sorted (the fingerprint sorts a copy).
+        // Native Codex shelves come first, then the project's shared Claude shelf. A project skill still
+        // outranks a personal one of the same name, and both outrank a plugin's. The first name found
+        // wins, so the walk order IS the rule - nothing here may be sorted (the fingerprint sorts a copy).
         workingDirectory?.let { base ->
             val anchor = File(base)
             whole = skillsIn(File(base, ".codex/skills"), "", candidates, anchor) && whole
             whole = skillsIn(File(base, ".agents/skills"), "", candidates, anchor) && whole
+            whole = skillsIn(File(base, ".claude/skills"), "", candidates, anchor) && whole
         }
 
         // The person's own skills and custom prompts - out of Codex's home for THIS project: a project

@@ -13,6 +13,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -96,7 +97,7 @@ internal class CodexSession(
     /** A turn started without a message of ours - an approved plan's implementation, a queued steer. */
     private val onTurnStarted: () -> Unit = {},
     /** What the agent is told about where it runs - see CodexLaunch.PANEL_BRIEFING. */
-    private val briefing: String = CodexLaunch.PANEL_BRIEFING,
+    briefing: String = CodexLaunch.PANEL_BRIEFING,
     /**
      * A new role for a thread this process resumes, said before its next turn - see [threadOpened].
      *
@@ -120,6 +121,9 @@ internal class CodexSession(
      */
     private val onMcpSettled: () -> Unit = {},
 ) : Disposable {
+
+    /** Every role gets the project's shared `.claude` contract when its process actually opens. */
+    private val baseBriefing = briefing
 
     @Volatile
     private var server: AppServer? = null
@@ -262,9 +266,9 @@ internal class CodexSession(
     @Volatile
     private var resumed = false
 
-    /** [roleChange] has been said into the thread - once per session, whatever restarts in between. */
+    /** New developer instructions were said into a resumed thread - once per session across restarts. */
     @Volatile
-    private var roleSaid = false
+    private var instructionsSaid = false
 
     private enum class Kind { COMMAND, FILE, ASK, PLAN, PERMISSIONS, ELICITATION }
 
@@ -1313,8 +1317,34 @@ internal class CodexSession(
         // The settings every turn of this conversation goes by, read while the thread opens (see
         // CodexConfigDesk.workspaceWrite) - the first turn should not have to go without them.
         CodexConfigDesk.warm(workingDirectory)
-        openThread(created)
+        openThreadAfterSkills(created)
         return created
+    }
+
+    /**
+     * Register `.claude/skills` before the thread is opened, so the model sees the shared shelf on its
+     * first turn. Older app-server versions do not have this method; their refusal is a soft fallback,
+     * because explicit `/skill` invocation still works through CodexCommandHints.
+     */
+    private fun openThreadAfterSkills(srv: AppServer) {
+        val root = ClaudeProjectConfig.skillsRoot(workingDirectory)
+        if (root == null) {
+            openThread(srv)
+            return
+        }
+
+        srv.request(
+            "skills/extraRoots/set",
+            buildJsonObject { putJsonArray("extraRoots") { add(root) } },
+            onResult = { if (server === srv) openThread(srv) },
+            onError = { error ->
+                DiagnosticsLog.note(
+                    DiagnosticsLog.AGENT,
+                    "project .claude skills could not be registered with app-server: ${error.message}",
+                )
+                if (server === srv) openThread(srv)
+            },
+        )
     }
 
     private fun exited(process: AppServer, code: Int, requested: Boolean) {
@@ -1384,7 +1414,7 @@ internal class CodexSession(
         modelOnWire()?.let { put("model", it) }
         put("approvalPolicy", policy.approval)
         put("sandbox", policy.sandboxMode)
-        put("developerInstructions", briefing)
+        put("developerInstructions", ClaudeProjectConfig.appendTo(baseBriefing, workingDirectory))
     }
 
     private fun threadOpened(result: JsonObject?) {
@@ -1411,11 +1441,19 @@ internal class CodexSession(
             ),
         )
 
-        // A new role is said before anything else is: the turns waiting for the thread are the first ones
-        // the role applies to.
-        val role = roleChange?.takeIf { resumed && !roleSaid }
-        if (role != null) {
-            roleSaid = true
+        // A new role, or the shared-config contract missing from an older thread, is said before anything
+        // else: the turns waiting for the thread are the first ones the instructions apply to.
+        val changedRole = roleChange?.takeIf { resumed && !instructionsSaid }
+        val refresh = changedRole == null && resumed && !instructionsSaid &&
+            ClaudeProjectConfig.needsInjection(workingDirectory, id)
+        val instructions = when {
+            changedRole != null -> ClaudeProjectConfig.appendTo(changedRole, workingDirectory)
+            refresh -> ClaudeProjectConfig.appendTo(baseBriefing, workingDirectory)
+            else -> null
+        }
+        if (instructions != null) {
+            instructionsSaid = true
+            val introduction = if (changedRole != null) ROLE_CHANGE else INSTRUCTIONS_REFRESH
             val srv = server
             if (srv == null) {
                 releaseWaiting()
@@ -1431,7 +1469,7 @@ internal class CodexSession(
                                 putJsonArray("content") {
                                     addJsonObject {
                                         put("type", "input_text")
-                                        put("text", "$ROLE_CHANGE\n\n$role")
+                                        put("text", "$introduction\n\n$instructions")
                                     }
                                 }
                             }
@@ -1439,8 +1477,8 @@ internal class CodexSession(
                     },
                     onResult = { releaseWaiting() },
                     onError = { error ->
-                        DiagnosticsLog.note(DiagnosticsLog.AGENT, "codex would not take a new role into the thread")
-                        thisLogger().info("Codex did not take the role change: ${error.message}")
+                        DiagnosticsLog.note(DiagnosticsLog.AGENT, "codex would not take updated developer instructions")
+                        thisLogger().info("Codex did not take updated developer instructions: ${error.message}")
                         releaseWaiting()
                     },
                 )
@@ -1826,6 +1864,10 @@ internal class CodexSession(
         /** What a role change is introduced by - see [roleChange]. */
         const val ROLE_CHANGE =
             "Your role in this conversation has changed. These are your instructions from now on, and they replace the earlier ones:"
+
+        /** A bridge added after the thread was first created has to update that thread's durable instructions. */
+        const val INSTRUCTIONS_REFRESH =
+            "These are the current developer instructions for this conversation. They replace the earlier developer instructions:"
 
         /** The parts of a limits update that carry figures - see the rolling update in [notification]. */
         val LIMIT_FIELDS = listOf("primary", "secondary", "individualLimit")

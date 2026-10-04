@@ -11,9 +11,10 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * The shelves the `/` hint is read from before Codex has said anything: the project's `.codex/skills` and
- * `.agents/skills`, the person's `~/.codex/skills` (with its `.system` folder), `~/.agents/skills` and the
- * custom prompts in `~/.codex/prompts`, and every installed plugin's skills.
+ * The shelves the `/` hint is read from before Codex has said anything: the project's `.codex/skills`,
+ * `.agents/skills` and shared `.claude/skills`, the person's `~/.codex/skills` (with its `.system`
+ * folder), `~/.agents/skills`, the custom prompts in `~/.codex/prompts`, and every installed plugin's
+ * skills.
  */
 class CodexCommandHintsTest {
 
@@ -180,14 +181,26 @@ class CodexCommandHintsTest {
     // --- The shelves ------------------------------------------------------------------
 
     @Test
-    fun `both of the project's shelves are read`() {
+    fun `all of the project's shelves are read`() {
         val hints = projectWith(
             ".codex/skills/from-codex/SKILL.md" to "---\ndescription: codex shelf\n---\n",
             ".agents/skills/from-agents/SKILL.md" to "---\ndescription: agents shelf\n---\n",
+            ".claude/skills/from-claude/SKILL.md" to "---\ndescription: shared Claude shelf\n---\n",
         )
 
         assertEquals("codex shelf", hints["from-codex"]?.description)
         assertEquals("agents shelf", hints["from-agents"]?.description)
+        assertEquals("shared Claude shelf", hints["from-claude"]?.description)
+    }
+
+    @Test
+    fun `native project shelves outrank the shared Claude shelf`() {
+        val hints = projectWith(
+            ".codex/skills/same/SKILL.md" to "---\ndescription: native\n---\n",
+            ".claude/skills/same/SKILL.md" to "---\ndescription: shared\n---\n",
+        )
+
+        assertEquals("native", hints["same"]?.description)
     }
 
     @Test
