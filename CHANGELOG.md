@@ -5,6 +5,10 @@ Marketplace and the IDE's update dialog show, so every release lists only its ow
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-04
+
+- Fixed: the panel showed "The panel hit an error" right after the IDE started, and reloading did not help. The button that offers another model when the chosen one is at capacity was wired in one step too late: the panel drew itself before the sign-in was known, and the moment it was, React counted one step more than the time before and refused to draw anything. The panel now opens as usual, and a check that runs with every build catches this kind of mistake before it can ship.
+
 ## [0.2.1] - 2026-10-04
 
 - Added: a context window selector beside the model and effort menus, for models whose provider offers a larger window. Switching to "Long" trades a bigger window for faster use of plan limits; a model with no larger window says so instead of offering it.
@@ -71,7 +75,8 @@ Marketplace and the IDE's update dialog show, so every release lists only its ow
 - Added: search, prompt improvement, conversation titles and scenario writing run as short-lived,
   read-only Codex threads that leave nothing in the history.
 
-[Unreleased]: https://github.com/crmapache/amazing-codex/compare/0.2.1...HEAD
+[Unreleased]: https://github.com/crmapache/amazing-codex/compare/0.2.2...HEAD
+[0.2.2]: https://github.com/crmapache/amazing-codex/compare/0.2.1...0.2.2
 [0.2.1]: https://github.com/crmapache/amazing-codex/compare/0.2.0...0.2.1
 [0.2.0]: https://github.com/crmapache/amazing-codex/compare/0.1.0...0.2.0
 [0.1.0]: https://github.com/crmapache/amazing-codex/commits/0.1.0
