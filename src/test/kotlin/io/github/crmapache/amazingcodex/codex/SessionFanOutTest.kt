@@ -2,6 +2,7 @@ package io.github.crmapache.amazingcodex.codex
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import io.github.crmapache.amazingcodex.remote.RemoteLimits
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 
@@ -19,7 +20,7 @@ import kotlinx.serialization.json.put
  */
 class SessionFanOutTest : BasePlatformTestCase() {
 
-    private class Recorder(override val id: String) : SessionClient {
+    private class Recorder(override val id: String, override val isLocal: Boolean = false) : SessionClient {
         val received = mutableListOf<String>()
 
         override fun deliver(messages: List<String>) {
@@ -38,6 +39,105 @@ class SessionFanOutTest : BasePlatformTestCase() {
         put("kind", "main")
         put("sessionId", sessionId)
         put("title", "")
+    }
+
+    fun testNewChatsWithoutAModeKeepTheSavedDefault() {
+        val previous = CodexPreferences.mode
+        try {
+            val hub = hub()
+            hub.register(Recorder("desk", isLocal = true))
+            for (mode in PermissionModes.KNOWN) {
+                CodexPreferences.mode = mode
+                val sessionId = "default-$mode"
+
+                assertTrue(hub.commands.handle("desk", newSession(sessionId)))
+                assertNull(hub.conversations.permissionMode(sessionId))
+                hub.conversations.setEffort(sessionId, "", remember = false)
+
+                assertEquals(mode, hub.conversations.permissionMode(sessionId))
+                assertEquals(mode, CodexPreferences.mode)
+                assertFalse(hub.conversations.isRunning(sessionId))
+            }
+        } finally {
+            CodexPreferences.mode = previous
+        }
+    }
+
+    fun testAnEmptyOrNullModeDoesNotOverrideFullAccess() {
+        val previous = CodexPreferences.mode
+        try {
+            CodexPreferences.mode = PermissionModes.BYPASS
+            val hub = hub()
+            hub.register(Recorder("desk", isLocal = true))
+            for ((index, mode) in listOf("", null).withIndex()) {
+                val sessionId = "empty-mode-$index"
+                val request = buildJsonObject {
+                    newSession(sessionId).forEach { (key, value) -> put(key, value) }
+                    if (mode == null) put("mode", JsonNull) else put("mode", mode)
+                }
+
+                assertTrue(hub.commands.handle("desk", request))
+                hub.conversations.setEffort(sessionId, "", remember = false)
+
+                assertEquals(PermissionModes.BYPASS, hub.conversations.permissionMode(sessionId))
+            }
+        } finally {
+            CodexPreferences.mode = previous
+        }
+    }
+
+    fun testAForkWithoutAModeKeepsItsParentsFullAccess() {
+        val previous = CodexPreferences.mode
+        try {
+            CodexPreferences.mode = PermissionModes.PLAN
+            val hub = hub()
+            hub.register(Recorder("desk", isLocal = true))
+            hub.changeMode(CodexSessions.MAIN_SESSION, PermissionModes.BYPASS)
+            val request = buildJsonObject {
+                put("type", "newSession")
+                put("kind", "branch")
+                put("sessionId", "full-access-fork")
+                put("parentId", CodexSessions.MAIN_SESSION)
+                put("model", "gpt-5.6-sol")
+            }
+
+            assertTrue(hub.commands.handle("desk", request))
+
+            assertEquals(PermissionModes.BYPASS, hub.conversations.permissionMode("full-access-fork"))
+            assertEquals("gpt-5.6-sol", hub.conversations.model("full-access-fork"))
+            assertEquals(PermissionModes.PLAN, CodexPreferences.mode)
+        } finally {
+            CodexPreferences.mode = previous
+        }
+    }
+
+    fun testAnExplicitModeOverridesFullAccessForOnlyTheNewChat() {
+        val previous = CodexPreferences.mode
+        try {
+            CodexPreferences.mode = PermissionModes.BYPASS
+            val hub = hub()
+            hub.register(Recorder("phone"))
+            val choices = PermissionModes.KNOWN.associateWith { it } + mapOf(
+                "default" to PermissionModes.ASK,
+                "auto" to PermissionModes.ACCEPT_EDITS,
+                "dontAsk" to PermissionModes.ACCEPT_EDITS,
+            )
+            for ((requested, expected) in choices) {
+                val sessionId = "explicit-$requested"
+                val request = buildJsonObject {
+                    newSession(sessionId).forEach { (key, value) -> put(key, value) }
+                    put("mode", requested)
+                }
+
+                assertTrue(hub.commands.handle("phone", request))
+                hub.conversations.setEffort(sessionId, "", remember = false)
+
+                assertEquals(expected, hub.conversations.permissionMode(sessionId))
+                assertEquals(PermissionModes.BYPASS, CodexPreferences.mode)
+            }
+        } finally {
+            CodexPreferences.mode = previous
+        }
     }
 
     fun testEveryoneSeesTheSameMessage() {

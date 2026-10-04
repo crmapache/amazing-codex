@@ -216,7 +216,8 @@ internal class SessionCommands(private val hub: CodexSessionHub) {
                     launch = SessionLaunch(
                         model = field("model"),
                         effort = field("effort"),
-                        mode = PermissionModes.normalize(field("mode")).takeIf { it in PermissionModes.KNOWN }.orEmpty(),
+                        // Empty means inheritance; normalizing it would force Auto over a default or parent.
+                        mode = field("mode").takeIf { it.isNotEmpty() }?.let(PermissionModes::normalize).orEmpty(),
                         contextMode = field("contextMode"),
                     ),
                 )
