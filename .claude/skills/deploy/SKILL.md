@@ -52,7 +52,7 @@ bump. Про них и пишется CHANGELOG.
 ## Шаг 2. Проверки
 
 ```bash
-cd webview && pnpm tsc --noEmit && pnpm vitest run; cd ..
+cd webview && pnpm tsc --noEmit && pnpm lint && pnpm vitest run; cd ..
 ./gradlew test --console=plain
 ```
 
@@ -106,44 +106,24 @@ source .env && ./gradlew publishPlugin --console=plain
 ## Шаг 6. Релей и телефонный клиент (обязательно, каждый релиз)
 
 Кода релея в GitHub нет, поэтому автодеплоя у него тоже нет - выкатывается руками.
-Полная памятка - `relay/README.md`, общие правила по серверу - скилл `infra`.
+Релей у форка свой: `wss://relay-codex.mzpizote.com`, приложение Coolify `acx-relay`.
+На том же сервере живут два релея оригинала (`relay.mzpizote.com`, `relay-dev`), и
+руками собранные команды из скилла оригинала положили бы телефон форка к его
+телефонам. Поэтому только скрипт форка:
 
 ```bash
-# 1. Телефонный клиент. Собирается из webview/, а не из relay/ - без него релею
-#    нечего отдавать.
-cd webview && pnpm build:mobile && cd ..
-rm -rf relay/public && mkdir -p relay/public && cp -R webview/dist-mobile/. relay/public/
-
-# 2. Исходники на сервер. COPYFILE_DISABLE не даёт macOS положить рядом с каждым
-#    файлом свой "._name" - в образе они раздаются как файлы клиента.
-cd relay && COPYFILE_DISABLE=1 tar czf /tmp/relay.tgz --exclude=node_modules --exclude=dist . && cd ..
-scp /tmp/relay.tgz root@40.160.85.25:/root/apps/
-
-# 3. Образ собирается на сервере и кладётся в его локальный реестр.
-ssh root@40.160.85.25 'cd /root/apps/acc-relay && rm -rf public dist && tar xzf ../relay.tgz && \
-  docker build -t 127.0.0.1:5000/acc-relay:local . && docker push 127.0.0.1:5000/acc-relay:local'
-
-# 4. Сам деплой через API Coolify.
-python3 ~/Documents/railway-migration/scripts/cool.py POST \
-  '/deploy?uuid=cfz0tc8zejfjo88adibxxafx&force=true'
+./scripts/relay-deploy.sh --yes
 ```
 
-`rm -rf public dist` перед распаковкой - не уборка: архив ложится поверх того, что
-уже лежит, и файл, ушедший из сборки, иначе остался бы в образе навсегда.
+Он сам собирает телефонный клиент из `webview/`, проверяет, что в `relay/public/`
+лежит клиент форка, а приложение в Coolify отвечает на домене форка и тянет его
+образ (чужой uuid отклоняет, а не выкатывает), собирает образ на сервере, ждёт
+конца выкатки и сверяет, что домен отдаёт ровно собранный бандл. Последняя строка
+`==> up: relay-codex.mzpizote.com serves assets/mobile-...js` - доехало. Полная
+памятка - `relay/README.md`, общие правила по серверу - скилл `infra`.
 
-UUID `acc-relay` может устареть - тогда перечитай его: `python3 cool.py GET /applications`.
-
-**Проверить, что доехало именно то, что собрали:**
-
-```bash
-curl -s https://relay.mzpizote.com/ | grep -o 'assets/mobile-[^"]*'
-```
-
-Имя бандла обязано совпасть с тем, что напечатала сборка в шаге 1. Не совпало -
-Coolify отдаёт прошлый образ, и деплой надо повторить.
-
-`relay/public/` намеренно в корневом `.gitignore`, а не в `relay/.gitignore` -
-коммитить там нечего, а правило внутри каталога выкинуло бы клиента из образа.
+`--yes` нужен, потому что без терминала скрипту некого спросить. Сам запуск
+`/deploy` и есть это разрешение.
 
 **Телефон надо перезагрузить.** Он держит прошлый клиент service worker'ом, поэтому
 в заметках релиза про это есть отдельная строчка - не забывай её, если менялся
