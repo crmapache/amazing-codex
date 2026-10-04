@@ -376,6 +376,8 @@ val buildWebview by tasks.registering(Exec::class) {
         webviewDir.file("remote.html"),
         webviewDir.file("vite.config.ts"),
         webviewDir.file("tsconfig.json"),
+        // The build lints before it bundles (see package.json): a rule changed there is a reason to run again.
+        webviewDir.file(".oxlintrc.json"),
     )
     outputs.dir(webviewDist)
 }

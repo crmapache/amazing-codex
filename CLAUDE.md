@@ -386,7 +386,11 @@ Active file:», «## Active selection range:», «## Active selection of the fil
   `echo gpt-5.6-luna > /tmp/acx-live-codex && ./gradlew test --tests '*CodexSessionLiveTest*'`, после
   прогона файл удалить. Проверяет ответ, инструменты, одобрение в режиме «Ask every time», продолжение
   треда в новом процессе и чтение его из истории.
-- `cd webview && pnpm tsc --noEmit && pnpm vitest run` - панель.
+- `cd webview && pnpm tsc --noEmit && pnpm lint && pnpm vitest run` - панель. `pnpm lint` - oxlint с
+  одним правилом, порядком хуков React (`.oxlintrc.json`): хук ниже раннего `return` ронял всю панель
+  на старте (ошибка React #310), а видно это было только запуском. ESLint тут не работает: TypeScript 7
+  без JS API, разборщику TypeScript для ESLint не на чем стоять. Сборка панели и телефона и `pnpm test`
+  зовут `pnpm lint` сами.
 - Харнесс: `cd webview && pnpm dev`, затем http://localhost:5190/harness.html - настоящий `App` без
   агента и без IDE (как устроен - в `docs/panel-notes.md`, раздел про харнесс).
 - Песочница: `./scripts/sandbox.sh` - собирает плагин и поднимает отдельный WebStorm на

@@ -1,0 +1,17 @@
+{
+  // oxlint rather than ESLint: the panel builds on TypeScript 7, which has no JavaScript API, and
+  // ESLint's TypeScript parser cannot run without one. oxlint parses TypeScript itself.
+  //
+  // One rule, deliberately: a hook placed under the sign-in gate's early return in App.tsx tore the
+  // whole panel down on every start (React error #310), and nothing short of running the panel showed
+  // it. The build, the tests and the phone's build all run this first (see package.json).
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["react"],
+  "categories": {
+    "correctness": "off"
+  },
+  "rules": {
+    "react/rules-of-hooks": "error"
+  },
+  "ignorePatterns": ["dist", "dist-mobile", "mobile-assets", "public"]
+}

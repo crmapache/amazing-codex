@@ -4427,6 +4427,20 @@ export const App = () => {
   )
 
   /**
+   * The capacity refusal is transient, so the useful recovery is one press to another model. A hook, so
+   * it stands above the sign-in gate's early return: below it, the first render after the sign-in ran one
+   * hook more than the render before and React tore the whole panel down (error #310).
+   */
+  const chooseAnotherModel = useCallback(
+    (source: HTMLElement) => {
+      setSideMenu((current) => ({ ...current, open: false }))
+      send({ type: 'refreshModels', sessionId: active })
+      setMenu({ kind: 'model', anchor: anchorFrom(source) })
+    },
+    [active],
+  )
+
+  /**
    * A side question - `/btw` (see feed/side). It stands in the tab's thread at once as "thinking" and goes
    * to the IDE with the thread's earlier answers, so a follow-up has them; [replaces] asks one that ended
    * without an answer again, in its own place.
@@ -5463,16 +5477,6 @@ export const App = () => {
     if (kind === 'model') send({ type: 'refreshModels', sessionId: active })
     setMenu({ kind, anchor })
   }
-
-  /** The capacity refusal is transient, so the useful recovery is one press to another model. */
-  const chooseAnotherModel = useCallback(
-    (source: HTMLElement) => {
-      setSideMenu((current) => ({ ...current, open: false }))
-      send({ type: 'refreshModels', sessionId: active })
-      setMenu({ kind: 'model', anchor: anchorFrom(source) })
-    },
-    [active],
-  )
 
   /** The same toggle for the heart at the row's far end, and for the same reason (see [openSelector]). */
   const openThanks = (anchor: Anchor) => {
