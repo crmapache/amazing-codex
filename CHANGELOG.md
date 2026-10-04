@@ -5,6 +5,12 @@ Marketplace and the IDE's update dialog show, so every release lists only its ow
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-04
+
+- Added: a context window selector beside the model and effort menus, for models whose provider offers a larger window. Switching to "Long" trades a bigger window for faster use of plan limits; a model with no larger window says so instead of offering it.
+- Added: switching a conversation to full access answers a command, file or extra-permission request that was already waiting, instead of leaving it stuck on the mode that asked it.
+- Added: Codex now reads this project's own rules, agents, skills and other AI configuration the same way Claude Code does, instead of working from its defaults alone.
+
 ## [0.2.0] - 2026-10-02
 
 - Added: side questions with `/btw` or `/side`, the way Codex's own terminal asks them. Type one at any moment, even while Codex is working, and the answer comes in a card above the input field without interrupting the turn. The question goes to a temporary copy of the conversation that knows everything the conversation does, may read and search files but changes nothing, and is thrown away afterwards: the agent never sees the question and nothing is saved. Follow-up questions keep the thread.
