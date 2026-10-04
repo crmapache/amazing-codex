@@ -5,6 +5,13 @@ Marketplace and the IDE's update dialog show, so every release lists only its ow
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-10-04
+
+- Fixed: new chats and forks could silently switch to Auto instead of keeping the selected mode. A missing mode selection was treated as Auto; new chats now use the saved default and forks keep their parent's mode.
+- Fixed: closing a project could report "Already disposed" while the panel was sending an update or repainting. Pending callbacks now stop before the embedded browser and its timers are released.
+- Fixed: opening the panel just after starting the IDE could add an internal error about creating a proxy service. The IDE's proxy configuration is now read before the embedded browser starts.
+- Remote access: reload the phone client after updating the plugin to load this release's client.
+
 ## [0.2.3] - 2026-10-04
 
 - Added: a default context length in Settings - New chats, beside the model, effort and mode. Choose Standard or Long where the model supports it, or follow the last choice; new tabs show the same choice before the first message.
@@ -81,7 +88,8 @@ Marketplace and the IDE's update dialog show, so every release lists only its ow
 - Added: search, prompt improvement, conversation titles and scenario writing run as short-lived,
   read-only Codex threads that leave nothing in the history.
 
-[Unreleased]: https://github.com/crmapache/amazing-codex/compare/0.2.3...HEAD
+[Unreleased]: https://github.com/crmapache/amazing-codex/compare/0.2.4...HEAD
+[0.2.4]: https://github.com/crmapache/amazing-codex/compare/0.2.3...0.2.4
 [0.2.3]: https://github.com/crmapache/amazing-codex/compare/0.2.2...0.2.3
 [0.2.2]: https://github.com/crmapache/amazing-codex/compare/0.2.1...0.2.2
 [0.2.1]: https://github.com/crmapache/amazing-codex/compare/0.2.0...0.2.1
