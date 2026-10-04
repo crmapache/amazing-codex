@@ -29,11 +29,12 @@ internal object CodexLaunch {
     const val ASK_TOOL = "AskUserQuestion"
 
     /**
-     * Arguments after `app-server`. Empty on purpose: everything a conversation is launched with goes as
-     * thread parameters, where Codex reads it the same way whatever its config says - an override here
-     * would be a second place deciding the same thing.
+     * Arguments after `app-server`. The context window is process configuration rather than a thread
+     * parameter, so it is the one launch choice that has to travel here. It stays a scalar without
+     * quotes or line breaks, safe through npm's Windows wrapper (see the class comment).
      */
-    fun serverArguments(): List<String> = emptyList()
+    fun serverArguments(contextWindow: Int? = null): List<String> =
+        contextWindow?.let { listOf("-c", "model_context_window=$it") } ?: emptyList()
 
     /**
      * The environment a conversation's process runs in, over the one its account handed us.

@@ -142,7 +142,14 @@ internal object CodexOneShot {
                     buildJsonObject { put("includeHidden", false) },
                     onResult = { result ->
                         done()
-                        onResult(CodexShapes.models(result, CodexSettings.effective(workingDirectory, "model"), CodexSettings.effective(workingDirectory, "model_reasoning_effort")))
+                        onResult(
+                            CodexShapes.models(
+                                result,
+                                CodexSettings.effective(workingDirectory, "model"),
+                                CodexSettings.effective(workingDirectory, "model_reasoning_effort"),
+                                ModelContexts.read(workingDirectory),
+                            ),
+                        )
                     },
                     onError = { fail(it.message) },
                 )

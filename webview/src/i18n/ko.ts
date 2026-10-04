@@ -796,7 +796,7 @@ export const ko: Dict = {
     high: { sub: '움직이기 전에 오래 생각합니다. 여러 파일 변경에 어울려요.' },
     medium: { sub: '균형 잡힌 값. 기능 개발의 기본으로 적당해요.' },
     low: { sub: '거의 생각하지 않습니다. 기계적인 수정과 빠른 답에 어울려요.' },
-    tags: { ultra: 'ultra', slow: '느림', default: '기본' },
+    tags: { ultra: 'ultra', slow: '느림', default: '기본', configured: '설정됨' },
   },
 
   models: {
@@ -804,6 +804,8 @@ export const ko: Dict = {
     /** Under "default" once Codex's catalogue says which model that is - see modelOptions. */
     defaultNow: (model: string): string => `모델을 지정하지 않을 때 Codex가 고르는 모델입니다. 지금은 ${model}.`,
     unavailable: '사용할 수 없음',
+    atCapacity: '이 모델은 현재 사용량이 많습니다. 다른 모델을 선택하거나 잠시 후 다시 시도하세요.',
+    chooseAnother: '다른 모델 선택',
     /** The line under a model the agent moved to by itself - see modelMenu. */
     switchedItself: 'Codex가 스스로 이 모델로 바꿨어요.',
     custom: '직접 추가한 모델',
@@ -1685,6 +1687,13 @@ export const ko: Dict = {
   selectors: {
     model: '모델',
     effort: '사고 강도',
+    context: {
+      label: '컨텍스트', standard: '표준', long: '긴 창',
+      standardSub: (size: string): string => `일반 창 - ${size} 사용 가능`,
+      longSub: (size: string): string => `최대 창 - ${size} 사용 가능. 한도를 더 빨리 사용할 수 있습니다.`,
+      unavailable: '이 모델에서는 사용할 수 없습니다',
+      hint: (name: string, size: string): string => `컨텍스트 창: ${name} (${size})`,
+    },
     mode: '모드',
     modeHint: 'shift+tab',
   },

@@ -511,6 +511,10 @@ export const reducePanel = (state: PanelState, action: PanelAction, now = Date.n
         ...state,
         pendingModel: undefined,
         model: action.model,
+        // A model may have another window. The old process's exact maximum is worse than no exact
+        // maximum here: while the next turn has not reported one, the catalogue supplies the selected
+        // model's size to the CTX chip and the gauge keeps its ordinary fallback.
+        ...(action.born ? {} : { context: undefined, liveContextUsed: undefined }),
         // The tab's own model either way: an announcement exists precisely so that a tab nobody has
         // touched is drawn by what it runs on rather than by the setting (see PanelState.ownModel).
         ownModel: action.model,
@@ -546,6 +550,18 @@ export const reducePanel = (state: PanelState, action: PanelAction, now = Date.n
     // ClaudeSession.setEffort), so the shell's word is the last one.
     case 'effortApplied':
       return { ...state, pendingEffort: undefined, effort: action.effort }
+
+    case 'contextModeRequested':
+      return { ...state, pendingContextMode: action.mode }
+
+    case 'contextModeApplied':
+      return {
+        ...state,
+        pendingContextMode: undefined,
+        contextMode: action.mode,
+        context: undefined,
+        liveContextUsed: undefined,
+      }
 
     // The whole list rather than a change to it: the IDE holds the queue, either window may have been
     // the one that changed it, and what arrives is how it stands now (see SessionQueue.kt).

@@ -464,7 +464,7 @@ interface ComposerProps {
   layout?: ComposerLayout
   /**
    * For compact and left/right: those layouts have no status line under the field (see App.tsx), and
-   * MODEL/EFFORT/MODE move into the composer itself (compact) or into the side rail (left/right) - by the
+   * MODEL/EFFORT/CTX/MODE move into the composer itself (compact) or into the side rail (left/right) - by the
    * same callback that opens the other menus.
    */
   model?: string
@@ -473,6 +473,8 @@ interface ComposerProps {
   /** The choice that never came into force, while that holds - see Selectors. */
   stuckPick?: string
   effort?: string
+  contextMode?: 'standard' | 'long'
+  contextMax?: number
   mode?: string
   onOpenSelector?: (kind: SelectorKind, anchor: Anchor) => void
   /**
@@ -548,6 +550,8 @@ export const Composer = ({
   switchedFrom,
   stuckPick,
   effort,
+  contextMode = 'standard',
+  contextMax,
   mode,
   onOpenSelector,
   onOpenThanks,
@@ -2249,7 +2253,7 @@ export const Composer = ({
           </div>
 
           {/*
-           * MODEL/EFFORT/MODE and the buttons used to live in a separate status row under the field (see
+           * MODEL/EFFORT/CTX/MODE and the buttons used to live in a separate status row under the field (see
            * StatusBar), but compact has no status row of its own: both rows moved here, into the column
            * beside the field, so that as much height as possible is left for the feed.
            */}
@@ -2260,6 +2264,8 @@ export const Composer = ({
                 switchedFrom={switchedFrom}
                 stuckPick={stuckPick}
                 effort={effort ?? ''}
+                contextMode={contextMode}
+                contextMax={contextMax}
                 mode={mode ?? ''}
                 models={models}
                 onOpen={(kind, anchor) => onOpenSelector?.(kind, anchor)}
@@ -2338,6 +2344,8 @@ export const Composer = ({
                     switchedFrom={switchedFrom}
                     stuckPick={stuckPick}
                     effort={effort ?? ''}
+                    contextMode={contextMode}
+                    contextMax={contextMax}
                     mode={mode ?? ''}
                     models={models}
                     auto

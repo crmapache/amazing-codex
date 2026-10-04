@@ -805,7 +805,7 @@ export const de: Dict = {
     high: { sub: 'Langes Nachdenken vor dem Handeln. Änderungen über mehrere Dateien.' },
     medium: { sub: 'Ausgewogen. Guter Standard für Arbeit an Features.' },
     low: { sub: 'Denkt kaum nach. Mechanische Änderungen und schnelle Antworten.' },
-    tags: { ultra: 'ultra', slow: 'langsam', default: 'Standard' },
+    tags: { ultra: 'ultra', slow: 'langsam', default: 'Standard', configured: 'konfiguriert' },
   },
 
   models: {
@@ -813,6 +813,8 @@ export const de: Dict = {
     /** Under "default" once Codex's catalogue says which model that is - see modelOptions. */
     defaultNow: (model: string): string => `Das Modell, das Codex nimmt, wenn keins genannt ist. Gerade ${model}.`,
     unavailable: 'nicht verfügbar',
+    atCapacity: 'Dieses Modell ist gerade ausgelastet. Wähle ein anderes Modell oder versuche es gleich noch einmal.',
+    chooseAnother: 'Anderes Modell wählen',
     /** The line under a model the agent moved to by itself - see modelMenu. */
     switchedItself: 'Codex ist von sich aus auf dieses Modell gewechselt.',
     custom: 'Von dir hinzugefügt',
@@ -1701,6 +1703,13 @@ export const de: Dict = {
   selectors: {
     model: 'MODELL',
     effort: 'AUFWAND',
+    context: {
+      label: 'KONTEXT', standard: 'Normal', long: 'Lang',
+      standardSub: (size: string): string => `Normales Fenster - ${size} verfügbar`,
+      longSub: (size: string): string => `Größtes Fenster - ${size} verfügbar. Kann Limits schneller verbrauchen.`,
+      unavailable: 'Für dieses Modell nicht verfügbar',
+      hint: (name: string, size: string): string => `Kontextfenster: ${name} (${size})`,
+    },
     mode: 'MODUS',
     modeHint: 'shift+tab',
   },

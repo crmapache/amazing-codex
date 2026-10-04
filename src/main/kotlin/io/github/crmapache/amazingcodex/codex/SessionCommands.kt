@@ -217,6 +217,7 @@ internal class SessionCommands(private val hub: CodexSessionHub) {
                         model = field("model"),
                         effort = field("effort"),
                         mode = PermissionModes.normalize(field("mode")).takeIf { it in PermissionModes.KNOWN }.orEmpty(),
+                        contextMode = field("contextMode"),
                     ),
                 )
             }
@@ -311,6 +312,10 @@ internal class SessionCommands(private val hub: CodexSessionHub) {
             "setModel" -> hub.changeModel(sessionId, field("model"), remember = local)
 
             "setEffort" -> hub.changeEffort(sessionId, field("effort"), remember = local)
+
+            "setContextMode" -> hub.changeContextMode(sessionId, field("mode"), remember = local)
+
+            "refreshModels" -> hub.usage.refreshModels(sessionId)
 
             /*
              * The accounts screen, bar the two halves that end in a terminal on that machine (see

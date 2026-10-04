@@ -57,8 +57,8 @@ internal class CodexSessions(
      * otherwise be drawn by whatever the setting holds NOW - that is, by a choice made in a neighbouring
      * tab after this conversation had already started on something else.
      */
-    private val onBorn: (sessionId: String, effort: String, model: String, accountId: String) -> Unit =
-        { _, _, _, _ -> },
+    private val onBorn: (sessionId: String, effort: String, model: String, contextMode: String, accountId: String) -> Unit =
+        { _, _, _, _, _ -> },
     /**
      * A conversation is being stopped so that it can move to another account.
      *
@@ -233,6 +233,7 @@ internal class CodexSessions(
             model = chosen.model.ifEmpty { parent?.model.orEmpty() },
             effort = chosen.effort.ifEmpty { parent?.effort.orEmpty() },
             mode = chosen.mode.ifEmpty { parent?.permissionMode.orEmpty() },
+            contextMode = chosen.contextMode.ifEmpty { parent?.contextMode.orEmpty() },
         )
         // The account does NOT travel with it, unlike the three above. A fork starts on the account
         // everything else on this machine is on: that is the whole of the rule now, and a fork of a tab
@@ -507,6 +508,7 @@ internal class CodexSessions(
             model = StartingChoice.clamp(accountId, session.model),
             effort = session.effort,
             mode = session.permissionMode.orEmpty(),
+            contextMode = session.contextMode,
         )
 
         moving.add(sessionId)
@@ -954,7 +956,9 @@ internal class CodexSessions(
         remember: Boolean = true,
         onApplied: (CodexSession.ModelChange) -> Unit = {},
     ) {
-        session(sessionId).setModel(model) { change ->
+        val current = session(sessionId)
+        val beforeWindow = current.contextWindow()
+        current.setModel(model) { change ->
             // We remember only what the agent genuinely took - as with the permission mode. Writing the
             // wish down straight away would leave a rejected model in the settings forever: every next
             // tab would go into its launch with a flag the CLI refuses before the first turn.
@@ -969,7 +973,8 @@ internal class CodexSessions(
                 // over its untouched tabs (see StartingChoice).
                 CodexSessionHub.announceNewTabDefaults()
             }
-            onApplied(change)
+            val needsRestart = change.applied && current.isRunning && current.contextWindow() != beforeWindow
+            if (needsRestart) restart(sessionId) { onApplied(change) } else onApplied(change)
         }
     }
 
@@ -986,6 +991,20 @@ internal class CodexSessions(
             CodexSessionHub.announceNewTabDefaults()
         }
         session(sessionId).setEffort(effort)
+    }
+
+    fun setContextMode(sessionId: String, mode: String, remember: Boolean = true, onApplied: (String) -> Unit = {}) {
+        val current = session(sessionId)
+        val beforeWindow = current.contextWindow()
+        val normalized = ModelContexts.normalize(mode)
+        current.setContextMode(normalized)
+        if (remember) {
+            CodexPreferences.contextMode = normalized
+            CodexSessionHub.announceNewTabDefaults()
+        }
+
+        val needsRestart = current.isRunning && current.contextWindow() != beforeWindow
+        if (needsRestart) restart(sessionId) { onApplied(normalized) } else onApplied(normalized)
     }
 
     /**
@@ -1008,6 +1027,8 @@ internal class CodexSessions(
      * in some third tab (see [branchFrom]).
      */
     fun model(sessionId: String): String? = sessions[sessionId]?.model
+
+    fun contextMode(sessionId: String): String? = sessions[sessionId]?.contextMode
 
     /**
      * This conversation starts on what was chosen for it rather than on what the settings hold.
@@ -1032,7 +1053,11 @@ internal class CodexSessions(
             onFailure("no live session")
             return
         }
-        session.requestModels(onResult, onFailure)
+        if (session.executableChanged()) {
+            restart(sessionId) { sessions[sessionId]?.requestModels(onResult, onFailure) }
+        } else {
+            session.requestModels(onResult, onFailure)
+        }
     }
 
     /** A live conversation's context window usage - a sleeping one's is empty by definition. */
@@ -1131,8 +1156,9 @@ internal class CodexSessions(
         // moment later, once its transcript has been read (see adoptModel).
         val effort = StartingChoice.effort(account, requested = launch.effort)
         val model = StartingChoice.model(account, requested = launch.model)
+        val contextMode = ModelContexts.normalize(launch.contextMode.ifEmpty { CodexPreferences.contextMode })
 
-        onBorn(sessionId, effort, model, account)
+        onBorn(sessionId, effort, model, contextMode, account)
 
         return CodexSession(
             workingDirectory = workingDirectory,
@@ -1140,6 +1166,7 @@ internal class CodexSessions(
             resumeFrom = resumeFrom,
             model = model,
             effort = effort,
+            contextMode = contextMode,
             accountId = account,
             // A tab is told where it is running; one continuing a finished run's main thread is told one
             // thing more - that the role the transcript keeps insisting on is over (see

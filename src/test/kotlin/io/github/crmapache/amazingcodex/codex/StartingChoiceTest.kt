@@ -40,7 +40,7 @@ class StartingChoiceTest : BasePlatformTestCase() {
             onEvent = { _, _ -> },
             onError = { _, _ -> },
             onFinished = {},
-            onBorn = { _, bornEffort, bornModel, _ ->
+            onBorn = { _, bornEffort, bornModel, _, _ ->
                 effort = bornEffort
                 model = bornModel
             },

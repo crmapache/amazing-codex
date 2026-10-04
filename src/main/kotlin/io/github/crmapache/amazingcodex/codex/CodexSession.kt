@@ -54,6 +54,7 @@ internal class CodexSession(
      */
     model: String = "",
     effort: String = "",
+    contextMode: String = ModelContexts.STANDARD,
     permissionMode: String = "",
     /**
      * Which account this conversation runs on. Empty is Codex's ordinary sign-in.
@@ -154,6 +155,12 @@ internal class CodexSession(
 
     var effort: String = effort
         private set
+
+    var contextMode: String = ModelContexts.normalize(contextMode)
+        private set
+
+    @Volatile
+    private var executableStamp: CodexExecutable.Stamp? = null
 
     var permissionMode: String? = permissionMode.ifEmpty { null }?.let(PermissionModes::normalize)
         private set
@@ -867,6 +874,15 @@ internal class CodexSession(
         this.effort = EffortLevels.normalize(effort).ifEmpty { effort }
     }
 
+    fun setContextMode(mode: String) {
+        contextMode = ModelContexts.normalize(mode)
+    }
+
+    fun contextWindow(model: String = this.model, mode: String = contextMode): Int? =
+        ModelContexts.window(workingDirectory, model, mode)
+
+    fun executableChanged(): Boolean = executableStamp?.let { it != CodexExecutable.currentStamp() } == true
+
     /** Only before the process is up: a conversation opened from the history carries on at its own model. */
     fun adoptModel(model: String) {
         if (server != null) return
@@ -883,6 +899,16 @@ internal class CodexSession(
     fun setPermissionMode(requested: String, onApplied: (ModeChange) -> Unit) {
         val mode = PermissionModes.normalize(requested)
         permissionMode = mode
+        if (mode == PermissionModes.BYPASS) {
+            awaitingPermission
+                .filterValues { it.kind == Kind.COMMAND || it.kind == Kind.FILE || it.kind == Kind.PERMISSIONS }
+                .keys
+                .toList()
+                .forEach { requestId ->
+                    onPermissionWithdrawn(requestId)
+                    answerPermission(requestId, allow = true)
+                }
+        }
         onApplied(ModeChange(applied = true, mode = mode))
     }
 
@@ -893,7 +919,16 @@ internal class CodexSession(
         srv.request(
             "model/list",
             buildJsonObject { put("includeHidden", false) },
-            onResult = { onResult(CodexShapes.models(it, CodexSettings.effective(workingDirectory, "model"), CodexSettings.effective(workingDirectory, "model_reasoning_effort"))) },
+            onResult = {
+                onResult(
+                    CodexShapes.models(
+                        it,
+                        CodexSettings.effective(workingDirectory, "model"),
+                        CodexSettings.effective(workingDirectory, "model_reasoning_effort"),
+                        ModelContexts.read(workingDirectory),
+                    ),
+                )
+            },
             onError = { onFailure(it.message) },
         )
     }
@@ -1256,7 +1291,7 @@ internal class CodexSession(
             executable = executable,
             workingDirectory = workingDirectory,
             environment = CodexLaunch.environment(environment),
-            arguments = CodexLaunch.serverArguments(),
+            arguments = CodexLaunch.serverArguments(contextWindow()),
             onNotification = { method, params -> if (server === created) notification(method, params) },
             onServerRequest = { id, method, params -> if (server === created) serverRequest(epoch, id, method, params) },
             onDiagnostic = { line ->
@@ -1272,6 +1307,7 @@ internal class CodexSession(
         }
 
         server = created
+        executableStamp = CodexExecutable.stamp(executable)
         startedAt = System.currentTimeMillis()
         open = false
         // The settings every turn of this conversation goes by, read while the thread opens (see
@@ -1618,6 +1654,13 @@ internal class CodexSession(
 
         awaitingPermission[ours] = pending
         requestIds[AppServer.idText(id)] = ours
+        if (
+            PermissionModes.normalize(permissionMode.orEmpty()) == PermissionModes.BYPASS &&
+            (pending.kind == Kind.COMMAND || pending.kind == Kind.FILE || pending.kind == Kind.PERMISSIONS)
+        ) {
+            answerPermission(ours, allow = true)
+            return
+        }
         onToolPermission(pending.request)
     }
 

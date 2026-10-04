@@ -802,7 +802,7 @@ export const pt: Dict = {
     high: { sub: 'Raciocínio longo antes de agir. Mudanças em vários arquivos.' },
     medium: { sub: 'Equilibrado. Bom padrão para trabalhar em funcionalidades.' },
     low: { sub: 'Pensa o mínimo. Edições mecânicas e respostas rápidas.' },
-    tags: { ultra: 'ultra', slow: 'lento', default: 'padrão' },
+    tags: { ultra: 'ultra', slow: 'lento', default: 'padrão', configured: 'configurado' },
   },
 
   models: {
@@ -810,6 +810,8 @@ export const pt: Dict = {
     /** Under "default" once Codex's catalogue says which model that is - see modelOptions. */
     defaultNow: (model: string): string => `O modelo que o Codex escolhe quando nenhum é indicado. Agora, ${model}.`,
     unavailable: 'indisponível',
+    atCapacity: 'Este modelo está ocupado agora. Escolha outro modelo ou tente novamente em breve.',
+    chooseAnother: 'Escolher outro modelo',
     /** The line under a model the agent moved to by itself - see modelMenu. */
     switchedItself: 'O Codex trocou para este modelo sozinho.',
     custom: 'Adicionado por você',
@@ -1697,6 +1699,13 @@ export const pt: Dict = {
   selectors: {
     model: 'MODELO',
     effort: 'ESFORÇO',
+    context: {
+      label: 'CONTEXTO', standard: 'Padrão', long: 'Longo',
+      standardSub: (size: string): string => `Janela normal - ${size} disponíveis`,
+      longSub: (size: string): string => `Janela máxima - ${size} disponíveis. Pode gastar os limites mais rápido.`,
+      unavailable: 'Indisponível para este modelo',
+      hint: (name: string, size: string): string => `Janela de contexto: ${name} (${size})`,
+    },
     mode: 'MODO',
     modeHint: 'shift+tab',
   },

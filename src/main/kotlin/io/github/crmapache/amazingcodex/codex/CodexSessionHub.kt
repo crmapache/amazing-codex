@@ -122,9 +122,10 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
                 permissions.withdrawAll(sessionId)
                 sendProcessReplaced(sessionId)
             },
-            onBorn = { sessionId, effort, model, accountId ->
+            onBorn = { sessionId, effort, model, contextMode, accountId ->
                 sendEffort(sessionId, effort)
                 sendModel(sessionId, model)
+                sendContextMode(sessionId, contextMode)
                 sendAccount(sessionId, accountId)
                 // And the models that account may run. Once per account rather than per tab (see
                 // ProjectUsage.refreshModels): a conversation resumed onto the account it was billed to
@@ -488,6 +489,7 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
             // nothing here - there is nothing to say, and the setting is the honest answer for it.
             conversations.effort(sessionId)?.let { batch += effortMessage(sessionId, it) }
             conversations.model(sessionId)?.let { batch += modelMessage(sessionId, it) }
+            conversations.contextMode(sessionId)?.let { batch += contextModeMessage(sessionId, it) }
             conversations.conversationIdOf(sessionId)?.let { batch += conversationMessage(sessionId, it) }
             batch += accountMessage(sessionId, conversations.accountOf(sessionId))
         }
@@ -1157,7 +1159,7 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
             // Written down before the conversation is made, which is when it is read (see
             // CodexSessions.newSession) - and read again by the first message of a tab that holds only a
             // draft, which has no conversation to make yet.
-            val launch = SessionLaunch(model = tab.model, effort = tab.effort, mode = tab.mode)
+            val launch = SessionLaunch(model = tab.model, effort = tab.effort, mode = tab.mode, contextMode = tab.contextMode)
             if (!launch.isEmpty) conversations.rememberLaunch(tab.id, launch)
 
             val conversation = tab.conversationId
@@ -1209,7 +1211,7 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
 
         remembered[sessionId] = tab.copy(conversationId = null)
         conversations.close(sessionId)
-        val launch = SessionLaunch(model = tab.model, effort = tab.effort, mode = tab.mode)
+        val launch = SessionLaunch(model = tab.model, effort = tab.effort, mode = tab.mode, contextMode = tab.contextMode)
         if (!launch.isEmpty) conversations.rememberLaunch(sessionId, launch)
         if (!drafts.containsKey(sessionId) && !named) tabs.resetTitle(sessionId)
         resetJournal(sessionId)
@@ -1243,6 +1245,7 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
                 model = conversations.model(tab.id) ?: before?.model.orEmpty(),
                 effort = conversations.effort(tab.id) ?: before?.effort.orEmpty(),
                 mode = conversations.permissionMode(tab.id) ?: before?.mode.orEmpty(),
+                contextMode = conversations.contextMode(tab.id) ?: before?.contextMode.orEmpty(),
                 draft = drafts[tab.id],
             ).also { remembered[tab.id] = it.copy(draft = null) }
         }
@@ -1790,6 +1793,14 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         rememberTabs()
     }
 
+    fun changeContextMode(sessionId: String, mode: String, remember: Boolean = true) {
+        conversations.setContextMode(sessionId, mode, remember) { applied ->
+            sendContextMode(sessionId, applied)
+            usage.refreshContext(sessionId)
+            rememberTabs()
+        }
+    }
+
     /**
      * The effort a conversation works at right now - said on a change and at its birth, which is the only
      * moment anyone could learn what an untouched tab started on.
@@ -1809,6 +1820,17 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
             put("type", "effort")
             put("sessionId", sessionId)
             put("effort", effort)
+        }.toString()
+
+    private fun sendContextMode(sessionId: String, mode: String) {
+        emitLive(contextModeMessage(sessionId, mode))
+    }
+
+    private fun contextModeMessage(sessionId: String, mode: String): String =
+        buildJsonObject {
+            put("type", "contextMode")
+            put("sessionId", sessionId)
+            put("mode", mode)
         }.toString()
 
     /**
@@ -2062,6 +2084,7 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         // choice made in another tab.
         conversations.effort(sessionId)?.let { sendEffort(sessionId, it) }
         conversations.model(sessionId)?.let { sendModel(sessionId, it) }
+        conversations.contextMode(sessionId)?.let { sendContextMode(sessionId, it) }
         // And whose subscription pays for it now - the account chosen on this machine, whatever this
         // conversation was billed to when it was written. Said again because the reset wiped it, and a
         // tab left undrawn here would claim whatever the client happened to hold before.

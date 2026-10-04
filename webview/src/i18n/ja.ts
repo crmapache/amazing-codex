@@ -798,7 +798,7 @@ export const ja: Dict = {
     high: { sub: '動く前に長く考えます。複数ファイルの変更向け。' },
     medium: { sub: 'ちょうど中間。機能開発の既定値として手頃です。' },
     low: { sub: 'ほとんど考えません。機械的な修正と手早い返答向け。' },
-    tags: { ultra: 'ultra', slow: '低速', default: '標準' },
+    tags: { ultra: 'ultra', slow: '低速', default: '標準', configured: '設定済み' },
   },
 
   models: {
@@ -806,6 +806,8 @@ export const ja: Dict = {
     /** Under "default" once Codex's catalogue says which model that is - see modelOptions. */
     defaultNow: (model: string): string => `モデルを指定しないときに Codex が選ぶモデルです。現在は ${model}。`,
     unavailable: '利用できません',
+    atCapacity: 'このモデルは現在混み合っています。別のモデルを選ぶか、少し待ってからもう一度試してください。',
+    chooseAnother: '別のモデルを選ぶ',
     /** The line under a model the agent moved to by itself - see modelMenu. */
     switchedItself: 'Codex が自分でこのモデルに切り替えました。',
     custom: '自分で追加したもの',
@@ -1699,6 +1701,13 @@ export const ja: Dict = {
   selectors: {
     model: 'モデル',
     effort: '思考の深さ',
+    context: {
+      label: 'コンテキスト', standard: '標準', long: '長い',
+      standardSub: (size: string): string => `通常のウィンドウ - ${size} 利用可能`,
+      longSub: (size: string): string => `最大ウィンドウ - ${size} 利用可能。上限を早く消費する場合があります。`,
+      unavailable: 'このモデルでは利用できません',
+      hint: (name: string, size: string): string => `コンテキストウィンドウ: ${name} (${size})`,
+    },
     mode: 'モード',
     modeHint: 'shift+tab',
   },

@@ -915,7 +915,7 @@ export const ru: Dict = {
     high: { sub: 'Долгое рассуждение перед действием. Правки в нескольких файлах.' },
     medium: { sub: 'Золотая середина. Хороший вариант по умолчанию для работы над фичами.' },
     low: { sub: 'Почти без размышлений. Механические правки и быстрые ответы.' },
-    tags: { ultra: 'ultra', slow: 'медленно', default: 'по умолчанию' },
+    tags: { ultra: 'ultra', slow: 'медленно', default: 'по умолчанию', configured: 'из настроек' },
   },
 
   models: {
@@ -923,6 +923,8 @@ export const ru: Dict = {
     /** Under "default" once Codex's catalogue says which model that is - see modelOptions. */
     defaultNow: (model: string): string => `Модель, которую Codex берёт, когда модель не названа. Сейчас это ${model}.`,
     unavailable: 'недоступна',
+    atCapacity: 'Эта модель сейчас занята. Выберите другую модель или повторите попытку позже.',
+    chooseAnother: 'Выбрать другую модель',
     /** The line under a model the agent moved to by itself - see modelMenu. */
     switchedItself: 'Codex сам перешёл на эту модель.',
     custom: 'Добавлена вами',
@@ -1858,6 +1860,15 @@ export const ru: Dict = {
   selectors: {
     model: 'МОДЕЛЬ',
     effort: 'УСИЛИЕ',
+    context: {
+      label: 'КОНТЕКСТ',
+      standard: 'Обычный',
+      long: 'Большой',
+      standardSub: (size: string): string => `Обычное окно - доступно ${size}`,
+      longSub: (size: string): string => `Максимальное окно - доступно ${size}. Может быстрее расходовать лимит.`,
+      unavailable: 'Недоступно для этой модели',
+      hint: (name: string, size: string): string => `Окно контекста: ${name} (${size})`,
+    },
     mode: 'РЕЖИМ',
     modeHint: 'shift+tab',
   },

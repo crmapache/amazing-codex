@@ -469,6 +469,7 @@ export const ErrorRow = ({
   onDismiss,
   onOpenLink,
   signIn,
+  onChooseModel,
 }: {
   item: ErrorItem
   onDismiss: () => void
@@ -476,9 +477,12 @@ export const ErrorRow = ({
   onOpenLink: (url: string) => void
   /** The way back out of a dead sign-in, when this screen has one to offer - see SignInOffer. */
   signIn?: SignInOffer
+  /** The provider has no slot for this model right now - put the model picker under the refusal itself. */
+  onChooseModel?: (source: HTMLElement) => void
 }) => {
   const t = useT()
   const offered = item.signIn && signIn
+  const modelAtCapacity = /selected model is at capacity/i.test(item.message)
 
   return (
     <div className={s.error}>
@@ -487,8 +491,16 @@ export const ErrorRow = ({
             https://status.claude.com" asks one to go and look. So it stays a link, as in the agent's
             answer (see LinkedText). */}
         <span className={s.errorText}>
-          <LinkedText text={item.message} onOpenLink={onOpenLink} />
+          <LinkedText text={modelAtCapacity ? t.models.atCapacity : item.message} onOpenLink={onOpenLink} />
         </span>
+
+        {modelAtCapacity && onChooseModel ? (
+          <div className={s.errorActions}>
+            <button type="button" className={s.secondary} onClick={(event) => onChooseModel(event.currentTarget)}>
+              {t.models.chooseAnother}
+            </button>
+          </div>
+        ) : null}
 
         {offered ? (
           <>

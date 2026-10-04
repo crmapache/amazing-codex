@@ -26,6 +26,12 @@ import java.util.concurrent.ConcurrentHashMap
  */
 internal object CodexExecutable {
 
+    data class Stamp(val path: String, val modified: Long, val size: Long)
+
+    fun stamp(file: File): Stamp = Stamp(file.absolutePath, file.lastModified(), file.length())
+
+    fun currentStamp(): Stamp? = find()?.let(::stamp)
+
     fun find(): File? = fromCandidates() ?: fromSystem()
 
     /** Where we looked - for the "Codex not found" screen: the list shows why we missed. */

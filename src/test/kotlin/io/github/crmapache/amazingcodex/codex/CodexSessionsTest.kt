@@ -18,7 +18,7 @@ import io.github.crmapache.amazingcodex.codex.accounts.CodexAccounts
  */
 class CodexSessionsTest : BasePlatformTestCase() {
 
-    private fun sessions(onBorn: (String, String, String, String) -> Unit = { _, _, _, _ -> }) = CodexSessions(
+    private fun sessions(onBorn: (String, String, String, String, String) -> Unit = { _, _, _, _, _ -> }) = CodexSessions(
         workingDirectory = null,
         parentDisposable = testRootDisposable,
         onEvent = { _, _ -> },
@@ -97,7 +97,7 @@ class CodexSessionsTest : BasePlatformTestCase() {
     fun testAResumedConversationAdoptsItsOwnModelBeforeItWakes() {
         CodexPreferences.model = "gpt-5.1-codex-mini"
         val born = mutableMapOf<String, String>()
-        val sessions = sessions { sessionId, _, model, _ -> born[sessionId] = model }
+        val sessions = sessions { sessionId, _, model, _, _ -> born[sessionId] = model }
 
         sessions.resume("old", "conversation-1")
         assertEquals("gpt-5.1-codex-mini", born["old"])
@@ -114,7 +114,7 @@ class CodexSessionsTest : BasePlatformTestCase() {
 
     fun testEachConversationIsBornAtWhatWasChosenByThen() {
         val born = mutableMapOf<String, String>()
-        val sessions = sessions { sessionId, effort, _, _ -> born[sessionId] = effort }
+        val sessions = sessions { sessionId, effort, _, _, _ -> born[sessionId] = effort }
 
         CodexPreferences.effort = "high"
         sessions.setPermissionMode("first", PermissionModes.PLAN) {}

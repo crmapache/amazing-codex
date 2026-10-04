@@ -330,6 +330,10 @@ internal object RemoteCommands {
          */
         "nameSession",
         "setMode",
+        // The phone has neither a context-window selector nor a model catalogue to refresh. Leave both
+        // closed until that screen exists there, rather than admitting an undocumented remote control.
+        "setContextMode",
+        "refreshModels",
         "setDefaultMode",
         /**
          * The other two thirds of the same screen: what a new tab starts ON.

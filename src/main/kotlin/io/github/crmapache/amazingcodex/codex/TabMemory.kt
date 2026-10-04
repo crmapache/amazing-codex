@@ -60,6 +60,7 @@ internal class TabMemory(
         val model: String,
         val effort: String,
         val mode: String,
+        val contextMode: String = "",
         /** What was being written in its input field, as the panel sent it (see draftMemory.ts). */
         val draft: JsonObject?,
     )
@@ -194,6 +195,7 @@ internal class TabMemory(
                         if (tab.model.isNotEmpty()) put("model", tab.model)
                         if (tab.effort.isNotEmpty()) put("effort", tab.effort)
                         if (tab.mode.isNotEmpty()) put("mode", tab.mode)
+                        if (tab.contextMode.isNotEmpty()) put("contextMode", tab.contextMode)
                         tab.draft?.takeIf { it.toString().length <= MAX_DRAFT_CHARS }?.let { put("draft", it) }
                     }
                 }
@@ -220,6 +222,7 @@ internal class TabMemory(
                     model = tab.string("model"),
                     effort = tab.string("effort"),
                     mode = tab.string("mode"),
+                    contextMode = tab.string("contextMode"),
                     draft = tab["draft"] as? JsonObject,
                 )
             }

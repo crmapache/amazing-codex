@@ -217,6 +217,7 @@ export const isModelName = (name: string): boolean =>
 export interface ModelLevels {
   efforts: string[]
   defaultEffort: string
+  configured: boolean
 }
 
 /**
@@ -232,7 +233,11 @@ export const levelsOf = (models: ModelInfo[] | null, model: string): ModelLevels
       : models?.find((option) => sameModel(option.value, model) || sameModel(option.resolved, model))
   if (!known?.efforts?.length) return null
 
-  return { efforts: known.efforts, defaultEffort: known.defaultEffort ?? '' }
+  return {
+    efforts: known.efforts,
+    defaultEffort: known.defaultEffort ?? '',
+    configured: known.defaultEffortConfigured === true,
+  }
 }
 
 /**
@@ -253,7 +258,8 @@ export const effortFits = (levels: ModelLevels | null, effort: string): boolean 
  */
 export const effortOptions = (t: Dict, levels: ModelLevels | null = null): MenuOption[] => {
   const starts = levels?.defaultEffort || 'medium'
-  const tagOf = (id: string, own?: string): string | undefined => (id === starts ? t.effort.tags.default : own)
+  const tagOf = (id: string, own?: string): string | undefined =>
+    id === starts ? (levels?.configured ? t.effort.tags.configured : t.effort.tags.default) : own
 
   // The captions are Codex's own values and stay as they are in every language: what is being chosen here
   // is literally the word Codex is given.
@@ -268,6 +274,49 @@ export const effortOptions = (t: Dict, levels: ModelLevels | null = null): MenuO
   const own = levels ? all.filter((option) => levels.efforts.includes(option.id)) : all
 
   return [{ id: 'auto', label: 'auto', sub: t.effort.auto.sub }, ...own.map(({ tag, ...rest }) => (tag ? { ...rest, tag } : rest))]
+}
+
+export type ContextMode = 'standard' | 'long'
+
+export interface ContextLimits {
+  standard: number
+  long: number
+}
+
+export const contextLimits = (models: ModelInfo[] | null, model: string): ContextLimits | null => {
+  const known =
+    modelKey(model || DEFAULT_MODEL) === DEFAULT_MODEL
+      ? models?.find((option) => option.isDefault)
+      : models?.find((option) => sameModel(option.value, model) || sameModel(option.resolved, model))
+  if (!known?.standardContext || !known.longContext) return null
+  return { standard: known.standardContext, long: known.longContext }
+}
+
+export const formatContextWindow = (tokens: number): string => {
+  if (tokens >= 1_000_000) return `${Number((tokens / 1_000_000).toFixed(1))}M`
+  return `${Math.round(tokens / 1_000)}K`
+}
+
+export const contextOptions = (t: Dict, limits: ContextLimits | null): MenuOption[] => {
+  const standard = limits ? formatContextWindow(limits.standard) : '?'
+  const long = limits ? formatContextWindow(limits.long) : '?'
+  const unavailable = !limits || limits.long <= limits.standard
+
+  return [
+    { id: 'standard', label: t.selectors.context.standard, sub: t.selectors.context.standardSub(standard) },
+    {
+      id: 'long',
+      label: t.selectors.context.long,
+      sub: unavailable ? t.selectors.context.unavailable : t.selectors.context.longSub(long),
+      ...(unavailable ? { disabled: true } : {}),
+    },
+  ]
+}
+
+export const contextShortLabel = (mode: ContextMode, limits: ContextLimits | null, actualMax?: number): string => {
+  const size = actualMax || (mode === 'long' ? limits?.long : limits?.standard)
+  const name = mode === 'long' ? 'Long' : 'Std'
+  return size ? `${name} ${formatContextWindow(size)}` : name
 }
 
 /**

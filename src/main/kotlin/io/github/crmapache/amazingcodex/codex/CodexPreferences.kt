@@ -13,6 +13,7 @@ internal object CodexPreferences {
 
     data class Snapshot(
         val mode: String,
+        val contextMode: String,
         val newTabModel: String,
         val newTabEffort: String,
         val composerLayout: String,
@@ -28,6 +29,7 @@ internal object CodexPreferences {
 
     fun snapshot(): Snapshot = Snapshot(
         mode = mode,
+        contextMode = contextMode,
         newTabModel = newTabModel,
         newTabEffort = newTabEffort,
         composerLayout = composerLayout,
@@ -52,6 +54,10 @@ internal object CodexPreferences {
     var mode: String
         get() = read(MODE_KEY)
         set(value) = write(MODE_KEY, value)
+
+    var contextMode: String
+        get() = ModelContexts.normalize(read(CONTEXT_MODE_KEY))
+        set(value) = write(CONTEXT_MODE_KEY, ModelContexts.normalize(value))
 
     /**
      * The model a new tab is pinned to. Empty - the default - means "whatever was last chosen", which is
@@ -432,6 +438,7 @@ internal object CodexPreferences {
     private const val MODEL_KEY = "acx.model"
     private const val EFFORT_KEY = "acx.effort"
     private const val MODE_KEY = "acx.mode"
+    private const val CONTEXT_MODE_KEY = "acx.contextMode"
     private const val NEW_TAB_MODEL_KEY = "acx.newTab.model"
     private const val NEW_TAB_EFFORT_KEY = "acx.newTab.effort"
     private const val COMPOSER_LAYOUT_KEY = "acx.composerLayout"

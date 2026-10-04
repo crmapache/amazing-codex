@@ -1,5 +1,8 @@
 import {
   EFFORT_SAMPLE,
+  contextLimits,
+  contextShortLabel,
+  formatContextWindow,
   effortShortLabel,
   modeLabel,
   modeSample,
@@ -33,7 +36,7 @@ import { ThanksButton } from './Thanks'
 import { useT } from '../i18n'
 import type { Dict } from '../i18n/en'
 
-export type SelectorKind = 'model' | 'effort' | 'mode'
+export type SelectorKind = 'model' | 'effort' | 'context' | 'mode'
 
 /**
  * Where a selector's button stands - both vertical edges rather than one: the menu decides for itself
@@ -378,6 +381,8 @@ interface StatusBarProps {
   /** The model picked here that never came into force, while that holds - see Selectors. */
   stuckPick?: string
   effort: string
+  contextMode: 'standard' | 'long'
+  contextMax?: number
   mode: string
   /** The CLI's own list of models - the MODEL button measures its width by it, see modelSample. */
   models: ModelInfo[] | null
@@ -391,7 +396,7 @@ interface StatusBarProps {
 }
 
 /**
- * The bottom line: what we work with (the model, the effort, the mode) on the left, and at the row's far
+ * The bottom line: what we work with (the model, effort, context and mode) on the left, and at the row's far
  * end the usage with the bubble and the heart beside it (see Thanks.tsx). The branch and its PR have moved
  * from here into the header - one place for every layout rather than a copy per layout (see Header.tsx).
  *
@@ -415,6 +420,8 @@ export const StatusBar = ({
   switchedFrom,
   stuckPick,
   effort,
+  contextMode,
+  contextMax,
   mode,
   models,
   meters,
@@ -426,7 +433,7 @@ export const StatusBar = ({
   const room = useRef<HTMLDivElement>(null)
   const ruler = useRef<HTMLDivElement>(null)
   const fit = useSelectorsFit(room, ruler)
-  const selectors = { model, switchedFrom, stuckPick, effort, mode, models, onOpen }
+  const selectors = { model, switchedFrom, stuckPick, effort, contextMode, contextMax, mode, models, onOpen }
 
   const status = useRef<HTMLDivElement>(null)
   const end = useRef<HTMLDivElement>(null)
@@ -450,7 +457,7 @@ export const StatusBar = ({
             spare. */}
         <Selectors {...selectors} auto={fit !== 'squeezed'} terse={fit !== 'full'} />
 
-        {/* The ruler: the same three at their natural width, once with the captions and once without -
+        {/* The ruler: the same four at their natural width, once with the captions and once without -
             what the row is measured against (see useSelectorsFit). Drawn rather than added up so that
             it cannot drift from the buttons it stands for: the language, the longest model name and the
             IDE's font change both at once. Hidden from the eye, the pointer, the keyboard and the
@@ -639,6 +646,8 @@ interface SelectorsProps {
    */
   stuckPick?: string
   effort: string
+  contextMode: 'standard' | 'long'
+  contextMax?: number
   mode: string
   /** The CLI's own list of models: the MODEL button measures its width by it - see modelSample. */
   models?: ModelInfo[] | null
@@ -650,7 +659,7 @@ interface SelectorsProps {
 }
 
 /**
- * The whole row of three selectors. Assembled here rather than as a copy in every layout: their captions,
+ * The whole row of four selectors. Assembled here rather than as a copy in every layout: their captions,
  * tooltips and width samples are one and the same, and they must not drift apart between the status line,
  * compact and the side rail.
  */
@@ -659,6 +668,8 @@ export const Selectors = ({
   switchedFrom,
   stuckPick,
   effort,
+  contextMode,
+  contextMax,
   mode,
   models = null,
   auto = false,
@@ -667,6 +678,9 @@ export const Selectors = ({
 }: SelectorsProps) => {
   const t = useT()
   const grow = auto ? s.selectorAuto : ''
+  const limits = contextLimits(models, model ?? '')
+  const contextSize = contextMax || (contextMode === 'long' ? limits?.long : limits?.standard)
+  const contextName = contextMode === 'long' ? t.selectors.context.long : t.selectors.context.standard
 
   return (
     <>
@@ -693,6 +707,15 @@ export const Selectors = ({
         hint={t.status.effortHint(effort)}
         className={grow}
         onOpen={(anchor) => onOpen('effort', anchor)}
+      />
+      <Selector
+        terse={terse}
+        label={t.selectors.context.label}
+        value={contextShortLabel(contextMode, limits, contextMax)}
+        sample="Long 999K"
+        hint={t.selectors.context.hint(contextName, contextSize ? formatContextWindow(contextSize) : '?')}
+        className={grow}
+        onOpen={(anchor) => onOpen('context', anchor)}
       />
       <Selector
         terse={terse}

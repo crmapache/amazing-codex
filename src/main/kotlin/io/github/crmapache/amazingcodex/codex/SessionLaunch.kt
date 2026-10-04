@@ -20,6 +20,7 @@ internal data class SessionLaunch(
     val model: String = "",
     val effort: String = "",
     val mode: String = "",
+    val contextMode: String = "",
 ) {
 
     /**
@@ -32,5 +33,5 @@ internal data class SessionLaunch(
      * wrong subscription without a word.
      */
     val isEmpty: Boolean
-        get() = model.isEmpty() && effort.isEmpty() && mode.isEmpty()
+        get() = model.isEmpty() && effort.isEmpty() && mode.isEmpty() && contextMode.isEmpty()
 }

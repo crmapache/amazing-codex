@@ -106,6 +106,9 @@ export interface PanelState {
   effort?: string
   /** A chosen effort until the shell confirms it - as with the model and the mode. */
   pendingEffort?: string
+  /** The context window selected for this conversation and a choice waiting for a process restart. */
+  contextMode?: 'standard' | 'long'
+  pendingContextMode?: 'standard' | 'long'
 
   /**
    * The model the agent moved this conversation OFF by itself, when it did - and nothing while nobody
@@ -493,6 +496,8 @@ export type PanelAction =
    * shell sends is simply what is (see ClaudeSessionHub.changeEffort).
    */
   | { kind: 'effortApplied'; effort: string }
+  | { kind: 'contextModeRequested'; mode: 'standard' | 'long' }
+  | { kind: 'contextModeApplied'; mode: 'standard' | 'long' }
   /** The queue as the IDE now holds it - the whole list, from whichever window last changed it. */
   | { kind: 'queue'; items: QueuedMessage[] }
   /** A mark from the panel in the feed: that this conversation was branched off another, for instance. */

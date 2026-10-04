@@ -329,6 +329,10 @@ export interface ModelInfo {
   efforts?: string[]
   /** The level this model starts on when none is chosen. */
   defaultEffort?: string
+  defaultEffortConfigured?: boolean
+  /** Effective context windows after Codex's own safety margin. */
+  standardContext?: number
+  longContext?: number
 }
 
 /**
@@ -777,6 +781,7 @@ type ShellMessageBody =
         model: string
         effort: string
         mode: string
+        contextMode?: 'standard' | 'long'
         /**
          * What a new tab is PINNED to, beside what was last chosen above. Empty - the usual case -
          * means "whatever was last chosen", which is what the panel did before the setting existed (see
@@ -931,6 +936,7 @@ type ShellMessageBody =
       model: string
       effort: string
       mode: string
+      contextMode?: 'standard' | 'long'
       startingModel: string
       startingEffort: string
       unpinnedModel: string
@@ -1379,6 +1385,8 @@ type ShellMessageBody =
    * message says what is, not how the request went.
    */
   | { type: 'effort'; sessionId: string; effort: string }
+  /** The context window selected for this conversation. */
+  | { type: 'contextMode'; sessionId: string; mode: 'standard' | 'long' }
   /**
    * Which Claude account a conversation runs on - said at its birth, like the effort and the model.
    *
@@ -2203,6 +2211,8 @@ export type WebviewMessage =
   /** The model and the effort are held by the shell too: new conversations inherit them. */
   | { type: 'setModel'; sessionId: string; model: string }
   | { type: 'setEffort'; sessionId: string; effort: string }
+  | { type: 'setContextMode'; sessionId: string; mode: 'standard' | 'long' }
+  | { type: 'refreshModels'; sessionId: string }
   /** Where the input field sits - also a choice that outlives an IDE restart. */
   | { type: 'setComposerLayout'; layout: string }
   /** From how many lines a paste folds into a chip; '0' never folds, an empty string restores the default. */

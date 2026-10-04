@@ -8,8 +8,8 @@ import kotlin.test.assertTrue
 
 /**
  * What a conversation's process comes up with. Almost nothing travels on the command line any more -
- * `codex app-server` takes the briefing, the model and the permissions as JSON over stdin - so what is
- * held here is that it stays that way, and what the agent is told about where it runs.
+ * `codex app-server` takes the briefing, the model and the permissions as JSON over stdin. The context
+ * window is process configuration and is the deliberate exception.
  */
 class CodexLaunchTest {
 
@@ -19,8 +19,9 @@ class CodexLaunchTest {
      * there without a word, so nothing that could hold one goes on the command line at all.
      */
     @Test
-    fun `nothing a conversation is launched with travels on the command line`() {
+    fun `only a scalar context override travels on the command line`() {
         assertEquals(emptyList(), CodexLaunch.serverArguments())
+        assertEquals(listOf("-c", "model_context_window=872000"), CodexLaunch.serverArguments(872000))
     }
 
     // The map that comes in is the account's: it says whose credential the process opens and therefore

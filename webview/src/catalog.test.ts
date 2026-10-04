@@ -5,6 +5,9 @@ import { ru } from './i18n/ru'
 import { describe, expect, it } from 'vitest'
 import {
   columns,
+  contextLimits,
+  contextOptions,
+  contextShortLabel,
   effortFits,
   effortOptions,
   levelsOf,
@@ -421,6 +424,12 @@ describe('the reasoning levels of one model', () => {
     expect(options.find((option) => option.id === 'medium')?.tag).toBeUndefined()
   })
 
+  it('distinguishes a configured effort from the model default', () => {
+    const configured = [{ ...models[0], defaultEffort: 'max', defaultEffortConfigured: true }]
+    const options = effortOptions(en, levelsOf(configured, 'gpt-5.6-sol'))
+    expect(options.find((option) => option.id === 'max')?.tag).toBe(en.effort.tags.configured)
+  })
+
   it('reads "default" as the model Codex runs when none is named', () => {
     expect(levelsOf(models, 'default')?.efforts).toContain('ultra')
     expect(levelsOf(models, '')?.defaultEffort).toBe('medium')
@@ -446,5 +455,39 @@ describe('the reasoning levels of one model', () => {
     expect(effortFits(levels, 'high')).toBe(true)
     expect(effortFits(levels, 'auto')).toBe(true)
     expect(effortFits(null, 'ultra')).toBe(true)
+  })
+})
+
+describe('context windows', () => {
+  const models = [
+    {
+      value: 'gpt-6-astra',
+      label: 'GPT-6 Astra',
+      description: '',
+      resolved: 'gpt-6-astra',
+      isDefault: true,
+      standardContext: 258_400,
+      longContext: 828_400,
+    },
+    {
+      value: 'gpt-5.5',
+      label: 'GPT-5.5',
+      description: '',
+      resolved: 'gpt-5.5',
+      standardContext: 258_400,
+      longContext: 258_400,
+    },
+  ]
+
+  it('resolves the default model and shows the effective sizes', () => {
+    const limits = contextLimits(models, 'default')
+    expect(limits).toEqual({ standard: 258_400, long: 828_400 })
+    expect(contextShortLabel('standard', limits)).toBe('Std 258K')
+    expect(contextShortLabel('long', limits)).toBe('Long 828K')
+  })
+
+  it('disables long context when the model has no larger window', () => {
+    const options = contextOptions(en, contextLimits(models, 'gpt-5.5'))
+    expect(options.find((option) => option.id === 'long')?.disabled).toBe(true)
   })
 })

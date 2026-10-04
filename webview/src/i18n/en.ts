@@ -1045,7 +1045,7 @@ export const en = {
     high: { sub: 'Long reasoning before acting. Multi-file changes.' },
     medium: { sub: 'Balanced. Good default for feature work.' },
     low: { sub: 'Minimal thinking. Mechanical edits and quick answers.' },
-    tags: { ultra: 'ultra', slow: 'slow', default: 'default' },
+    tags: { ultra: 'ultra', slow: 'slow', default: 'default', configured: 'configured' },
   },
 
   models: {
@@ -1053,6 +1053,8 @@ export const en = {
     /** Under "default" once Codex's catalogue says which model that is - see modelOptions. */
     defaultNow: (model: string): string => `The model Codex picks when none is named - now ${model}.`,
     unavailable: 'unavailable',
+    atCapacity: 'This model is busy right now. Choose another model or try again shortly.',
+    chooseAnother: 'Choose another model',
     /** The line under a model the agent moved to by itself - see modelMenu. */
     switchedItself: 'Codex switched to this model on its own.',
     /** And under one somebody typed in themselves - it is in no catalogue, so it says where it is from. */
@@ -2171,6 +2173,15 @@ export const en = {
   selectors: {
     model: 'MODEL',
     effort: 'EFFORT',
+    context: {
+      label: 'CTX',
+      standard: 'Standard',
+      long: 'Long',
+      standardSub: (size: string): string => `Normal window - ${size} available`,
+      longSub: (size: string): string => `Largest window - ${size} available. May use plan limits faster.`,
+      unavailable: 'Not available for this model',
+      hint: (name: string, size: string): string => `Context window: ${name} (${size})`,
+    },
     /**
      * One word rather than "PERMISSION MODE". The label is the widest fixed thing on the button, and
      * eleven columns of it bought nothing: the value beside it already names the mode, and the hover

@@ -796,7 +796,7 @@ export const zh: Dict = {
     high: { sub: '动手之前长时间推理。适合多文件改动。' },
     medium: { sub: '折中。做功能开发时不错的默认值。' },
     low: { sub: '几乎不思考。适合机械改动和快速回答。' },
-    tags: { ultra: 'ultra', slow: '较慢', default: '默认' },
+    tags: { ultra: 'ultra', slow: '较慢', default: '默认', configured: '已配置' },
   },
 
   models: {
@@ -804,6 +804,8 @@ export const zh: Dict = {
     /** Under "default" once Codex's catalogue says which model that is - see modelOptions. */
     defaultNow: (model: string): string => `未指定模型时 Codex 选用的模型，目前是 ${model}。`,
     unavailable: '不可用',
+    atCapacity: '这个模型目前繁忙。请选择其他模型，或稍后重试。',
+    chooseAnother: '选择其他模型',
     /** The line under a model the agent moved to by itself - see modelMenu. */
     switchedItself: 'Codex 自己切换到了这个模型。',
     custom: '你自己加的',
@@ -1690,6 +1692,13 @@ export const zh: Dict = {
   selectors: {
     model: '模型',
     effort: '思考强度',
+    context: {
+      label: '上下文', standard: '标准', long: '长窗口',
+      standardSub: (size: string): string => `普通窗口 - 可用 ${size}`,
+      longSub: (size: string): string => `最大窗口 - 可用 ${size}。可能更快消耗额度。`,
+      unavailable: '此模型不可用',
+      hint: (name: string, size: string): string => `上下文窗口：${name} (${size})`,
+    },
     mode: '模式',
     modeHint: 'shift+tab',
   },

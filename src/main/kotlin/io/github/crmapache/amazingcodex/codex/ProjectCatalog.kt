@@ -233,6 +233,7 @@ internal class ProjectCatalog(
                 put("startingEffort", StartingChoice.effort())
                 put("unpinnedModel", StartingChoice.unpinnedModel())
                 put("unpinnedEffort", StartingChoice.unpinnedEffort())
+                put("contextMode", CodexPreferences.contextMode)
                 put(
                     "mode",
                     PermissionModes.resolve(
@@ -265,6 +266,7 @@ internal class ProjectCatalog(
                     // last pick after it - rather than the machine's pick alone (see StartingChoice).
                     put("model", StartingChoice.unpinnedModel())
                     put("effort", StartingChoice.unpinnedEffort())
+                    put("contextMode", preferences.contextMode)
                     // What a new tab is PINNED to, beside what was last chosen above. Two values rather
                     // than one, and the empty one is the point: empty means "whatever was last chosen"
                     // (see CodexPreferences.newTabModel).

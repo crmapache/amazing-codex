@@ -8,6 +8,9 @@ import {
   LAST_USED,
   effortFits,
   effortOptions,
+  contextLimits,
+  contextOptions,
+  type ContextMode,
   levelsOf,
   modeMenuOptions,
   modelMenu,
@@ -94,7 +97,7 @@ import { Tooltips } from './components/Tooltips'
 import { Remote, RemoteAbout, remoteState, type RemoteStatus } from './components/Remote'
 import { Accounts, accountState, currentAccountName, type AccountsState } from './components/Accounts'
 import { Sounds } from './components/Sounds'
-import { metersShown, StatusBar, UsageMeters, type Anchor, type SelectorKind } from './components/StatusBar'
+import { anchorFrom, metersShown, StatusBar, UsageMeters, type Anchor, type SelectorKind } from './components/StatusBar'
 import { countsAsThanks, SHARE, shareText, thanksMenu, thanksUrl } from './components/Thanks'
 import { SideQuestionCard } from './components/SideQuestion'
 import { ASIDE_COMMAND, NO_THREAD, sideHistory, sideThread, type SideAction, type SideThread } from './feed/side'
@@ -588,6 +591,7 @@ export const App = () => {
     // `auto`, the chip would name a level nothing runs at.
     effort: 'auto',
     mode: 'manual',
+    contextMode: 'standard' as ContextMode,
     newTabModel: '',
     newTabEffort: '',
     startingModel: '',
@@ -1375,6 +1379,7 @@ export const App = () => {
   // And the effort of this tab rather than of the window: the setting is only what a tab that has not
   // started yet will start on (see PanelState.effort).
   const effort = panel.pendingEffort ?? panel.effort ?? startingEffort
+  const contextMode = panel.pendingContextMode ?? panel.contextMode ?? prefs.contextMode
 
   // Which of the optional things the Shift+Tab cycle may reach: the permission for bypass arrives from
   // the shell, auto through a refusal of its own on the current model (see autoRefusedModels).
@@ -2115,6 +2120,7 @@ export const App = () => {
                 model: message.preferences?.model || current.model,
                 effort: message.preferences?.effort || current.effort,
                 mode: normalizeMode(message.preferences?.mode || current.mode),
+                contextMode: message.preferences?.contextMode ?? current.contextMode,
                 // Read as they come, empty included: empty is the answer here - "nothing pinned, follow
                 // the last pick" - and falling back to what stands would keep a pin somebody has just
                 // cleared (see newTabDefaults below, which is the same read).
@@ -3205,6 +3211,7 @@ export const App = () => {
               newTabModel: message.model,
               newTabEffort: message.effort,
               mode: normalizeMode(message.mode),
+              contextMode: message.contextMode ?? current.contextMode,
               model: message.unpinnedModel,
               effort: message.unpinnedEffort || current.effort,
               startingModel: message.startingModel,
@@ -3235,6 +3242,13 @@ export const App = () => {
             feed({
               session: message.sessionId,
               action: { kind: 'effortApplied', effort: message.effort },
+            })
+            break
+
+          case 'contextMode':
+            feed({
+              session: message.sessionId,
+              action: { kind: 'contextModeApplied', mode: message.mode },
             })
             break
 
@@ -4404,6 +4418,14 @@ export const App = () => {
     [active],
   )
 
+  const pickContextMode = useCallback(
+    (mode: ContextMode) => {
+      send({ type: 'setContextMode', sessionId: active, mode })
+      dispatchPanel({ session: active, action: { kind: 'contextModeRequested', mode } })
+    },
+    [active],
+  )
+
   /**
    * A side question - `/btw` (see feed/side). It stands in the tab's thread at once as "thinking" and goes
    * to the IDE with the thread's earlier answers, so a follow-up has them; [replaces] asks one that ended
@@ -5426,7 +5448,7 @@ export const App = () => {
   }
 
   /**
-   * Open the MODEL/EFFORT/MODE selector - or close it with a second click on the same button. The menu's
+   * Open the MODEL/EFFORT/CTX/MODE selector - or close it with a second click on the same button. The menu's
    * scrim deliberately does not cover the header and, in left/right, the top of the side rail, where these
    * buttons stand (see .menuScrim and Header.onOpenMenu - the same trick already stands there): otherwise
    * the button would not be clickable while its own popup is open. A second click on the button itself the
@@ -5438,8 +5460,19 @@ export const App = () => {
       return
     }
     setSideMenu((current) => ({ ...current, open: false }))
+    if (kind === 'model') send({ type: 'refreshModels', sessionId: active })
     setMenu({ kind, anchor })
   }
+
+  /** The capacity refusal is transient, so the useful recovery is one press to another model. */
+  const chooseAnotherModel = useCallback(
+    (source: HTMLElement) => {
+      setSideMenu((current) => ({ ...current, open: false }))
+      send({ type: 'refreshModels', sessionId: active })
+      setMenu({ kind: 'model', anchor: anchorFrom(source) })
+    },
+    [active],
+  )
 
   /** The same toggle for the heart at the row's far end, and for the same reason (see [openSelector]). */
   const openThanks = (anchor: Anchor) => {
@@ -5968,6 +6001,7 @@ export const App = () => {
               onPlanDecision={decidePlan}
               onDismissError={dismissError}
               onOpenLink={openLink}
+              onChooseModel={chooseAnotherModel}
               signIn={signInOffer}
               onCodexConfig={openCodexConfig}
               onReuse={reuseMessage}
@@ -6047,6 +6081,8 @@ export const App = () => {
             switchedFrom={panel.switchedFrom}
             stuckPick={panel.stuckPick}
             effort={effort}
+            contextMode={contextMode}
+            contextMax={panel.context?.max}
             mode={mode}
             onOpenSelector={openSelector}
             onOpenThanks={openThanks}
@@ -6146,7 +6182,7 @@ export const App = () => {
             }}
           />
 
-          {/* The tight layouts (compact and left/right) keep MODEL/EFFORT/MODE in the input field itself
+          {/* The tight layouts (compact and left/right) keep MODEL/EFFORT/CTX/MODE in the input field itself
               or in the side rail (see Composer) - they have no status row of their own under the field,
               the height is given to the feed. The branch and its PR live in the header (see Header),
               the same under any layout. */}
@@ -6156,6 +6192,8 @@ export const App = () => {
               switchedFrom={panel.switchedFrom}
               stuckPick={panel.stuckPick}
               effort={effort}
+              contextMode={contextMode}
+              contextMax={panel.context?.max}
               mode={mode}
               models={models}
               meters={metersNode}
@@ -6554,6 +6592,7 @@ export const App = () => {
                 panel.ownModel ?? startingModel,
                 tickedModel,
                 effort,
+                contextMode,
                 mode,
                 availableModes,
               ))}
@@ -6571,6 +6610,7 @@ export const App = () => {
             if (kind === 'model' && id === ADD_MODEL) setSideMenu({ open: true, screen: 'customModels' })
             else if (kind === 'model') pickModel(id)
             if (kind === 'effort') pickEffort(id)
+            if (kind === 'context') pickContextMode(id as ContextMode)
             if (kind === 'mode') setMode(id)
             // The page has no browser of its own to open anything with: the address goes out to the shell,
             // and the IDE opens it in the system browser - the same route the PR link takes.
@@ -6725,6 +6765,7 @@ const menuProps = (
   /** The model the agent moved the conversation to itself - then the tick stands on it (see modelMenu). */
   switched: string | undefined,
   effort: string,
+  contextMode: ContextMode,
   mode: string,
   availableModes: ModeAvailability,
 ): { title: string; hint?: string; width: number; options: MenuOption[]; selected: string; tick?: boolean } => {
@@ -6742,6 +6783,15 @@ const menuProps = (
       width: 320,
       options: effortOptions(t, levelsOf(models, switched ?? selectedModel)),
       selected: effort,
+    }
+  }
+
+  if (kind === 'context') {
+    return {
+      title: t.selectors.context.label,
+      width: 372,
+      options: contextOptions(t, contextLimits(models, switched ?? selectedModel)),
+      selected: contextMode,
     }
   }
 

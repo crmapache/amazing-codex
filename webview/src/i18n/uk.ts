@@ -917,7 +917,7 @@ export const uk: Dict = {
     high: { sub: 'Довге міркування перед дією. Правки в кількох файлах.' },
     medium: { sub: 'Золота середина. Хороший варіант за замовчуванням для роботи над фічами.' },
     low: { sub: 'Майже без роздумів. Механічні правки і швидкі відповіді.' },
-    tags: { ultra: 'ultra', slow: 'повільно', default: 'за замовчуванням' },
+    tags: { ultra: 'ultra', slow: 'повільно', default: 'за замовчуванням', configured: 'з налаштувань' },
   },
 
   models: {
@@ -925,6 +925,8 @@ export const uk: Dict = {
     /** Under "default" once Codex's catalogue says which model that is - see modelOptions. */
     defaultNow: (model: string): string => `Модель, яку Codex бере, коли модель не названо. Зараз це ${model}.`,
     unavailable: 'недоступна',
+    atCapacity: 'Ця модель зараз зайнята. Виберіть іншу модель або спробуйте ще раз трохи згодом.',
+    chooseAnother: 'Вибрати іншу модель',
     /** The line under a model the agent moved to by itself - see modelMenu. */
     switchedItself: 'Codex сам перейшов на цю модель.',
     custom: 'Додана вами',
@@ -1900,6 +1902,13 @@ export const uk: Dict = {
   selectors: {
     model: 'МОДЕЛЬ',
     effort: 'ЗУСИЛЛЯ',
+    context: {
+      label: 'КОНТЕКСТ', standard: 'Звичайний', long: 'Великий',
+      standardSub: (size: string): string => `Звичайне вікно - доступно ${size}`,
+      longSub: (size: string): string => `Максимальне вікно - доступно ${size}. Може швидше витрачати ліміт.`,
+      unavailable: 'Недоступно для цієї моделі',
+      hint: (name: string, size: string): string => `Вікно контексту: ${name} (${size})`,
+    },
     mode: 'РЕЖИМ',
     modeHint: 'shift+tab',
   },

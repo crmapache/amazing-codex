@@ -13,6 +13,7 @@ import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
@@ -60,7 +61,7 @@ internal class ProjectUsage(
     private fun currentAccount(): String = CodexAccounts.getInstance().currentId
 
     /** The model catalogue is asked for once per account - see [refreshModels]. */
-    private val modelsRequested = ConcurrentHashMap<String, Boolean>()
+    private val modelsRequested = ConcurrentHashMap<String, String>()
 
     /**
      * The usage windows get a round of their own, twice as often as the rest: they are visible on the
@@ -352,9 +353,10 @@ internal class ProjectUsage(
      */
     fun refreshModels(mainSession: String, account: String = currentAccount()) {
         if (!isLoggedIn()) return
+        val generation = CodexExecutable.currentStamp()?.toString().orEmpty()
         // Once per ACCOUNT, not once per panel: which models exist is decided by the plan, so an account
         // that has never been asked has to be, however many times another one has.
-        if (modelsRequested.putIfAbsent(account, true) != null) return
+        if (modelsRequested.put(account, generation) == generation) return
 
         val onError = { error: String ->
             thisLogger().info("Model catalogue unavailable: $error")
@@ -362,11 +364,11 @@ internal class ProjectUsage(
             // one unlucky ping (a cold CLI start that did not fit the timeout, a killed process) would
             // leave the panel with its hardcoded list of models until the project closes - along with
             // models this organization has long forbidden.
-            modelsRequested.remove(account)
+            modelsRequested.remove(account, generation)
             Unit
         }
 
-        val onResult = { payload: JsonObject -> sendModels(payload, account) }
+        val onResult = { payload: JsonObject -> sendModels(payload, account, generation) }
 
         if (sessions.isRunning(mainSession) && sessions.accountOf(mainSession) == account) {
             sessions.requestModels(mainSession, onResult = onResult, onFailure = onError)
@@ -381,11 +383,14 @@ internal class ProjectUsage(
         }
     }
 
-    private fun sendModels(payload: JsonObject, account: String) {
+    private fun sendModels(payload: JsonObject, account: String, generation: String) {
+        // An answer from the executable before an in-place CLI update must not overwrite the fresh
+        // catalogue requested after it (the two processes can finish in either order).
+        if (modelsRequested[account] != generation) return
         val models = payload.items("models") ?: run {
             // An answer without a list is the same miss as an error: we have no catalogue, and asking
             // for it once more should be possible.
-            modelsRequested.remove(account)
+            modelsRequested.remove(account, generation)
             return
         }
         thisLogger().info("Model catalogue from CLI: ${models.size} entries")
@@ -434,7 +439,10 @@ internal class ProjectUsage(
                             // only these - otherwise its chip names a level nothing is running at.
                             if (model["isDefault"]?.jsonPrimitive?.booleanOrNull == true) put("isDefault", true)
                             model["defaultEffort"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotEmpty() }?.let { put("defaultEffort", it) }
+                            model["defaultEffortConfigured"]?.jsonPrimitive?.booleanOrNull?.let { put("defaultEffortConfigured", it) }
                             (model["efforts"] as? JsonArray)?.takeIf { it.isNotEmpty() }?.let { put("efforts", it) }
+                            model["standardContext"]?.jsonPrimitive?.intOrNull?.let { put("standardContext", it) }
+                            model["longContext"]?.jsonPrimitive?.intOrNull?.let { put("longContext", it) }
                         }
                     }
                 }

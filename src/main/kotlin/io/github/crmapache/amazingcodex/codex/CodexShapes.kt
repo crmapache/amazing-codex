@@ -34,7 +34,12 @@ internal object CodexShapes {
      * `isDefault` and knows nothing of the config, so a menu labelled from it alone named one model over a
      * tab that ran another; the config's model, when it is on the list, is the default here instead.
      */
-    fun models(result: JsonElement?, configuredModel: String = "", configuredEffort: String = ""): JsonObject {
+    fun models(
+        result: JsonElement?,
+        configuredModel: String = "",
+        configuredEffort: String = "",
+        contexts: Map<String, ModelContexts.Limits> = emptyMap(),
+    ): JsonObject {
         val data = (result as? JsonObject)?.get("data") as? JsonArray ?: JsonArray(emptyList())
         val ids = data.mapNotNull { (it as? JsonObject)?.let { model -> AppServer.text(model["model"]).ifEmpty { AppServer.text(model["id"]) } } }
         val configured = configuredModel.takeIf { it.isNotEmpty() && it in ids }
@@ -57,8 +62,14 @@ internal object CodexShapes {
                             .map { AppServer.text((it as? JsonObject)?.get("reasoningEffort")) }
                             .filter { it.isNotEmpty() }
                         // What "auto" comes to on this model: the config's effort when the model takes it.
-                        put("defaultEffort", configuredEffort.takeIf { it in efforts } ?: AppServer.text(model["defaultReasoningEffort"]))
+                        val configuredLevel = configuredEffort.takeIf { it in efforts }
+                        put("defaultEffort", configuredLevel ?: AppServer.text(model["defaultReasoningEffort"]))
+                        if (configuredLevel != null) put("defaultEffortConfigured", true)
                         putJsonArray("efforts") { efforts.forEach { add(JsonPrimitive(it)) } }
+                        contexts[id]?.let { limits ->
+                            put("standardContext", limits.standardEffective)
+                            put("longContext", limits.longEffective)
+                        }
                     }
                 }
             }

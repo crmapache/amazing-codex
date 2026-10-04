@@ -96,6 +96,8 @@ interface FeedProps {
   onDismissError: (id: string) => void
   /** Open a link from the agent's answer in the system browser. */
   onOpenLink: (url: string) => void
+  /** A provider has no slot for the selected model, so the error row can open the model picker itself. */
+  onChooseModel?: (source: HTMLElement) => void
   /**
    * The way back out of a turn that died on the sign-in - see SignInOffer and ErrorItem.signIn.
    *
@@ -205,6 +207,7 @@ export const Feed = ({
   onPlanDecision,
   onDismissError,
   onOpenLink,
+  onChooseModel,
   signIn,
   onCodexConfig,
   onReuse,
@@ -832,6 +835,7 @@ export const Feed = ({
               onPlanDecision={onPlanDecision}
               onDismissError={onDismissError}
               onOpenLink={onOpenLink}
+              onChooseModel={onChooseModel}
               signIn={signIn}
               onCodexConfig={onCodexConfig}
               onReuse={onReuse}
@@ -899,6 +903,7 @@ interface ItemViewProps {
   onPlanDecision: (itemId: string, decision: 'approve' | 'keepPlanning') => void
   onDismissError: (id: string) => void
   onOpenLink: (url: string) => void
+  onChooseModel?: (source: HTMLElement) => void
   /** The way back out of a dead sign-in - see FeedProps.signIn. */
   signIn?: SignInOffer
   /** The screen of Codex's own settings - see FeedProps.onCodexConfig. */
@@ -937,6 +942,7 @@ const ItemView = memo(({
   onPlanDecision,
   onDismissError,
   onOpenLink,
+  onChooseModel,
   signIn,
   onCodexConfig,
   onReuse,
@@ -1040,6 +1046,7 @@ const ItemView = memo(({
           onDismiss={() => onDismissError(item.id)}
           onOpenLink={onOpenLink}
           signIn={signIn}
+          onChooseModel={onChooseModel}
         />
       )
 
