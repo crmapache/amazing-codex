@@ -227,7 +227,38 @@ const EXTENSION = /\.([A-Za-z][A-Za-z0-9]{0,14})$/
  */
 export const fileRef = (text: string, bare = true, known: KnownFiles = NOTHING_KNOWN): FileRef | null => {
   const trimmed = text.trim().replace(EDGES, '')
-  if (!isOpenablePath(trimmed)) return null
+  return reference(trimmed, bare, known, false)
+}
+
+/**
+ * A file explicitly named as a markdown link's destination. Its delimiters already separate it from
+ * prose, so spaces, parentheses and names without an extension belong to the path rather than a guess
+ * about a word. Network paths and address schemes are still refused before anything reaches the IDE.
+ */
+export const fileLinkRef = (destination: string): FileRef | null => {
+  if (destination.startsWith('#')) return null
+
+  const anchor = /#L(\d+)(?:C(\d+))?(?:-L(\d+)(?:C(\d+))?)?$/.exec(destination)
+  if (!anchor) return reference(destination, true, NOTHING_KNOWN, true)
+
+  const ref = reference(destination.slice(0, anchor.index), true, NOTHING_KNOWN, true)
+  const line = number(anchor[1])
+  if (!ref || line === undefined) return null
+
+  const column = number(anchor[2])
+  const endLine = number(anchor[3])
+  const endColumn = number(anchor[4])
+  return {
+    path: ref.path,
+    line,
+    ...(column === undefined ? {} : { column }),
+    ...(endLine === undefined ? {} : { endLine }),
+    ...(endColumn === undefined ? {} : { endColumn }),
+  }
+}
+
+const reference = (trimmed: string, bare: boolean, known: KnownFiles, explicit: boolean): FileRef | null => {
+  if (!isOpenablePath(trimmed) || CONTROL.test(trimmed)) return null
 
   const at = AT_LINE.exec(trimmed)
   const line = at ? Number(at[1]) : undefined
@@ -237,7 +268,7 @@ export const fileRef = (text: string, bare = true, known: KnownFiles = NOTHING_K
   const endColumn = number(at?.[4])
   const path = at ? trimmed.slice(0, at.index) : trimmed
 
-  if (!path || FORBIDDEN.test(path)) return null
+  if (!path || (explicit ? /[*?"<>|]/.test(path) : FORBIDDEN.test(path))) return null
 
   const drive = DRIVE.test(path)
   // A colon anywhere else is not a path's - it is a label, a time, a ratio.
@@ -259,12 +290,14 @@ export const fileRef = (text: string, bare = true, known: KnownFiles = NOTHING_K
       return { path, folder: true }
     }
 
-    // A last segment without an extension is a directory, or a word we cannot tell from one.
-    if (!extension) return null
+    // In prose a last segment without an extension is a directory, or a word we cannot tell from one.
+    // An explicit markdown destination already says it names a file.
+    if (!extension && !explicit) return null
 
     // A separator or a line number makes the shape a path by itself; a bare name has to earn it by its
     // extension, or every `state.items` in an answer becomes a link to a file that was never there.
-    const shaped = separated || named || (bare && KNOWN_EXTENSIONS.has(extension))
+    const shaped = explicit || separated || named ||
+      (bare && extension !== undefined && KNOWN_EXTENSIONS.has(extension))
     if (!shaped) return null
   }
 

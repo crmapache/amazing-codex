@@ -1,4 +1,5 @@
 import type { Paragraph, TableAlign, TableData, TextPart } from './types'
+import { fileLinkRef } from './paths'
 
 /**
  * The panel indents no deeper: it is sometimes narrow, and a fourth nesting level would eat more room
@@ -410,6 +411,41 @@ export const linkify = (text: string): TextPart[] => {
  */
 const BOLD_RUN = /\*\*([^*]+)\*\*/
 
+/** A closed link destination: angle brackets allow spaces; parentheses in a path or URL must balance. */
+const linkDestination = (line: string, start: number): { href: string; end: number } | null => {
+  if (line[start] === '<') {
+    const close = line.indexOf('>', start + 1)
+    if (close < 0 || line[close + 1] !== ')') return null
+
+    const href = line.slice(start + 1, close)
+    if (!href || /[\r\n<>]/.test(href)) return null
+
+    return { href, end: close + 2 }
+  }
+
+  let depth = 0
+  let href = ''
+  for (let index = start; index < line.length; index++) {
+    const character = line.charAt(index)
+    if (/[\s<>]/.test(character)) return null
+
+    if (character === '\\' && /[()]/.test(line[index + 1] ?? '')) {
+      href += line.charAt(++index)
+      continue
+    }
+
+    if (character === '(') depth++
+    if (character === ')') {
+      if (depth === 0) return href ? { href, end: index + 1 } : null
+      depth--
+    }
+
+    href += character
+  }
+
+  return null
+}
+
 /**
  * A formula written inline - `$...$` or `\(...\)` - once its delimiters have already matched: the piece
  * to draw it as, or how much of the match to give back as text when it turns out not to be one after all.
@@ -501,7 +537,7 @@ export const parseInline = (line: string): TextPart[] => {
       BOLD_RUN,
       /\*([^*\s](?:[^*]*[^*\s])?)\*/,
       /_([^_\s](?:[^_]*[^_\s])?)_/,
-      /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/,
+      /\[([^\]\n]+)\](\()/,
       /(https?:\/\/\S+)/,
       /(?<!\\)\$((?:\\\$|[^$\s])(?:(?:\\\$|[^$\n])*(?:\\\$|[^$\s]))?)\$/,
       /\\\(([^\n]+?)\\\)/,
@@ -545,8 +581,17 @@ export const parseInline = (line: string): TextPart[] => {
       }
       last = end
     } else if (match[8] !== undefined) {
-      parts.push({ text: match[7] ?? match[8], href: match[8] })
-      last = match.index + match[0].length
+      const destination = linkDestination(line, pattern.lastIndex)
+      if (destination) {
+        const { href, end } = destination
+        const supported = /^https?:\/\/[^\s<>]+$/.test(href) || fileLinkRef(href) !== null
+        parts.push(supported ? { text: match[7] ?? '', href } : { text: line.slice(match.index, end) })
+        last = end
+        pattern.lastIndex = end
+      } else {
+        parts.push({ text: match[0] })
+        last = pattern.lastIndex
+      }
     } else if (match[9] !== undefined) {
       const href = trimUrlPunctuation(match[9])
       parts.push({ text: href, href })

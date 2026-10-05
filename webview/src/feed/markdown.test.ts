@@ -111,6 +111,72 @@ describe('parseInline', () => {
       { text: ' is ready' },
     ])
   })
+
+  it('reads the local demo-page link from the reported answer', () => {
+    const path = '/Users/max/Documents/Projects/js-rich-body-highlighter/mask-demo-dist/index.html'
+    expect(parseInline(`[Демо-страница](${path}) - открой в браузере, сервер не нужен.`)).toEqual([
+      { text: 'Демо-страница', href: path },
+      { text: ' - открой в браузере, сервер не нужен.' },
+    ])
+  })
+
+  it.each([
+    '/Users/max/notes.md:12:3',
+    'src/App.tsx#L12',
+    './src/App.tsx',
+    '../README.md',
+    '~/.claude/settings.json',
+    'C:\\project\\main.kt:12',
+    'Makefile',
+  ])('reads an explicit file destination: %s', (path) => {
+    expect(parseInline(`[open](${path})`)).toEqual([{ text: 'open', href: path }])
+  })
+
+  it('reads an angle-wrapped path with spaces without losing its label', () => {
+    expect(parseInline('see [My report](</Users/max/My Project/report.md:3>) here')).toEqual([
+      { text: 'see ' },
+      { text: 'My report', href: '/Users/max/My Project/report.md:3' },
+      { text: ' here' },
+    ])
+  })
+
+  it.each(['/tmp/demo(v2).html', 'https://example.com/foo(bar(baz))'])('balances parentheses in %s', (href) => {
+    expect(parseInline(`[open](${href}) next`)).toEqual([{ text: 'open', href }, { text: ' next' }])
+  })
+
+  it('reads escaped parentheses in a file destination', () => {
+    expect(parseInline('[open](/tmp/demo\\(v2\\).html)')).toEqual([{ text: 'open', href: '/tmp/demo(v2).html' }])
+  })
+
+  it('keeps multiple links and their surrounding emphasis separate', () => {
+    expect(parseInline('**[file](src/App.tsx:12)** and [docs](https://example.com)')).toEqual([
+      { text: 'file', href: 'src/App.tsx:12', strong: true },
+      { text: ' and ' },
+      { text: 'docs', href: 'https://example.com' },
+    ])
+  })
+
+  it.each([
+    'javascript:alert(1)',
+    'data:text/html,hello',
+    'file:///tmp/demo.html',
+    '//attacker.example/share/demo.html',
+    '\\\\attacker.example\\share\\demo.html',
+    '#top',
+    '/tmp/demo.html\u0000',
+  ])('keeps an unsupported destination as text: %s', (href) => {
+    const source = `[open](${href})`
+    expect(parseInline(source)).toEqual([{ text: source }])
+  })
+
+  it.each(['[open](/tmp/demo.html', '[open](</tmp/my demo.html', '[open](/tmp/demo(v2).html'])(
+    'keeps an unfinished streaming link as text: %s',
+    (source) => expect(parseInline(source)).toEqual([{ text: source }]),
+  )
+
+  it('does not parse a local link written as inline code', () => {
+    expect(parseInline('`[open](/tmp/demo.html)`')).toEqual([{ text: '[open](/tmp/demo.html)', code: true }])
+  })
 })
 
 describe('parseParagraphs', () => {

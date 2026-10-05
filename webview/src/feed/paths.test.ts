@@ -1,5 +1,45 @@
 import { describe, expect, it } from 'vitest'
-import { fileRef, isOpenablePath, knownFiles, withFileRefs } from './paths'
+import { fileLinkRef, fileRef, isOpenablePath, knownFiles, withFileRefs } from './paths'
+
+describe('an explicit markdown destination', () => {
+  it('preserves spaces and punctuation that belong to a file name', () => {
+    expect(fileLinkRef('/Users/max/My Project/demo(v2).html:12:3')).toEqual({
+      path: '/Users/max/My Project/demo(v2).html',
+      line: 12,
+      column: 3,
+    })
+  })
+
+  it('accepts an extensionless file without loosening guesses in prose', () => {
+    expect(fileLinkRef('Makefile')).toEqual({ path: 'Makefile' })
+    expect(fileRef('Makefile')).toBeNull()
+    expect(fileRef('state.items')).toBeNull()
+  })
+
+  it('reads a line anchor and its selection range', () => {
+    expect(fileLinkRef('src/App.tsx#L12C3-L18C7')).toEqual({
+      path: 'src/App.tsx',
+      line: 12,
+      column: 3,
+      endLine: 18,
+      endColumn: 7,
+    })
+    expect(fileLinkRef('src/App.tsx#L12')).toEqual({ path: 'src/App.tsx', line: 12 })
+  })
+
+  it.each([
+    'javascript:alert(1)',
+    'https://example.com/a.ts',
+    '//host/share/a.ts',
+    '\\\\host\\share\\a.ts',
+    '\nsrc/a.ts',
+    'src/a.ts\u0000',
+    '#top',
+  ])(
+    'refuses destinations that must not reach the editor: %s',
+    (href) => expect(fileLinkRef(href)).toBeNull(),
+  )
+})
 
 /**
  * What a click on a piece of an answer does hangs on this rule alone: a path opens in the editor, anything

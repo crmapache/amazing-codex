@@ -1,6 +1,6 @@
 import { Reveal } from 'smooth-stream-text/react'
 import { createElement, useEffect, useState } from 'react'
-import { fileRef } from '../../feed/paths'
+import { fileLinkRef, fileRef } from '../../feed/paths'
 import { parseInline } from '../../feed/markdown'
 import type { Paragraph, TableAlign, TableData, TextPart } from '../../feed/types'
 import { copyToClipboard } from '../../clipboard'
@@ -212,6 +212,17 @@ const PartView = ({
 
   if (part.href) {
     const href = part.href
+    const ref = fileLinkRef(href)
+    if (ref) {
+      // Without an editor the target still has to be readable and copyable, rather than just its label.
+      const fallback = <Piece reveal={reveal} className={emphasis}>{`${part.text} (${href})`}</Piece>
+      return (
+        <PathLink run={{ text: part.text, ref }} fallback={fallback}>
+          <Piece reveal={reveal} className={emphasis}>{part.text}</Piece>
+        </PathLink>
+      )
+    }
+
     return (
       <a
         href={href}

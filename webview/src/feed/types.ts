@@ -77,7 +77,7 @@ export interface TextPart {
    * itself, and the one place that needs them back - a copy - puts them back (see partsText).
    */
   math?: boolean
-  /** The URL, when the piece is a link (a markdown link or a bare http/https address in the text). */
+  /** A link's destination: a local path in markdown, or a markdown/bare http/https address. */
   href?: string
 }
 

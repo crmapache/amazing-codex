@@ -15,12 +15,12 @@ import s from '../feed.module.css'
  * answers, which are markdown (see Markdown), and the lines shown exactly as they came - a person's own
  * message, the text of an error (see LinkedText).
  */
-export const PathLink = ({ run, children }: { run: TextRun; children?: React.ReactNode }) => {
+export const PathLink = ({ run, children, fallback }: { run: TextRun; children?: React.ReactNode; fallback?: React.ReactNode }) => {
   const t = useT()
   const openFile = useOpenFile()
   const ref = run.ref
 
-  if (!ref || !openFile) return <>{children ?? run.text}</>
+  if (!ref || !openFile) return <>{fallback ?? children ?? run.text}</>
 
   // What the click does, in the words of the thing it does it to - the hover on a path is the one place
   // that says so before it happens. The flag itself stays here: the IDE asks the disk rather than us.
