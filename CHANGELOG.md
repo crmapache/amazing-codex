@@ -5,6 +5,12 @@ Marketplace and the IDE's update dialog show, so every release lists only its ow
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-10-05
+
+- Fixed: links to local files appeared with their Markdown brackets and could not be clicked. Only web addresses were recognized; file links now open in the IDE, including paths with spaces, parentheses and line numbers. On the phone, the label and path stay readable text.
+- Fixed: web links with parentheses could open an incomplete address. Parentheses inside a link are now kept as part of the address.
+- Remote access: reload the phone client after updating the plugin to load this release's client.
+
 ## [0.2.4] - 2026-10-04
 
 - Fixed: new chats and forks could silently switch to Auto instead of keeping the selected mode. A missing mode selection was treated as Auto; new chats now use the saved default and forks keep their parent's mode.
@@ -88,7 +94,8 @@ Marketplace and the IDE's update dialog show, so every release lists only its ow
 - Added: search, prompt improvement, conversation titles and scenario writing run as short-lived,
   read-only Codex threads that leave nothing in the history.
 
-[Unreleased]: https://github.com/crmapache/amazing-codex/compare/0.2.4...HEAD
+[Unreleased]: https://github.com/crmapache/amazing-codex/compare/0.2.5...HEAD
+[0.2.5]: https://github.com/crmapache/amazing-codex/compare/0.2.4...0.2.5
 [0.2.4]: https://github.com/crmapache/amazing-codex/compare/0.2.3...0.2.4
 [0.2.3]: https://github.com/crmapache/amazing-codex/compare/0.2.2...0.2.3
 [0.2.2]: https://github.com/crmapache/amazing-codex/compare/0.2.1...0.2.2
