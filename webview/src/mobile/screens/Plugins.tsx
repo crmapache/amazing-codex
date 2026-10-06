@@ -1,8 +1,9 @@
 import { useState } from 'react'
-import type { AvailablePluginInfo, InstalledPluginInfo, PluginMarketplaceInfo } from '../../protocol'
+import type { AvailablePluginInfo, InstalledPluginInfo, PluginMarketplaceInfo, PluginAppsInfo } from '../../protocol'
 import { Back } from './Back'
 import m from '../mobile.module.css'
 import { useT } from '../../i18n'
+import { PluginApplications, PluginAppsNotice } from '../../components/PluginApplications/PluginApplications'
 
 type Tab = 'installed' | 'browse' | 'markets'
 
@@ -13,6 +14,7 @@ interface PluginsProps {
   marketplaces: PluginMarketplaceInfo[] | null
   project: string
   onBack: () => void
+  apps: PluginAppsInfo | null
 }
 
 /**
@@ -27,7 +29,7 @@ interface PluginsProps {
  * Three tabs rather than three screens, because they are three views of one list and switching between
  * them is the comparison a person came to make.
  */
-export const Plugins = ({ installed, available, marketplaces, project, onBack }: PluginsProps) => {
+export const Plugins = ({ installed, available, marketplaces, project, onBack, apps }: PluginsProps) => {
   const t = useT()
   const [tab, setTab] = useState<Tab>('installed')
   const [query, setQuery] = useState('')
@@ -65,6 +67,7 @@ export const Plugins = ({ installed, available, marketplaces, project, onBack }:
 
       <div className={m.pageList}>
         <p className={m.screenNote}>{t.mobile.plugins.readOnly}</p>
+        {tab === 'installed' && <PluginAppsNotice state={apps} />}
 
         {installed === null && <p className={m.empty}>{t.common.loading}</p>}
 
@@ -76,12 +79,13 @@ export const Plugins = ({ installed, available, marketplaces, project, onBack }:
               {installed.map((plugin) => (
                 <div key={plugin.id} className={`${m.pluginRow} ${plugin.enabled ? '' : m.pluginRowOff}`}>
                   <span className={`${m.dot} ${plugin.enabled ? m.dotLive : ''}`} />
-                  <span className={m.pluginText}>
+                  <div className={m.pluginText}>
                     <span className={m.pluginName}>{plugin.id}</span>
                     <span className={m.pluginMeta}>
                       {[plugin.version, plugin.scope].filter(Boolean).join(' · ')}
                     </span>
-                  </span>
+                    <PluginApplications group={apps?.plugins.find((group) => group.pluginId === plugin.id)} />
+                  </div>
                   <span className={plugin.enabled ? m.pluginOn : m.pluginOff}>
                     {plugin.enabled ? t.mobile.plugins.on : t.mobile.plugins.off}
                   </span>

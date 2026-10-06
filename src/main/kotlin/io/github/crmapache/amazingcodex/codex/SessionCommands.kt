@@ -594,6 +594,12 @@ internal class SessionCommands(private val hub: CodexSessionHub) {
 
             "pluginList" -> hub.catalog.listPlugins()
 
+            "pluginAppsRefresh" -> hub.catalog.apps.refresh(sessionId)
+
+            "pluginAppConnect" -> hub.catalog.apps.connect(sessionId, field("plugin"), field("app"))
+
+            "pluginAppCancel" -> hub.catalog.apps.cancel(sessionId)
+
             "pluginInstall" -> hub.catalog.pluginAction(field("plugin"), CodexPlugin::install)
 
             "pluginUninstall" -> hub.catalog.pluginAction(field("plugin"), CodexPlugin::uninstall)

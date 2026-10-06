@@ -114,6 +114,7 @@ internal class CodexSession(
     private val onContext: (used: Int, max: Int) -> Unit = { _, _ -> },
     /** Codex told us the account's limits along the way - the rings move without asking. */
     private val onRateLimits: (JsonObject) -> Unit = {},
+    private val onAppAuthRequired: (String) -> Unit = {},
     /**
      * An MCP server of this process finished starting - came up, or failed. The MCP screen asks for the
      * list when it opens, and a server still starting then (Codex's own `codex_apps` takes seconds) would
@@ -937,6 +938,17 @@ internal class CodexSession(
         )
     }
 
+    fun readPluginApps(plugins: List<InstalledPlugin>, onResult: (List<PluginAppGroup>) -> Unit, onFailure: (String) -> Unit) {
+        val srv = server ?: return onFailure("no live session")
+        CodexApps.read(plugins, workingDirectory, { method, params, result, failure ->
+            val scoped = buildJsonObject {
+                params.forEach { (key, value) -> put(key, value) }
+                if (method.startsWith("app/") && open) conversationId?.let { put("threadId", it) }
+            }
+            srv.request(method, scoped, onResult = result, onError = { failure(it.message) })
+        }, onResult, onFailure)
+    }
+
     /**
      * This conversation's MCP servers: the live list from the process, the configuration from `codex mcp
      * list`, and what each server's start-up said - see CodexShapes.mcpStatus.
@@ -1554,6 +1566,7 @@ internal class CodexSession(
             }
 
             "item/completed" -> (params["item"] as? JsonObject)?.let { item ->
+                CodexApps.authenticationFailure(item)?.let(onAppAuthRequired)
                 val plan = stream.itemCompleted(item)
                 itemCalls.remove(AppServer.text(item["id"]))
                 plan?.let(::proposePlan)

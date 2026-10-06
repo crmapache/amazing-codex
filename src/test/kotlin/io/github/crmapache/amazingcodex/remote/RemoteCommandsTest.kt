@@ -75,6 +75,9 @@ class RemoteCommandsTest {
         assertFalse(RemoteCommands.allows("bash"))
         assertFalse(RemoteCommands.allows("setExecutablePath"))
         assertFalse(RemoteCommands.allows("pluginInstall"))
+        assertFalse(RemoteCommands.allows("pluginAppConnect"))
+        assertFalse(RemoteCommands.allows("pluginAppCancel"))
+        assertTrue(RemoteCommands.allows("pluginAppsRefresh"))
         assertFalse(RemoteCommands.allows("openExternal"))
     }
 

@@ -173,6 +173,7 @@ import type {
   McpServerInfo,
   ModelInfo,
   PluginMarketplaceInfo,
+  PluginAppsInfo,
   Scenario,
   ScenarioRun,
   ScenarioQueueState,
@@ -1068,6 +1069,7 @@ export const App = () => {
   const [pluginsLoading, setPluginsLoading] = useState(true)
   const [pluginsFetchedAt, setPluginsFetchedAt] = useState(0)
   const [pluginMessage, setPluginMessage] = useState<{ ok: boolean; text: string } | null>(null)
+  const [pluginApps, setPluginApps] = useState<Record<string, PluginAppsInfo>>({})
   /**
    * The feedback screen's draft. It lives here rather than inside the screen because the screen is
    * unmounted the moment one steps into the report's preview beside it (see the SideMenu block below) -
@@ -1333,6 +1335,10 @@ export const App = () => {
    * has two answers at once: the one that belongs here is the one paying for the tab being looked at.
    */
   const activeAccount = tabAccounts[active] ?? accounts?.current ?? ''
+
+  useEffect(() => {
+    if (sideMenu.open && sideMenu.screen === 'plugins') send({ type: 'pluginAppsRefresh', sessionId: active })
+  }, [active, activeAccount, sideMenu.open, sideMenu.screen])
   const usage = usageOf(usageBook, activeAccount)
   /** And its models: the catalogue belongs to the account, exactly as the figures do. */
   const models = modelBook[activeAccount] ?? null
@@ -2942,6 +2948,10 @@ export const App = () => {
             setPluginsAvailable(message.available)
             setPluginsLoading(false)
             setPluginsFetchedAt(Date.now())
+            break
+
+          case 'pluginApps':
+            setPluginApps((current) => ({ ...current, [message.sessionId]: message }))
             break
 
           case 'pluginActionResult':
@@ -6275,6 +6285,10 @@ export const App = () => {
             marketplaces={marketplaces}
             loading={pluginsLoading}
             message={pluginMessage}
+            apps={pluginApps[active]?.accountId === activeAccount ? pluginApps[active] : null}
+            onConnectApp={(plugin, app) => send({ type: 'pluginAppConnect', sessionId: active, plugin, app })}
+            onRefreshApps={() => send({ type: 'pluginAppsRefresh', sessionId: active })}
+            onCancelApp={() => send({ type: 'pluginAppCancel', sessionId: active })}
             onRefresh={() => {
               setPluginMessage(null)
               loadPlugins()

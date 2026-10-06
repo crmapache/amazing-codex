@@ -136,6 +136,7 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
             onContext = { sessionId, used, max -> usage.noteContext(sessionId, used, max) },
             onRateLimits = { sessionId, figures -> usage.noteLive(figures, conversations.accountOf(sessionId)) },
             onMcpSettled = { sessionId -> catalog.mcpSettled(sessionId) },
+            onAppAuthRequired = { sessionId, appId -> catalog.apps.needsAuth(sessionId, appId) },
         )
     }
 
@@ -2324,6 +2325,7 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
      * sign-in round comes round, or indefinitely with nothing else to prompt it.
      */
     fun accountsChanged() {
+        catalog.apps.accountChanged()
         accounts.sendList()
         auth.check()
     }
@@ -2342,11 +2344,13 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
      * account's.
      */
     fun accountsChangedElsewhere() {
+        catalog.apps.accountChanged()
         accounts.sendList(withHealth = false)
         newTabDefaultsChanged()
     }
 
     override fun dispose() {
+        catalog.apps.reset()
         clients.clear()
     }
 

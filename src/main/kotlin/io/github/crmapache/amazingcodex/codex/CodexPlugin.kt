@@ -91,8 +91,9 @@ internal object CodexPlugin {
         workingDirectory: String?,
         onResult: (List<InstalledPlugin>) -> Unit,
         onError: (String) -> Unit,
+        accountId: String = "",
     ) {
-        CodexCli.run(workingDirectory, listOf("plugin", "list", "--json"), onError = onError) { output ->
+        CodexCli.run(workingDirectory, listOf("plugin", "list", "--json"), accountId = accountId, onError = onError) { output ->
             // Codex answers with an object - `installed`, and `available` only when asked for it.
             val parsed = runCatching {
                 val element = Json.parseToJsonElement(output)

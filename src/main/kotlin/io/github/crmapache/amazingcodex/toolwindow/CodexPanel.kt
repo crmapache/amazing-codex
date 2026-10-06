@@ -1036,6 +1036,8 @@ internal class CodexPanel(
                     // no good.
                     webview?.repaintWhole()
 
+                    hub.catalog.apps.returnedToIde()
+
                     val sessionId = hub.catalog.pendingMcpRefreshSessionId ?: return
                     if (System.currentTimeMillis() > hub.catalog.pendingMcpRefreshUntil) return
                     hub.catalog.refreshMcp(sessionId)

@@ -15,6 +15,14 @@ import kotlin.test.assertTrue
  */
 class RemoteFeedTest {
 
+    @Test
+    fun `plugin app states reach the project subscription without connection URLs`() {
+        val message = """{"type":"pluginApps","sessionId":"main","accountId":"account-1","phase":"ready","plugins":[{"pluginId":"example@catalog","apps":[{"id":"a","canConnect":true,"needsAuth":true,"callable":true}]}]}"""
+        assertEquals("pluginApps", RemoteFeed.projectFact(message))
+        assertEquals(message, RemoteFeed.forPhone("pluginApps", message).message)
+        assertFalse(message.contains("installUrl"))
+    }
+
     private fun agentLine(sessionId: String, replay: Boolean = false): String {
         val flag = if (replay) ""","replay":true""" else ""
         return """{"seq":7,"at":1,"type":"agent","sessionId":"$sessionId"$flag,"event":{"type":"assistant"}}"""

@@ -577,6 +577,7 @@ internal object RemoteFeed {
         MCP_SERVERS,
         "mcpActionResult",
         PLUGINS,
+        "pluginApps",
         "pluginActionResult",
         MARKETPLACES,
         "accounts",

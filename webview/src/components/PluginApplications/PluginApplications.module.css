@@ -1,0 +1,38 @@
+.apps {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding-block: 8px;
+  border-top: 1px solid var(--acc-line);
+  overflow-wrap: anywhere;
+}
+
+.name { color: var(--acc-fg); font-weight: 500; }
+.note { color: var(--acc-fg-faint); font-size: 11px; line-height: 1.45; }
+.error { color: var(--acc-warn); font-size: 11px; overflow-wrap: anywhere; }
+
+.button {
+  align-self: flex-start;
+  min-height: var(--acc-hit, 24px);
+  padding: 4px 10px;
+  border: 1px solid var(--acc-line);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--acc-fg);
+  font: inherit;
+  cursor: pointer;
+  transition: background 160ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+.button:disabled { cursor: not-allowed; opacity: 0.5; }
+@media (hover: hover) { .button:not(:disabled):hover { background: var(--acc-bg-hover); } }
+.button:not(:disabled):active { background: var(--acc-bg-control-hover); }
+.button:focus-visible { outline: 2px solid var(--acc-accent); outline-offset: 2px; }

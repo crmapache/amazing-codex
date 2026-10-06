@@ -210,6 +210,7 @@ internal object UsageFeatures {
         "renameSession",
         "mcpList",
         "pluginList",
+        "pluginAppsRefresh",
         "marketplaceList",
         "scenarios",
         "scenarioFetch",
@@ -298,7 +299,7 @@ internal object UsageFeatures {
         "mcpAdd", "mcpRemove", "mcpReconnect", "mcpAuthenticate" -> "mcp_manage"
         // Installing and removing only. "pluginEnable" and "pluginDisable" stand for nothing, for the reason
         // "stopTask" does: Codex cannot switch a plugin on or off, and the IDE says so (see CodexPlugin.enable).
-        "pluginInstall", "pluginUninstall", "marketplaceAdd", "marketplaceRemove" -> "plugins_manage"
+        "pluginInstall", "pluginUninstall", "pluginAppConnect", "pluginAppCancel", "marketplaceAdd", "marketplaceRemove" -> "plugins_manage"
         "accountAdd" -> "account_add"
         "accountUse" -> "account_switch"
         "feedbackSend" -> "feedback_sent"

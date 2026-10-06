@@ -7,6 +7,7 @@ import type {
   InstalledPluginInfo,
   McpServerInfo,
   PluginMarketplaceInfo,
+  PluginAppsInfo,
   Scenario,
   ShellMessage,
 } from '../protocol'
@@ -261,6 +262,7 @@ export const App = () => {
     Record<string, { installed: InstalledPluginInfo[]; available: AvailablePluginInfo[] }>
   >({})
   const [markets, setMarkets] = useState<Record<string, PluginMarketplaceInfo[]>>({})
+  const [pluginApps, setPluginApps] = useState<Record<string, PluginAppsInfo>>({})
   const [accounts, setAccounts] = useState<Record<string, AccountsState>>({})
   const [accountNote, setAccountNote] = useState('')
 
@@ -825,6 +827,11 @@ export const App = () => {
         ...current,
         [agentId]: { installed: message.installed, available: message.available },
       }))
+      return
+    }
+
+    if (message.type === 'pluginApps') {
+      if (message.sessionId === 'main') setPluginApps((current) => ({ ...current, [`${agentId}:${projectKey}`]: message }))
       return
     }
 
@@ -1609,6 +1616,7 @@ export const App = () => {
       if (at === 'mcp') askMcp(agentId, projectKey)
       if (at === 'plugins') {
         command(agentId, projectKey, { type: 'pluginList' })
+        command(agentId, projectKey, { type: 'pluginAppsRefresh' })
         command(agentId, projectKey, { type: 'marketplaceList' })
       }
       if (at === 'accounts') {
@@ -2290,6 +2298,7 @@ export const App = () => {
         <div className={m.screen}>
           <Plugins
             installed={held?.installed ?? null}
+            apps={pluginApps[`${screen.agentId}:${screen.projectKey}`] ?? null}
             available={held?.available ?? []}
             marketplaces={markets[screen.agentId] ?? null}
             project={projectNameOf(projects, screen.agentId, screen.projectKey)}

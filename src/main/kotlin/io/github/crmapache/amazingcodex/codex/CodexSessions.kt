@@ -110,6 +110,7 @@ internal class CodexSessions(
     private val onRateLimits: (sessionId: String, usage: JsonObject) -> Unit = { _, _ -> },
     /** An MCP server of a conversation finished starting - see CodexSession.onMcpSettled. */
     private val onMcpSettled: (sessionId: String) -> Unit = {},
+    private val onAppAuthRequired: (sessionId: String, appId: String) -> Unit = { _, _ -> },
 ) : Disposable {
 
     private val sessions = ConcurrentHashMap<String, CodexSession>()
@@ -690,6 +691,18 @@ internal class CodexSessions(
     /** A conversation that definitely has a process: we start one and wake it if need be. */
     private fun awake(sessionId: String): CodexSession = session(sessionId).also { it.wake() }
 
+    /** A live thread publishes its refreshed tools in place; an empty tab needs only a control process. */
+    fun readPluginApps(sessionId: String, plugins: List<InstalledPlugin>, onResult: (List<PluginAppGroup>) -> Unit, onFailure: (String) -> Unit) {
+        val live = sessions[sessionId]?.takeIf { it.isRunning }
+        if (live != null) return live.readPluginApps(plugins, onResult, onFailure)
+        CodexOneShot.run(workingDirectory, accountId = accountOf(sessionId), timeoutMs = 120_000,
+            label = "plugin-apps", onError = onFailure) { srv, done, fail ->
+            CodexApps.read(plugins, workingDirectory, { method, params, result, failure ->
+                srv.request(method, params, onResult = result, onError = { failure(it.message) })
+            }, { done(); onResult(it) }, fail)
+        }
+    }
+
     /**
      * A question beside the conversation - see [CodexSession.askAside].
      *
@@ -1194,6 +1207,7 @@ internal class CodexSessions(
             onContext = { used, max -> if (current()) onContext(sessionId, used, max) },
             onRateLimits = { usage -> onRateLimits(sessionId, usage) },
             onMcpSettled = { if (current()) onMcpSettled(sessionId) },
+            onAppAuthRequired = { app -> if (current()) onAppAuthRequired(sessionId, app) },
         ).also { slot[0] = it }
     }
 

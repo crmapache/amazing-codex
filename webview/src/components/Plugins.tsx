@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { AvailablePluginInfo, InstalledPluginInfo, PluginMarketplaceInfo } from '../protocol'
+import type { AvailablePluginInfo, InstalledPluginInfo, PluginMarketplaceInfo, PluginAppsInfo } from '../protocol'
 import { SkeletonBar } from './Skeleton'
 import s from './sideMenu.module.css'
 import { useT } from '../i18n'
 import { useFieldHistory } from '../hooks/useFieldHistory'
+import { PluginApplications, PluginAppsNotice } from './PluginApplications/PluginApplications'
 
 type View = 'installed' | 'browse' | 'marketplaces'
 
@@ -23,6 +24,10 @@ interface PluginsProps {
   onAddMarketplace: (source: string) => void
   onRemoveMarketplace: (name: string) => void
   onDismissMessage: () => void
+  apps: PluginAppsInfo | null
+  onConnectApp: (plugin: string, app: string) => void
+  onRefreshApps: () => void
+  onCancelApp: () => void
 }
 
 /** 1636 → "1.6k": the install counter runs to four digits while the card is narrow. */
@@ -54,6 +59,10 @@ export const Plugins = ({
   onAddMarketplace,
   onRemoveMarketplace,
   onDismissMessage,
+  apps,
+  onConnectApp,
+  onRefreshApps,
+  onCancelApp,
 }: PluginsProps) => {
   const t = useT()
   const [view, setView] = useState<View>('installed')
@@ -135,6 +144,8 @@ export const Plugins = ({
 
       {view === 'installed' ? (
         <>
+          <p className={s.screenNote}>{t.pluginApps.accountNote}</p>
+          <PluginAppsNotice state={apps} onRefresh={onRefreshApps} onCancel={onCancelApp} />
           {installed === null
             ? [0, 1, 2].map((row) => (
                 <div key={row} className={s.card}>
@@ -163,10 +174,13 @@ export const Plugins = ({
                 <div className={s.cardTop}>
                   <span className={`${s.cardDot} ${plugin.enabled ? s.cardDotOn : ''}`} />
                   <span className={s.cardName}>{plugin.id}</span>
+                  <span className={s.cardState}>{plugin.enabled ? t.pluginApps.enabled : t.pluginApps.disabled}</span>
                   <span className={s.cardMeta}>
                     {plugin.version} · {plugin.scope}
                   </span>
                 </div>
+                <PluginApplications group={apps?.plugins.find((group) => group.pluginId === plugin.id)}
+                  pendingAppId={apps?.pendingAppId} onConnect={(app) => onConnectApp(plugin.id, app)} />
                 <div className={s.cardActions}>
                   {plugin.enabled ? (
                     <button

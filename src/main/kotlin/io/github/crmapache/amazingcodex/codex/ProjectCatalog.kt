@@ -42,6 +42,26 @@ internal class ProjectCatalog(
     private val hub: CodexSessionHub,
 ) {
 
+    val apps = PluginAppsDesk(
+        accountOf = { hub.conversations.accountOf(it) },
+        currentAccount = { io.github.crmapache.amazingcodex.codex.accounts.CodexAccounts.getInstance().currentId },
+        read = { sessionId, result, failure ->
+            CodexPlugin.installed(project.basePath, onResult = { plugins ->
+                hub.conversations.readPluginApps(sessionId, plugins, result, failure)
+            }, onError = failure, accountId = hub.conversations.accountOf(sessionId))
+        },
+        browse = { url, current, opened, failure ->
+            ApplicationManager.getApplication().invokeLater {
+                if (!project.isDisposed && current()) {
+                    runCatching { BrowserUtil.browse(url) }.fold(onSuccess = { opened() }, onFailure = {
+                        failure(it.message ?: "The browser could not be opened.")
+                    })
+                }
+            }
+        },
+        emit = { hub.broadcastProject(it.toString()) },
+    )
+
     /**
      * The conversation and the deadline up to which returning focus to the IDE should nudge the MCP
      * status ahead of schedule - see [scheduleMcpRefresh].

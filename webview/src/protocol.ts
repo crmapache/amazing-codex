@@ -285,6 +285,27 @@ export interface InstalledPluginInfo {
   enabled: boolean
 }
 
+export interface PluginAppInfo {
+  id: string
+  name: string
+  canConnect: boolean
+  needsAuth: boolean
+  accessible?: boolean
+  enabled?: boolean
+  callable?: boolean
+  reason?: string
+}
+
+export interface PluginAppsInfo {
+  type: 'pluginApps'
+  sessionId: string
+  accountId: string
+  phase: 'stale' | 'loading' | 'ready' | 'opening' | 'waiting' | 'cancelled' | 'error'
+  pendingAppId?: string
+  error?: string
+  plugins: { pluginId: string; apps: PluginAppInfo[]; error?: string }[]
+}
+
 /** A plugin from a marketplace's catalogue, not installed yet - what the search runs over. */
 export interface AvailablePluginInfo {
   id: string
@@ -1632,6 +1653,7 @@ type ShellMessageBody =
   | { type: 'mcpSignIn'; name: string; url: string }
   /** The answer to pluginList: the installed ones plus the catalogue available from the marketplaces. */
   | { type: 'plugins'; installed: InstalledPluginInfo[]; available: AvailablePluginInfo[] }
+  | PluginAppsInfo
   /** The outcome of install/uninstall/enable/disable - all of them direct CLI subcommands. */
   | { type: 'pluginActionResult'; ok: boolean; message: string }
   /** The answer to marketplaceList - and to marketplaceAdd/marketplaceRemove. */
@@ -2461,6 +2483,9 @@ export type WebviewMessage =
    * the conversation.
    */
   | { type: 'pluginList' }
+  | { type: 'pluginAppsRefresh'; sessionId?: string }
+  | { type: 'pluginAppConnect'; sessionId: string; plugin: string; app: string }
+  | { type: 'pluginAppCancel'; sessionId: string }
   | { type: 'pluginInstall'; plugin: string }
   | { type: 'pluginUninstall'; plugin: string }
   | { type: 'pluginEnable'; plugin: string }

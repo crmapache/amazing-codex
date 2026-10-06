@@ -182,6 +182,7 @@ internal object RemoteCommands {
          * machine with two hundred plugins available would leave the screen with nothing at all.
          */
         "pluginList",
+        "pluginAppsRefresh",
         "marketplaceList",
         /**
          * Which Claude account the work is billed to.
@@ -562,6 +563,8 @@ internal object RemoteCommands {
          * is the question somebody in front of a conversation actually has.
          */
         "pluginInstall",
+        "pluginAppConnect",
+        "pluginAppCancel",
         "pluginUninstall",
         "pluginEnable",
         "pluginDisable",
