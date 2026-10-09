@@ -67,6 +67,12 @@ let drafted = 0
  * could not be seen without an IDE and a scenario written to stop.
  */
 const asked: Record<string, boolean> = {}
+
+/**
+ * Which runs have already met their account's limit - the third card moves the run to another account, the
+ * fourth finds no account with room and waits (see ScenarioEngine.ranIntoLimit). Once each, like the question.
+ */
+const limited: Record<string, 'moved' | 'waiting'> = {}
 /** Every third step opened answers "no record", so that state is seen rather than merely written. */
 let opened = 0
 /** Every third run picked up again is refused, so the refusal is seen as often as the pick-up. */
@@ -155,7 +161,7 @@ const REVIEW: Scenario = {
   createdAt: Date.now() - 9 * 24 * 60 * 60 * 1000,
   updatedAt: Date.now() - 2 * 24 * 60 * 60 * 1000,
   inputs: [
-    { id: 'i1', name: 'branch', label: 'Branch', placeholder: 'mzolotoi/checkout-totals', required: true },
+    { id: 'i1', name: 'branch', label: 'Branch', placeholder: 'alex/checkout-totals', required: true },
   ],
   head: {
     briefing:
@@ -228,8 +234,61 @@ const RELEASE: Scenario = {
   scope: 'user',
 }
 
+/**
+ * A long night: a loop of three cards that may go round five times between a stage before and one after -
+ * eighteen stops on the road of a going run. Here so that the road has something to fold on a narrow panel
+ * (see scenarios/roadmap.ts); the other two are as short as most real scenarios are.
+ */
+const PATROL: Scenario = {
+  version: 1,
+  id: 'night-patrol',
+  name: 'Night patrol',
+  createdAt: Date.now() - 20 * 24 * 60 * 60 * 1000,
+  updatedAt: Date.now() - 24 * 60 * 60 * 1000,
+  inputs: [{ id: 'p1', name: 'ticket', label: 'Ticket', placeholder: 'ACC-412', required: true }],
+  head: {
+    briefing: 'Take the ticket from a plan to a pull request, and go round the checks until nothing is left.',
+    model: '',
+    effort: '',
+    permissionMode: 'acceptEdits',
+    onQuestion: 'head',
+    retries: 2,
+  },
+  stages: [
+    {
+      id: 'p-plan',
+      title: 'Plan the ticket',
+      repeat: 1,
+      untilDone: false,
+      cards: [card('p-read', 'Read the ticket and plan', 'Read {{ticket}} and write a plan of the change.')],
+    },
+    {
+      id: 'p-round',
+      title: 'Build, review and fix',
+      repeat: 5,
+      untilDone: true,
+      cards: [
+        card('p-build', 'Build what the plan says', 'Build the next part of the plan.'),
+        card('p-review', 'Review the branch', 'Review what was built and write the findings down.'),
+        card('p-fix', 'Fix the findings', 'Fix what the review found.'),
+      ],
+    },
+    {
+      id: 'p-ship',
+      title: 'Ship it',
+      repeat: 1,
+      untilDone: false,
+      cards: [
+        card('p-pr', 'Open the pull request', 'Open a pull request for the branch.'),
+        card('p-deploy', 'Deploy and look at it', 'Deploy and check the change on the live site.'),
+      ],
+    },
+  ],
+  scope: 'project',
+}
+
 const reset = (): void => {
-  shelves = [structuredClone(REVIEW), structuredClone(RELEASE)]
+  shelves = [structuredClone(REVIEW), structuredClone(PATROL), structuredClone(RELEASE)]
   runs = [
     {
       id: 'run-yesterday',
@@ -243,7 +302,7 @@ const reset = (): void => {
       done: 7,
       failure: '',
       cost: 4.18,
-      inputs: { branch: 'mzolotoi/checkout-totals' },
+      inputs: { branch: 'alex/checkout-totals' },
     },
     {
       id: 'run-monday',
@@ -337,7 +396,7 @@ const blankRun = (scenario: Scenario, id: string, inputs: Record<string, string>
 /** A run of last night, whole: three passes of the loop, the last of them never needed. */
 const finishedRun = (): ScenarioRun => {
   const started = Date.now() - 26 * 60 * 60 * 1000
-  const run = blankRun(structuredClone(REVIEW), 'run-yesterday', { branch: 'mzolotoi/checkout-totals' })
+  const run = blankRun(structuredClone(REVIEW), 'run-yesterday', { branch: 'alex/checkout-totals' })
   const findings = '/tmp/acc/run-yesterday/findings.md'
 
   run.startedAt = started
@@ -361,9 +420,9 @@ const finishedRun = (): ScenarioRun => {
       slots: step.cardId === 'c-diff' ? ({} as Record<string, string>) : { findings },
       prompt:
         step.cardId === 'c-diff'
-          ? 'Read the diff of mzolotoi/checkout-totals against main and write down what it touches.'
+          ? 'Read the diff of alex/checkout-totals against main and write down what it touches.'
           : step.cardId === 'c-review'
-            ? `Review the changes on mzolotoi/checkout-totals and write every finding to ${findings}.`
+            ? `Review the changes on alex/checkout-totals and write every finding to ${findings}.`
             : `Fix the findings written in ${findings}. Leave the ones you disagree with.`,
       // Written the way a card really answers - in markdown, with a heading, code spans and a list - since
       // that is what the row has to make readable.
@@ -390,7 +449,7 @@ const finishedRun = (): ScenarioRun => {
     {
       at: started + 60_000,
       stepKey: '',
-      text: 'Read the briefing. This is a review of `mzolotoi/checkout-totals` at `fc649af`, and **nothing is to be pushed**.',
+      text: 'Read the briefing. This is a review of `alex/checkout-totals` at `fc649af`, and **nothing is to be pushed**.',
     },
     { at: started + 9 * 60 * 1000, stepKey: 's-round:c-review:1', text: `Pointing the reviewer at ${findings}, which is empty so far.` },
     {
@@ -567,16 +626,18 @@ const sendLive = (): void => {
 /**
  * What the IDE's own `summarise` builds, including where the run has got to.
  *
- * The half under `inputs` is what a card of a going run draws - the stage it is in, the card it is on,
- * what it has burnt and what it has stopped to ask - so a harness that left it out would show the one
- * band of the hub that this redesign is about as a row of blanks.
+ * The half under `inputs` is what a card of a going run draws - the stage it is in, its road, what it has
+ * burnt and what it has stopped to ask - so a harness that left it out would show the one band of the hub
+ * that this redesign is about as a row of blanks. The stage is the one of the first stop not over, as the
+ * IDE reads it, so the name is there before the first card begins.
  */
 const summarise = (run: ScenarioRun): ScenarioRunSummary => {
   const here =
     run.steps.find((step) => step.state === 'running' || step.state === 'asking' || step.state === 'judging') ??
     [...run.steps].reverse().find((step) => step.startedAt > 0)
-  const stage = run.snapshot.stages.findIndex((one) => one.id === here?.stageId)
-  const passes = stage >= 0 ? run.snapshot.stages[stage].repeat : 0
+  const over = (state: ScenarioRunStep['state']): boolean => state === 'done' || state === 'failed' || state === 'skipped'
+  const standing = run.steps.find((step) => !over(step.state)) ?? run.steps[run.steps.length - 1]
+  const stage = run.snapshot.stages.find((one) => one.id === standing?.stageId) ?? run.snapshot.stages[0]
 
   return {
     id: run.id,
@@ -592,13 +653,45 @@ const summarise = (run: ScenarioRun): ScenarioRunSummary => {
     cost: run.cost,
     inputs: run.inputs,
     tokens: run.tokens,
-    stage: stage >= 0 ? stage + 1 : 0,
-    stages: run.snapshot.stages.length,
+    idle: run.idle,
+    rested: run.rested,
+    restingSince: run.restingSince,
+    stageTitle: stage?.title ?? '',
+    roadmap:
+      run.state === 'done' || run.state === 'failed' || run.state === 'stopped'
+        ? []
+        : run.steps.map((step) => ({
+            state: step.state,
+            stage: run.snapshot.stages.findIndex((one) => one.id === step.stageId) + 1,
+            pass: step.pass,
+            title: step.title,
+          })),
     at: here?.title ?? '',
-    pass: passes > 1 ? (here?.pass ?? 0) : 0,
-    passes: passes > 1 ? passes : 0,
-    nudges: here?.nudges.length ?? 0,
     asking: run.question ? run.question.title || run.question.tool : '',
+    limit: run.limit,
+  }
+}
+
+/**
+ * The run's clock, kept the way the IDE keeps it (see RunClock.kt): standing still - a pause, a question
+ * for a person - stamps its start; going back to work adds its length to the run and to the card on the
+ * board. Everything else here is a few seconds long, so this is the one part of the clock worth seeing.
+ */
+const clockFollows = (run: ScenarioRun, resting: boolean): ScenarioRun => {
+  const since = run.restingSince ?? 0
+  if (resting) return since > 0 ? run : { ...run, restingSince: Date.now() }
+  if (since === 0) return run
+
+  const length = Math.max(0, Date.now() - since)
+  return {
+    ...run,
+    rested: (run.rested ?? 0) + length,
+    restingSince: 0,
+    steps: run.steps.map((one) =>
+      one.state === 'running' || one.state === 'asking' || one.state === 'paused' || one.state === 'judging'
+        ? { ...one, rested: (one.rested ?? 0) + length }
+        : one,
+    ),
   }
 }
 
@@ -662,7 +755,7 @@ const walk = (id: string, from = 0, startIn: 'run' | 'judge' = 'run'): void => {
     if (phase === 'run' && at === 1 && !asked[id]) {
       asked[id] = true
       keep({
-        ...run,
+        ...clockFollows(run, true),
         state: 'blocked',
         question: {
           stepKey: step.key,
@@ -677,6 +770,50 @@ const walk = (id: string, from = 0, startIn: 'run' | 'judge' = 'run'): void => {
             ? { ...one, state: 'asking', startedAt: Date.now(), conversationId: `conv-${one.key}` }
             : one,
         ),
+      })
+      return
+    }
+
+    /*
+     * The account runs out under the run, the way a long night does: the third card's turn is refused and the
+     * run goes on on another account with room, and at the fourth no account has room and it waits for the
+     * reset (see LimitRelief). The person sees why in the timeline, and Resume tries at once.
+     */
+    if (phase === 'run' && at === 2 && !limited[id]) {
+      limited[id] = 'moved'
+      keep({
+        ...run,
+        notes: [
+          ...run.notes,
+          {
+            at: Date.now(),
+            stepKey: step.key,
+            text: '',
+            who: 'panel',
+            move: { reason: 'limit', from: 'Main', to: 'Proton', window: 'five_hour', until: Date.now() + 52 * 60_000 },
+          },
+        ],
+      })
+      return
+    }
+    if (phase === 'run' && at === 3 && limited[id] === 'moved') {
+      limited[id] = 'waiting'
+      const until = Date.now() + 38 * 60_000
+      keep({
+        ...clockFollows(run, true),
+        state: 'paused',
+        limit: { account: 'Proton', window: 'five_hour', until },
+        steps: run.steps.map((one) => (one.key === step.key ? { ...one, state: 'paused', startedAt: Date.now() } : one)),
+        notes: [
+          ...run.notes,
+          {
+            at: Date.now(),
+            stepKey: step.key,
+            text: '',
+            who: 'panel',
+            move: { reason: 'limit', from: 'Proton', to: '', waits: true, window: 'five_hour', until },
+          },
+        ],
       })
       return
     }
@@ -1077,8 +1214,8 @@ export const answerScenarios = (message: WebviewMessage): void => {
     const run = records[message.runId]
     if (run?.question) {
       keep({
-        ...run,
-        state: 'running',
+        ...clockFollows(run, run.state === 'paused'),
+        state: run.state === 'paused' ? 'paused' : 'running',
         question: null,
         steps: run.steps.map((one) => (one.state === 'asking' ? { ...one, state: 'running' } : one)),
         notes: [
@@ -1090,13 +1227,82 @@ export const answerScenarios = (message: WebviewMessage): void => {
     return
   }
 
+  /*
+   * Words for the main thread: on the run as the person's at once, answered a moment later the way the IDE's
+   * head answers once it is free (see ScenarioEngine.deliverTold). While a step is being judged they wait first
+   * - the state worth seeing - and are read a beat later. Words that mention the card are passed on to it, so
+   * the line under the answer can be seen as well.
+   */
+  if (message.type === 'scenarioTell') {
+    const run = records[message.runId]
+    if (!run || !live.includes(run.id)) return send({ type: 'scenarioOutcome', ok: false, code: 'runOver' })
+    const stamp = (notes: ScenarioRun['notes']) => Math.max(Date.now(), ...notes.map((note) => note.at + 1))
+    const at = stamp(run.notes)
+    const board =
+      run.steps.find((one) => ['running', 'asking', 'judging', 'paused'].includes(one.state)) ??
+      run.steps.find((one) => one.state === 'waiting')
+    const stepKey = board?.key ?? ''
+    const busy = board?.state === 'judging'
+    keep({
+      ...run,
+      answering: !busy,
+      notes: [
+        ...run.notes,
+        {
+          at,
+          stepKey,
+          text: message.text,
+          who: 'person',
+          deliveredAt: busy ? 0 : at,
+          // The field for the eye, without the bytes of pasted pictures - as the IDE keeps it (see HeadMail.shown).
+          tokens: Array.isArray(message.tokens)
+            ? message.tokens.map((token: { kind: string; chip?: { data?: string } }) =>
+                token.kind === 'chip' && token.chip ? { ...token, chip: { ...token.chip, data: undefined } } : token,
+              )
+            : undefined,
+        },
+      ],
+    })
+
+    setTimeout(
+      () => {
+        const now = records[message.runId]
+        if (!now) return
+        const passOn = /card|карточ/i.test(message.text)
+        keep({
+          ...now,
+          answering: false,
+          notes: [
+            ...now.notes.map((note) =>
+              note.who === 'person' && note.at === at ? { ...note, deliveredAt: note.deliveredAt || Date.now() } : note,
+            ),
+            {
+              at: stamp(now.notes),
+              stepKey,
+              text: passOn
+                ? 'Understood. I have passed it on to the card at work, and I will judge it with that in mind.'
+                : 'Got it. That holds for every card I hand over and every verdict I give, to the end of the run.',
+              relayed: passOn ? message.text : undefined,
+            },
+          ],
+        })
+      },
+      busy ? 3200 : 1800,
+    )
+    return
+  }
+
   if (message.type === 'scenarioPause') {
     const run = records[message.runId]
     if (run) {
       keep({
-        ...run,
+        ...clockFollows(run, true),
         state: 'paused',
-        steps: run.steps.map((one) => (one.state === 'running' ? { ...one, state: 'paused' } : one)),
+        steps: run.steps.map((one) =>
+          one.state === 'running' || one.state === 'asking' || one.state === 'judging'
+            ? { ...one, state: 'paused' }
+            : one,
+        ),
       })
     }
     return
@@ -1105,10 +1311,14 @@ export const answerScenarios = (message: WebviewMessage): void => {
   if (message.type === 'scenarioResume') {
     const run = records[message.runId]
     if (run) {
+      // A pause lifted over a question nobody has answered goes back to waiting for it, and the clock with it.
+      const waits = run.question !== null
       keep({
-        ...run,
-        state: 'running',
-        steps: run.steps.map((one) => (one.state === 'paused' ? { ...one, state: 'running' } : one)),
+        ...clockFollows(run, waits),
+        // Resuming a run that waits out a limit tries at once, as the IDE does: the wait is over either way.
+        limit: undefined,
+        state: waits ? 'blocked' : 'running',
+        steps: run.steps.map((one) => (one.state === 'paused' ? { ...one, state: waits ? 'asking' : 'running' } : one)),
       })
     }
     return
@@ -1118,7 +1328,7 @@ export const answerScenarios = (message: WebviewMessage): void => {
     const run = records[message.runId]
     if (run) {
       keep({
-        ...run,
+        ...clockFollows(run, false),
         state: 'stopped',
         failure: 'stopped',
         finishedAt: Date.now(),
@@ -1185,6 +1395,12 @@ export const answerScenarios = (message: WebviewMessage): void => {
     // IDE works it out (see ScenarioDesk.carryOn).
     stepQueue()
     return
+  }
+
+  if (message.type === 'scenarioRunStar') {
+    if (live.includes(message.runId)) return send({ type: 'scenarioOutcome', ok: false, code: 'runBusy' })
+    runs = runs.map((one) => (one.id === message.runId ? { ...one, starred: message.starred } : one))
+    return sendList()
   }
 
   if (message.type === 'scenarioRunDelete') {

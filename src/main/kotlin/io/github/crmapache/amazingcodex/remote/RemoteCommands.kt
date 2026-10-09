@@ -52,6 +52,15 @@ internal object RemoteCommands {
         "sideQuestion",
         "sideQuestionCancel",
         /**
+         * Rewinding a conversation to one of the person's messages, and the dialog's question before it
+         * (see Rewind). No wider than `prompt` above: it changes what this same conversation remembers,
+         * which a message changes too, and the code part puts back only what the agent's own tools wrote -
+         * work a phone was already allowed to set going. The phone has the dialog at the message's three
+         * dots, where a quote and a fork already live.
+         */
+        "rewindPreview",
+        "rewind",
+        /**
          * Starting a conversation of one's own. Confirmed deliberately: a freshly started IDE has no
          * conversations at all, and a phone that cannot open one would show an empty project and be
          * useless precisely when it is wanted. It starts no more than sending a message does - that
@@ -234,7 +243,10 @@ internal object RemoteCommands {
          * without the rest of the form;
          * `scenarioDraft` and `scenarioDraftCancel` are a model writing one out of a sentence (a run
          * with read-only tools inside the project - see ScenarioAuthor); `scenarioRun` is play;
-         * `scenarioSchedule` and `scenarioUnschedule` are the hours; `scenarioRunDelete` is the history;
+         * `scenarioTell` is words for the main thread of a run that is going, which is the same door as
+         * `prompt` into a conversation that happens to be a run's;
+         * `scenarioSchedule` and `scenarioUnschedule` are the hours; `scenarioRunDelete` and `scenarioRunStar`
+         * are the history;
          * and `scenarioLog` is what one step actually said, handed over a page at a time at the size a
          * phone can carry (see ScenarioDesk.sendLog) rather than refused for being large.
          *
@@ -245,6 +257,7 @@ internal object RemoteCommands {
         "scenarioFetch",
         "scenarioOpen",
         "scenarioAnswer",
+        "scenarioTell",
         "scenarioPause",
         "scenarioResume",
         "scenarioContinue",
@@ -259,6 +272,7 @@ internal object RemoteCommands {
         "scenarioSchedule",
         "scenarioUnschedule",
         "scenarioRunDelete",
+        "scenarioRunStar",
         "scenarioLog",
         /*
          * The queue - rounds of work taken one at a time over one working copy (see ScenarioQueue).

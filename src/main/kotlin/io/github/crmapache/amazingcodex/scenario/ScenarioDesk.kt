@@ -14,6 +14,7 @@ import io.github.crmapache.amazingcodex.codex.CodexHistory
 import io.github.crmapache.amazingcodex.codex.CodexHome
 import io.github.crmapache.amazingcodex.codex.CodexPlugin
 import io.github.crmapache.amazingcodex.codex.EffortLevels
+import io.github.crmapache.amazingcodex.codex.ImageAttachment
 import io.github.crmapache.amazingcodex.codex.InstalledPlugin
 import io.github.crmapache.amazingcodex.codex.CodexSessionHub
 import io.github.crmapache.amazingcodex.codex.StartingChoice
@@ -31,6 +32,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
@@ -1034,6 +1036,19 @@ internal class ScenarioDesk(private val project: Project, private val hub: Codex
         }
     }
 
+    /**
+     * The person chose another account: every run going in this project goes there with them, as the tabs do
+     * (see ScenarioEngine.follow). A run that cannot be told is left where it is rather than taking the others
+     * down with it.
+     */
+    fun followAccount() {
+        val to = CodexAccounts.getInstance().currentId
+        live.values.toList().forEach { holder ->
+            runCatching { holder.engine.follow(to) }
+                .onFailure { thisLogger().warn("A scenario run could not follow the chosen account", it) }
+        }
+    }
+
     fun pause(runId: String) = live[runId]?.engine?.pause() ?: Unit
 
     fun resume(runId: String) = live[runId]?.engine?.resume() ?: Unit
@@ -1042,6 +1057,25 @@ internal class ScenarioDesk(private val project: Project, private val hub: Codex
 
     fun answer(runId: String, allow: Boolean, text: String) =
         live[runId]?.engine?.answer(allow, text) ?: Unit
+
+    /**
+     * Words from the person to the main thread of a run that is going (see ScenarioEngine.tell, HeadMail).
+     *
+     * A run that is no longer going is refused by name rather than in silence: its head reads nothing more,
+     * and the field the words were typed in has gone from the screen by the time this lands only if the
+     * screen heard about the ending first. The way on is the head's conversation opened as a chat.
+     */
+    fun tell(
+        clientId: String,
+        runId: String,
+        text: String,
+        images: List<ImageAttachment> = emptyList(),
+        tokens: JsonElement? = null,
+    ) {
+        if (text.isBlank() && images.isEmpty()) return
+        val engine = live[runId]?.engine
+        if (engine == null || !engine.tell(text, images, tokens)) outcome(clientId, ok = false, code = "runOver")
+    }
 
     /**
      * The whole record of one run: the live one from memory, an older one off the disk.
@@ -1073,6 +1107,21 @@ internal class ScenarioDesk(private val project: Project, private val hub: Codex
             // is - so it names the run rather than the project.
             if (live.containsKey(runId)) return@off outcome(clientId, ok = false, code = "runBusy")
             runs.delete(runId)
+            sendList()
+        }
+    }
+
+    /**
+     * The star on a past run (see ScenarioRun.starred).
+     *
+     * Refused on a run that is going: its record is the engine's to write, and the next write from memory
+     * would take the star straight back off. Only the table of finished runs offers it, so this is a phone
+     * and a desk racing a carry-on.
+     */
+    fun starRun(clientId: String, runId: String, starred: Boolean) {
+        off {
+            if (live.containsKey(runId)) return@off outcome(clientId, ok = false, code = "runBusy")
+            if (!runs.star(runId, starred)) return@off outcome(clientId, ok = false, code = "runGone")
             sendList()
         }
     }
@@ -1209,11 +1258,20 @@ internal class ScenarioDesk(private val project: Project, private val hub: Codex
         // What is going, to everybody, at a pace an eye can use - and cheaply enough to send it whole.
         if (now - lastLive >= LIVE_MS) sendLive()
 
+        /*
+         * To the disk when it moved - and every half a minute when it did not.
+         *
+         * A card in a long silent command moves nothing for an hour, and the record is the only witness of
+         * when the run was last alive: an IDE that goes away leaves it saying "running", and the sweep at
+         * the next start closes it at the moment it was last written (see RunStore.abandoned). Written only
+         * on change, a run killed an hour into such a command would be counted as working until morning -
+         * or, the other way round, its last hour would vanish from it.
+         */
         for ((_, holder) in holders) {
             synchronized(holder.lock) {
-                if (holder.dirty && now - holder.lastWrite >= WRITE_MS) {
+                if (now - holder.lastWrite >= if (holder.dirty) WRITE_MS else VOUCH_MS) {
                     holder.lastWrite = now
-                    runs.keep(holder.engine.run)
+                    runs.keep(holder.engine.run, now)
                 }
             }
         }
@@ -1375,6 +1433,9 @@ internal class ScenarioDesk(private val project: Project, private val hub: Codex
         const val QUEUE = "Scenario queue"
         const val REDRAW_MS = 250L
         const val WRITE_MS = 2_000L
+
+        /** How often a live run that has not moved is written anyway - see [pulse]. */
+        const val VOUCH_MS = 30_000L
 
         /** How often the short "what is going" frame goes out - see [sendLive]. */
         const val LIVE_MS = 1_000L

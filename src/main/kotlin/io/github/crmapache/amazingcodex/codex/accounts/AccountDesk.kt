@@ -500,7 +500,7 @@ internal class AccountDesk(
      * window would otherwise show the previous account's rings until somebody noticed.
      */
     private fun moveEverything() {
-        CodexSessionHub.everyHub { it.conversations.switchAllTo() }
+        CodexSessionHub.everyHub { it.followChosenAccount() }
         CodexSessionHub.everyHub { it.accountsChanged() }
     }
 

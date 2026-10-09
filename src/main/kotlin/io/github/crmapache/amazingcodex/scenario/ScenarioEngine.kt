@@ -3,13 +3,18 @@ package io.github.crmapache.amazingcodex.scenario
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.util.concurrency.AppExecutorUtil
+import io.github.crmapache.amazingcodex.codex.AccountUsage
 import io.github.crmapache.amazingcodex.codex.AgentStream
 import io.github.crmapache.amazingcodex.codex.CodexHistory
+import io.github.crmapache.amazingcodex.codex.CodexRateLimit
+import io.github.crmapache.amazingcodex.codex.accounts.CodexAccounts
 import io.github.crmapache.amazingcodex.codex.CodexSession
+import io.github.crmapache.amazingcodex.codex.ImageAttachment
 import io.github.crmapache.amazingcodex.codex.PermissionChannel
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -36,8 +41,8 @@ import kotlinx.serialization.json.jsonObject
  */
 internal class ScenarioEngine(
     private val workingDirectory: String?,
-    /** Whose subscription pays. Fixed for the run: the CLI reads its credentials once, at launch. */
-    private val accountId: String,
+    /** Whose subscription pays at the start - see the property of the same name. */
+    accountId: String,
     private val defaultModel: String,
     private val defaultEffort: String,
     start: ScenarioRun,
@@ -88,10 +93,49 @@ internal class ScenarioEngine(
     private val scenario = start.snapshot
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
+    /**
+     * Whose subscription pays now.
+     *
+     * It used to be fixed for the run, because the CLI reads its credential once, at launch - and so a run
+     * kept spending the account it started on after the person had chosen another one, until that account
+     * ran out under it (8 October: chosen away from at 21:32, run out at 22:12, the run written off). It
+     * follows the person's choice now the way every tab does (see [follow]), and leaves an account its
+     * limit refuses for one with room (see [ranIntoLimit]). A process still cannot change account: both
+     * are raised again over their own conversations (see [swap]).
+     */
+    @Volatile
+    private var accountId: String = accountId
+
+    /**
+     * Whether [accountId] is one the run moved to by itself because its own ran out, rather than the one
+     * the person chose. Only such an account is left again when its sign-in turns out to be dead (see
+     * [noticeLimit]): on the account a person chose, a dead sign-in is theirs to see and to renew.
+     */
+    private var borrowed = false
+
+    /**
+     * The two processes, and only these: what a process taken down or replaced still says on its way out is
+     * not heard (see [openHead]). Volatile because that is read on the processes' own reader threads.
+     */
+    @Volatile
     private var head: CodexSession? = null
+
+    @Volatile
     private var card: CodexSession? = null
 
+    /**
+     * What the engine is waiting for - and with it, whether the run's clock is running (see [restsFollow]).
+     *
+     * The clock hangs off the phase rather than off the places that pause and block, because the phase is
+     * the one thing every road through here sets: a pause lifted over a question, a question withdrawn
+     * under a pause, a card taken over while it stood on one. Remembering to start and stop a clock at each
+     * of those is a promise that breaks with the next road somebody adds.
+     */
     private var phase = Phase.OPENING
+        set(value) {
+            field = value
+            restsFollow(value)
+        }
 
     /** Where in [ScenarioRun.steps] the front of the work is. */
     private var at = 0
@@ -154,6 +198,26 @@ internal class ScenarioEngine(
     private var headCost = 0.0
     private var cardCost = 0.0
 
+    /**
+     * The helpers the card on the board started in the background, and what it said each time it ended a
+     * turn while they were still at work, oldest first.
+     *
+     * Such an ending is not the card's answer: the helpers' reports start its next turn by themselves, and
+     * the card is judged once it ends a turn with nobody left to wait for (see [turnOver]). What it said on
+     * the way is kept rather than dropped - the report can come before the wait as well as after it.
+     */
+    private var helpers = BackgroundWork()
+    private val heldEndings = mutableListOf<String>()
+
+    /** Everything the head is judging the card on right now - taken back if the card goes on working (see [onCardTurnStarted]). */
+    private var judged: List<String> = emptyList()
+
+    /**
+     * Whether the card ended its turn to wait for its helpers and has not started another since - the one
+     * state in which nothing on the card's side moves until a helper does (see [watchTheCard]).
+     */
+    private var cardWaits = false
+
     /** Set while an interrupt of ours is in flight, so the turn it ends is not read as an answer. */
     private var interrupting = false
 
@@ -183,7 +247,105 @@ internal class ScenarioEngine(
      */
     private var reasked = false
 
+    /**
+     * Whether a turn of the head's is in flight - one we asked for and have not had the end of, or one an
+     * interrupt has not finished closing.
+     *
+     * The run's own phases do not say it: a pause interrupts the head and the turn closes some time after, in
+     * PAUSED, and a card going back to work takes a verdict back the same way. Words for the head written over
+     * a turn still closing would be read as part of it (see HeadMail.way).
+     */
+    private var headTalking = false
+
+    /** Whether the head's turn in flight is it answering the person (see [deliverTold]). */
+    private var answeringPerson = false
+
+    /** The person's notes that turn carries, by their stamps - waiting again if it dies unanswered (see [raiseHead]). */
+    private var carrying: List<Long> = emptyList()
+
+    /** When the head was given the person's words, for the ceiling a silent head has (see [watchThePersonsTurn]). */
+    private var personAskedAt = 0L
+
+    /**
+     * Whether a question of the run's is waiting for the head to finish answering the person (see [askAgain]).
+     * The question itself is [pendingHead], as it is for a pause.
+     */
+    private var deferred = false
+
+    /** What the head passed on to a card that was paused at the time: said to it when the run resumes (see [passOn]). */
+    private var forCardOnResume = ""
+
+    /**
+     * Pictures the person pasted into what they wrote to the head, by the stamp of their note, until the head
+     * is given them (see [deliverTold]).
+     *
+     * Held here rather than on the note: the note is the record of the run, written on every change and sent
+     * to every screen, and a screenshot is a megabyte of base64 (see HeadMail.shown). An IDE that goes down
+     * before the head was free loses them and keeps the words - the words name every picture they had.
+     */
+    private val toldImages = mutableMapOf<Long, List<ImageAttachment>>()
+
+    /** The pictures the head's conversation with the person carries - given back with the words if it dies (see [raiseHead]). */
+    private var carryingImages: Map<Long, List<ImageAttachment>> = emptyMap()
+
     private var clock: ScheduledFuture<*>? = null
+
+    /**
+     * The last genuine stop either stream reported - the window that ran out and when it resets. A refusal
+     * itself carries neither (see AgentStream.isLimitRefusal); the limit event before it does.
+     */
+    private var lastStop: CodexRateLimit.Verdict? = null
+
+    /**
+     * The move to another account under way: the run is paused, and the processes are replaced once the turns
+     * that were running have closed (see [swap]).
+     */
+    private var pendingSwap: Swap? = null
+
+    /** What takes a swap through when a turn will not close by itself - the same eight seconds a tab is given. */
+    private var swapClock: ScheduledFuture<*>? = null
+
+    /**
+     * Whether the pause the run stands in is a limit's rather than a person's: every account it could work on
+     * refused it, and it carries on by itself when the first of them frees up (see [restOnLimit]).
+     */
+    private var restingOnLimit = false
+
+    /** What wakes a run resting on a limit. */
+    private var restClock: ScheduledFuture<*>? = null
+
+    /**
+     * Whether the card raised by the last swap starts its work over instead of carrying it on: it had no
+     * conversation on the disk to come up over, so "carry on" would be said to a session that knows nothing.
+     */
+    private var cardStartsOver = false
+
+    /**
+     * Until when each account refused this run's own processes, by account. The run's own record rather than
+     * the IDE's (AccountUsage): whether the head may be given the person's words, and which account to leave,
+     * rest on what this run was told - a tab's model week running out refuses nothing this run does.
+     */
+    private val refusals = HashMap<String, Long>()
+
+    /** A refusal being looked past: the run is paused, and where it goes on is decided off-thread (see [relieve]). */
+    private var pendingRelief: Relief? = null
+
+    /**
+     * The models a turn has gone through on, on the account the run is on, since it moved there - see
+     * [Refusal.UNFIT]. Models rather than the account: the head and a card may run on different ones, and the
+     * head's first answer on a new account says nothing about whether the next card's model is in its plan.
+     * Only read on an account the run borrowed: on the one the person chose, its failures are theirs.
+     */
+    private val provenModels = HashSet<String>()
+
+    /** Whether the run has begun walking - [begin] or [carryOn]. Before that it reads the account when it starts. */
+    private var started = false
+
+    /** The person's choice of account this run last followed, or started on (see LimitRelief.follows). */
+    private var followedChoice: String = accountId
+
+    /** What puts the person's words to the head once a refusal under a pause of theirs ends (see [relieve]). */
+    private var mailClock: ScheduledFuture<*>? = null
 
     /** When the current card's turn began, and how much of the time since then does not count. */
     private var cardStartedAt = 0L
@@ -194,6 +356,8 @@ internal class ScenarioEngine(
 
     @Synchronized
     fun begin() {
+        started = true
+        joinTheChoice()
         val steps = ScenarioRules.plan(scenario).map { planned ->
             RunStep(
                 key = planned.key,
@@ -222,6 +386,16 @@ internal class ScenarioEngine(
         changed()
     }
 
+    /**
+     * The account chosen right now, read again as the run starts walking: a choice made between the desk building
+     * this engine and starting it was broadcast to an engine that ignores it until then (see [follow]).
+     */
+    private fun joinTheChoice() {
+        val chosen = CodexAccounts.getInstance().currentId
+        accountId = chosen
+        followedChoice = chosen
+    }
+
     /** `resumeFrom` names a past conversation of the head's to come up over - see [carryOn]. */
     /**
      * Pick a finished run up where it stood - see CarryOn for where that is.
@@ -240,10 +414,12 @@ internal class ScenarioEngine(
     @Synchronized
     fun carryOn() {
         val point = CarryOn.pointOf(run) ?: return
+        started = true
+        joinTheChoice()
         val now = System.currentTimeMillis()
         // Read before the ending is wiped off the step: the head's last word against it is part of
         // what the card is told (see [carryOnWords]).
-        val words = run.steps.getOrNull(point.at)?.let(::carryOnWords) ?: CARRY_ON
+        val words = run.steps.getOrNull(point.at)?.let(::carryOnWords) ?: CARD_CARRY_ON
         /*
          * Cut while the head was finishing the card itself (see [takeOver]): the work that was going is the
          * head's, so the head is what carries on - it remembers what it had already done, and the card's own
@@ -273,6 +449,7 @@ internal class ScenarioEngine(
             failure = "",
             error = "",
             question = null,
+            limit = null,
             idle = run.idle + gap,
             steps = run.steps.mapIndexed { index, step ->
                 when {
@@ -303,6 +480,15 @@ internal class ScenarioEngine(
         head = openHead(resumeFrom = run.headConversationId, takingOver = headWasFinishing)
         unfenced = headWasFinishing
         tookOver = headWasFinishing
+        // A fresh process has no turn in flight; words the person wrote that never reached the old one go to
+        // this one with the first thing said to it (see [askAgain]) or on their own once it is free.
+        headTalking = false
+        answeringPerson = false
+        carrying = emptyList()
+        carryingImages = emptyMap()
+        deferred = false
+        forCardOnResume = ""
+        run = run.copy(answering = false)
         watchTheClock()
 
         at = point.at
@@ -328,8 +514,7 @@ internal class ScenarioEngine(
             point.begun && step != null && definition != null && step.conversationId.isNotEmpty() -> {
                 nudges = 0
                 cardCost = step.cost
-                cardTurn.clear()
-                cardTurnEnded = false
+                freshCardTurn()
                 editStep(step.key) { it.copy(state = StepState.RUNNING) }
                 card = openCard(step, definition, resumeFrom = step.conversationId)
                 phase = Phase.CARD
@@ -356,67 +541,107 @@ internal class ScenarioEngine(
             }
         }
         changed()
+        deliverTold()
     }
 
     /** What a card cut short is told: the same words as after a pause, plus what the head held against it. */
     private fun carryOnWords(step: RunStep): String =
-        if (step.verdictReason.isBlank()) CARRY_ON else "$CARRY_ON The main thread judged it not done yet: ${step.verdictReason}"
+        if (step.verdictReason.isBlank()) CARD_CARRY_ON else "$CARD_CARRY_ON The main thread judged it not done yet: ${step.verdictReason}"
 
     /**
+     * The head's process. Everything it says reaches the run only while it IS the run's head - asked under
+     * the run's lock, by the handler itself (see [isHead]).
+     *
+     * A process taken down does not fall silent at once: what it had already written is still read, a turn
+     * cut short still closes with a result, and a callback of the replaced object arrives after the new one
+     * stands in its place. Heard, that was a turn of the old process read as an answer of the new one - a
+     * verdict on a question nobody asked it - and on a move between accounts it is not a race but the rule:
+     * the old card's refused turn closes right after the new card has been told to carry on (see [swap]).
+     * Asked outside the lock it was a race still: a handler past the question waits for the lock while a
+     * forced swap holds it, and lands on the head raised meanwhile.
+     *
      * [roleChange] is set when the head is raised over its own thread into another role - to finish a card,
      * or back to the foreman's - and says the new briefing into the thread (see CodexSession.roleChange):
      * Codex keeps the instructions a thread was started with, whatever a resume says.
      */
-    private fun openHead(resumeFrom: String = "", takingOver: Boolean = false, roleChange: Boolean = false): CodexSession = CodexSession(
-        workingDirectory = workingDirectory,
-        resumeFrom = resumeFrom.ifEmpty { null },
-        model = scenario.head.model.ifBlank { defaultModel },
-        effort = scenario.head.effort.ifBlank { defaultEffort },
-        /*
-         * The head asks before it acts, and that is not a setting of the scenario's.
-         *
-         * Whatever the cards are trusted with, the head itself is a foreman: it reads the project to check
-         * what a card claims, and everything that writes belongs to a card. The mode that asks is what
-         * makes that a rule rather than a wish - see [onHeadPermission].
-         *
-         * The one exception is a head raised to do a card's work (see [takeOver]): it stands in for the
-         * card, so it gets the card's trust - the scenario's own default, since the card it replaces may
-         * have had one of its own for a reason that was about its task rather than about trust.
-         */
-        permissionMode = if (takingOver) scenario.head.permissionMode.ifBlank { "default" } else "default",
-        accountId = accountId,
-        briefing = if (takingOver) HeadTalk.TAKE_OVER_BRIEFING else HeadTalk.HEAD_BRIEFING,
-        roleChange = if (roleChange) (if (takingOver) HeadTalk.TAKE_OVER_BRIEFING else HeadTalk.HEAD_BRIEFING) else null,
-        nameWanted = false,
-        onEvent = { line -> onHeadLine(line) },
-        onError = { message -> onSessionError(head = true, message = message) },
-        onFinished = {},
-        onToolPermission = { request -> onHeadPermission(request) },
-        onCrashed = { onCrashed(head = true) },
-        onTurnEnded = { onHeadTurnEnded() },
-    )
+    private fun openHead(resumeFrom: String = "", takingOver: Boolean = false, roleChange: Boolean = false): CodexSession {
+        lateinit var session: CodexSession
+        session = CodexSession(
+            workingDirectory = workingDirectory,
+            resumeFrom = resumeFrom.ifEmpty { null },
+            model = scenario.head.model.ifBlank { defaultModel },
+            effort = scenario.head.effort.ifBlank { defaultEffort },
+            /*
+             * The head asks before it acts, and that is not a setting of the scenario's.
+             *
+             * Whatever the cards are trusted with, the head itself is a foreman: it reads the project to check
+             * what a card claims, and everything that writes belongs to a card. The mode that asks is what
+             * makes that a rule rather than a wish - see [onHeadPermission].
+             *
+             * The one exception is a head raised to do a card's work (see [takeOver]): it stands in for the
+             * card, so it gets the card's trust - the scenario's own default, since the card it replaces may
+             * have had one of its own for a reason that was about its task rather than about trust.
+             */
+            permissionMode = if (takingOver) scenario.head.permissionMode.ifBlank { "default" } else "default",
+            accountId = accountId,
+            briefing = if (takingOver) HeadTalk.TAKE_OVER_BRIEFING else HeadTalk.HEAD_BRIEFING,
+            roleChange = if (roleChange) (if (takingOver) HeadTalk.TAKE_OVER_BRIEFING else HeadTalk.HEAD_BRIEFING) else null,
+            nameWanted = false,
+            // Asked here as well as under the lock: the line handlers do their reading before they take it.
+            onEvent = { line -> if (head === session) onHeadLine(line, session) },
+            onError = { message -> onSessionError(session, head = true, message = message) },
+            onFinished = {},
+            onToolPermission = { request -> onHeadPermission(session, request) },
+            onCrashed = { onCrashed(session, head = true) },
+            onTurnEnded = { onHeadTurnEnded(session) },
+        )
+        return session
+    }
 
-    private fun openCard(step: RunStep, definition: Card, resumeFrom: String = ""): CodexSession = CodexSession(
-        workingDirectory = workingDirectory,
-        resumeFrom = resumeFrom.ifEmpty { null },
-        model = definition.model.ifBlank { scenario.head.model }.ifBlank { defaultModel },
-        effort = definition.effort.ifBlank { scenario.head.effort }.ifBlank { defaultEffort },
-        permissionMode = definition.permissionMode.ifBlank { scenario.head.permissionMode },
-        accountId = accountId,
-        briefing = HeadTalk.CARD_BRIEFING,
-        nameWanted = false,
-        onEvent = { line -> onCardLine(step.key, line) },
-        onError = { message -> onSessionError(head = false, message = message) },
-        onFinished = {},
-        onToolPermission = { request -> onCardQuestion(request) },
-        onPermissionWithdrawn = { onQuestionWithdrawn(it) },
-        onCrashed = { onCrashed(head = false) },
-        onTurnEnded = { onCardTurnEnded() },
-    )
+    /** The card's process - heard only while it is the card on the board, for the reason the head is (see [openHead]). */
+    private fun openCard(step: RunStep, definition: Card, resumeFrom: String = ""): CodexSession {
+        // A process's helpers are its own and die with it, so every process is read by a fresh count - bound
+        // here rather than looked up later, so that the last lines of a process taken down cannot reach it.
+        val work = BackgroundWork()
+        helpers = work
+        lateinit var session: CodexSession
+        session = CodexSession(
+            workingDirectory = workingDirectory,
+            resumeFrom = resumeFrom.ifEmpty { null },
+            model = definition.model.ifBlank { scenario.head.model }.ifBlank { defaultModel },
+            effort = definition.effort.ifBlank { scenario.head.effort }.ifBlank { defaultEffort },
+            permissionMode = definition.permissionMode.ifBlank { scenario.head.permissionMode },
+            accountId = accountId,
+            briefing = HeadTalk.CARD_BRIEFING,
+            nameWanted = false,
+            onEvent = { line ->
+                if (card === session) {
+                    work.read(line)
+                    onCardLine(step.key, line, session)
+                }
+            },
+            // The agents it spawns, which Codex says on their own threads rather than in the card's stream.
+            onBackground = { line ->
+                if (card === session) {
+                    work.read(line)
+                    helpersFinished(session)
+                }
+            },
+            onError = { message -> onSessionError(session, head = false, message = message) },
+            onFinished = {},
+            onToolPermission = { request -> onCardQuestion(session, request) },
+            onPermissionWithdrawn = { onQuestionWithdrawn(session, it) },
+            onCrashed = { onCrashed(session, head = false) },
+            onTurnEnded = { onCardTurnEnded(session) },
+            onTurnStarted = { onCardTurnStarted(session) },
+        )
+        return session
+    }
 
     // --- What the two sessions say -------------------------------------------------
 
-    private fun onHeadLine(line: String) {
+    private fun onHeadLine(line: String, from: CodexSession) {
+        noticeLimit(line, from, head = true)
         collect(line, headTurn) { total, tokens ->
             synchronized(this) {
                 // Only a figure the CLI actually gave moves the running total: taking a missing one for
@@ -446,7 +671,8 @@ internal class ScenarioEngine(
         rememberConversationIds()
     }
 
-    private fun onCardLine(key: String, line: String) {
+    private fun onCardLine(key: String, line: String, from: CodexSession) {
+        noticeLimit(line, from, head = false)
         collect(line, cardTurn) { total, tokens ->
             synchronized(this) {
                 val spent = spentOf(total, cardCost)
@@ -556,18 +782,82 @@ internal class ScenarioEngine(
         askAgain(text)
     }
 
-    /** The same question, put again. The allowance is not renewed - that is what makes it an allowance. */
+    /**
+     * The same question, put again. The allowance is not renewed - that is what makes it an allowance.
+     *
+     * Words the person wrote while the head was busy go first in it (see HeadTalk.withTold), and a head in the
+     * middle of answering the person is not written into: the question waits for that turn to end (see
+     * [heardBack]) - two answers in one turn come back as one, and the run would read the person's as its own.
+     * Composed on every sending rather than kept composed in [pendingHead], so that a question put again after
+     * a pause does not say the same words of the person twice.
+     */
     private fun askAgain(text: String) {
         pendingHead = text
+        if (answeringPerson) {
+            deferred = true
+            headAskedAt = 0
+            return
+        }
+        deferred = false
+        val session = head ?: return
         headAskedAt = System.currentTimeMillis()
         headTurn.clear()
-        head?.sendPrompt(text)
+        val told = HeadMail.waiting(run.notes)
+        val said = if (told.isEmpty()) {
+            text
+        } else {
+            run = run.copy(notes = HeadMail.delivered(run.notes, told, System.currentTimeMillis()))
+            HeadTalk.withTold(told.map { it.text }, text)
+        }
+        headTalking = true
+        if (session.sendPrompt(said, images = told.flatMap { toldImages[it.at].orEmpty() })) {
+            told.forEach { toldImages.remove(it.at) }
+        } else {
+            // No process came up (its error has said why): the words wait for the one that will.
+            notGiven(told)
+        }
     }
 
+    /**
+     * The person's words, marked as given to the head, back to waiting with their pictures: the send they went
+     * with reached no process. A process that will not start on the account the run moved to is not the end of
+     * the run any more (see [Refusal.UNFIT]), so the words outlive it and go to the head that comes up next.
+     */
+    private fun notGiven(told: List<RunNote>) {
+        if (told.isEmpty()) return
+        run = run.copy(notes = HeadMail.undelivered(run.notes, told.map { it.at }))
+    }
+
+    /** The head's turn closed - and with it, perhaps, the last thing a move to another account waited for (see [swap]). */
     @Synchronized
-    private fun onHeadTurnEnded() {
-        // Our own interrupt, or a turn that ended after the run did. Neither is an answer to anything.
-        if (interrupting || phase == Phase.PAUSED || phase == Phase.OVER) return
+    private fun onHeadTurnEnded(from: CodexSession) {
+        if (!isHead(from)) return
+        closeHeadTurn()
+        trySwap()
+    }
+
+    /** Whether [from] is the run's head right now - asked under the run's lock (see [openHead]). */
+    private fun isHead(from: CodexSession): Boolean = head === from
+
+    /** Whether [from] is the run's card right now - asked under the run's lock (see [openHead]). */
+    private fun isCard(from: CodexSession): Boolean = card === from
+
+    private fun closeHeadTurn() {
+        headTalking = false
+        // The head answering the person: read as a reply, and then whatever was waiting for it to finish.
+        if (answeringPerson) return heardBack()
+
+        /*
+         * Our own interrupt, or a turn that ended with nothing asked of the head: after the run did, in a
+         * pause, or after a verdict was taken back because the card went on working (see
+         * [onCardTurnStarted]). None of them is an answer to anything - read as one, a turn cut short
+         * without its object would be asked for the object again, about a question that no longer stands.
+         * The head is free once it has closed, though, and words the person wrote meanwhile go to it now.
+         */
+        if (interrupting || (phase != Phase.TAKEOVER && phase !in HEAD_PHASES)) {
+            if (!interrupting) deliverTold()
+            return
+        }
 
         val reply = HeadTalk.read(headTurn.last)
         // The opening message is about the run rather than about any card, so its answer belongs above
@@ -605,17 +895,204 @@ internal class ScenarioEngine(
             else -> Unit
         }
         changed()
+        deliverTold()
     }
 
-    /** One or two sentences from the head, wedged into the timeline where they were said. */
-    private fun note(text: String, stepKey: String) {
+    /**
+     * One or two sentences from the head, wedged into the timeline where they were said - and, for an answer
+     * to the person, what it passed on to the card at work.
+     */
+    private fun note(text: String, stepKey: String, relayed: String = "") {
         run = run.copy(
             notes = run.notes + RunNote(
-                at = System.currentTimeMillis(),
+                at = HeadMail.stamp(run.notes, System.currentTimeMillis()),
                 stepKey = stepKey,
                 text = shorten(text, NOTE_CHARS),
+                relayed = shorten(relayed, NOTE_CHARS),
             ),
         )
+    }
+
+    // --- The person writing to the head ----------------------------------------------
+
+    /**
+     * Words from the person to the head while the run goes (see HeadMail).
+     *
+     * Written into the timeline at once, as theirs, under the card the run stands at - and put to the head the
+     * moment it is free to read them. False for a run that is over: its head reads nothing more, and the way to
+     * go on talking to it is its conversation opened as a chat.
+     */
+    @Synchronized
+    fun tell(text: String, images: List<ImageAttachment> = emptyList(), tokens: JsonElement? = null): Boolean {
+        if (phase == Phase.OVER) return false
+        val words = text.trim()
+        if (words.isEmpty() && images.isEmpty()) return false
+
+        val at = HeadMail.stamp(run.notes, System.currentTimeMillis())
+        if (images.isNotEmpty()) toldImages[at] = images
+        run = run.copy(
+            notes = run.notes + RunNote(
+                at = at,
+                stepKey = boardKey(),
+                text = shorten(words, HeadMail.TOLD_CHARS),
+                who = RunNote.PERSON,
+                tokens = HeadMail.shown(tokens),
+            ),
+        )
+        deliverTold()
+        changed()
+        return true
+    }
+
+    /**
+     * Put what the person wrote to the head, if the head can read it now (see HeadMail.way).
+     *
+     * Called wherever the head may just have become free: one of its turns closed, the run was paused or
+     * resumed or picked up again, or the person wrote. What cannot go yet stays waiting on its note - the next
+     * question of the run's carries it (see [askAgain]), or the next call here does.
+     */
+    private fun deliverTold() {
+        if (phase == Phase.OVER) return
+        /*
+         * Nothing goes to a head about to be replaced, nor to one its limit refuses: the words wait on their
+         * notes for the head that carries on (see [swap], [restOnLimit]). The refusal is the one that matters -
+         * a word put to a refused head dies at once, its turn closes, and closing calls this again: a loop of
+         * refused requests for as long as the window stays shut.
+         */
+        if (settlingAccount() || refusedHere()) return
+        val told = HeadMail.waiting(run.notes)
+        if (told.isEmpty()) return
+        val session = head ?: return
+        val now = System.currentTimeMillis()
+
+        when (
+            HeadMail.way(
+                headUp = true,
+                turnOpen = headTalking,
+                answeringPerson = answeringPerson,
+                doingCardWork = phase == Phase.TAKEOVER,
+                waitingOnOthers = phase in WAITING_PHASES,
+            )
+        ) {
+            HeadMail.Way.NOW -> {
+                val images = told.mapNotNull { note -> toldImages.remove(note.at)?.let { note.at to it } }.toMap()
+                run = run.copy(notes = HeadMail.delivered(run.notes, told, now), answering = true)
+                carrying = told.map { it.at }
+                carryingImages = images
+                answeringPerson = true
+                personAskedAt = now
+                headTurn.clear()
+                headTalking = true
+                val sent = session.sendPrompt(
+                    HeadTalk.toldRequest(told.map { it.text }, situation(), toCard = canPassOn()),
+                    images = images.values.flatten(),
+                )
+                // No process came up: the turn that never began has closed by now (see CodexSession.sendPrompt),
+                // and the words go back to waiting, pictures and all.
+                if (!sent) {
+                    toldImages.putAll(images)
+                    notGiven(told)
+                    run = run.copy(answering = false)
+                    answeringPerson = false
+                    personAskedAt = 0
+                    carrying = emptyList()
+                    carryingImages = emptyMap()
+                }
+            }
+
+            HeadMail.Way.INTO_WORK -> {
+                run = run.copy(notes = HeadMail.delivered(run.notes, told, now))
+                val sent = session.sendPrompt(
+                    HeadTalk.toldMidWork(told.map { it.text }),
+                    images = told.flatMap { toldImages[it.at].orEmpty() },
+                )
+                if (sent) told.forEach { toldImages.remove(it.at) } else notGiven(told)
+            }
+
+            HeadMail.Way.LATER -> return
+        }
+        changed()
+    }
+
+    /**
+     * The head has answered the person: its words go under their note, what it passed on goes to the card, and
+     * a question of the run's that waited for the conversation is put now (see [askAgain]) - unless the run was
+     * paused meanwhile, and then resuming puts it.
+     */
+    private fun heardBack() {
+        answeringPerson = false
+        personAskedAt = 0
+        carrying = emptyList()
+        carryingImages = emptyMap()
+
+        val reply = HeadTalk.read(headTurn.last)
+        val words = reply.body?.let { HeadAnswer.text(it, "toCard") }.orEmpty().trim()
+        val passed = if (words.isNotEmpty()) passOn(words) else ""
+        if (reply.words.isNotBlank() || passed.isNotEmpty()) note(reply.words, boardKey(), relayed = passed)
+        run = run.copy(answering = false)
+
+        // Only a question of the head's own phase is still standing: one taken back meanwhile (a card that went
+        // on working under a verdict) has left nothing to put.
+        val standing = deferred && (phase in HEAD_PHASES || phase == Phase.TAKEOVER) && pendingHead.isNotBlank()
+        if (standing) {
+            askAgain(pendingHead)
+        } else {
+            if (phase != Phase.PAUSED) deferred = false
+            deliverTold()
+        }
+        changed()
+    }
+
+    /**
+     * The person's words, passed on by the head to the card on the board - and what of them reached it.
+     *
+     * A card at work reads them between two of its own steps; one standing on a question, once the question
+     * is answered - the CLI holds a message written into an open turn until that turn's next step. A card
+     * paused in the middle of its work is told when the run resumes, with the words that carry it on. With no
+     * card on the board there is nobody to pass them to, and the head's reply says nothing was passed.
+     */
+    private fun passOn(words: String): String {
+        val session = card ?: return ""
+        val text = HeadTalk.relayed(words)
+        return when {
+            phase in CARD_PHASES -> {
+                session.sendPrompt(text)
+                words
+            }
+
+            phase == Phase.PAUSED && resumeTo in CARD_PHASES -> {
+                forCardOnResume = listOf(forCardOnResume, text).filter { it.isNotBlank() }.joinToString("\n\n")
+                words
+            }
+
+            else -> ""
+        }
+    }
+
+    /** Whether there is a card the head could pass the person's words on to (see [passOn]). */
+    private fun canPassOn(): Boolean =
+        card != null && (phase in CARD_PHASES || (phase == Phase.PAUSED && resumeTo in CARD_PHASES))
+
+    /** The card the run stands at, by key - empty before the first one, which the timeline reads as "above them all". */
+    private fun boardKey(): String {
+        val opening = phase == Phase.OPENING || (phase == Phase.PAUSED && resumeTo == Phase.OPENING)
+        return if (opening) "" else run.steps.getOrNull(at)?.key.orEmpty()
+    }
+
+    /** Where the run stands, in a sentence for the head answering the person (see HeadTalk.toldRequest). */
+    private fun situation(): String {
+        val step = run.steps.getOrNull(at)
+        val named = step?.let { "card ${at + 1} of ${run.total}, \"${it.title.ifBlank { "Untitled" }}\"" }
+        val standing = if (phase == Phase.PAUSED) resumeTo else phase
+        val where = when (standing) {
+            Phase.OPENING -> "The run has only just begun: no card has been handed to you yet."
+            Phase.CARD -> named?.let { "The run is going: $it is at work right now." }
+            Phase.BLOCKED -> named?.let { "The run is going: $it has stopped on a question, and it waits for the person to answer it." }
+            Phase.TAKEOVER -> named?.let { "You were finishing $it yourself." }
+            else -> named?.let { "The run is going: it stands at $it." }
+        } ?: "The run is going."
+        if (phase != Phase.PAUSED) return where
+        return "$where The person has paused the run: nothing is working until they resume it, and nothing about a card is asked of you meanwhile."
     }
 
     // --- Walking the plan ----------------------------------------------------------
@@ -634,9 +1111,7 @@ internal class ScenarioEngine(
 
         nudges = 0
         tookOver = false
-        cardTurn.clear()
-        // A fresh turn of the card's: whatever ended before it is not this turn ending (see [cardTurnEnded]).
-        cardTurnEnded = false
+        freshCardTurn()
         cardCost = 0.0
         editStep(step.key) {
             it.copy(state = StepState.JUDGING, startedAt = System.currentTimeMillis(), title = definition.title.ifBlank { it.title })
@@ -706,8 +1181,15 @@ internal class ScenarioEngine(
         card?.sendPrompt(prompt)
     }
 
+    /** The card's turn closed - and with it, perhaps, the last thing a move to another account waited for (see [swap]). */
     @Synchronized
-    private fun onCardTurnEnded() {
+    private fun onCardTurnEnded(from: CodexSession) {
+        if (!isCard(from)) return
+        closeCardTurn()
+        trySwap()
+    }
+
+    private fun closeCardTurn() {
         // Our own interrupt: the turn ends because we ended it, and there is nothing in it to judge.
         if (interrupting || phase == Phase.OVER) return
 
@@ -721,18 +1203,167 @@ internal class ScenarioEngine(
          * that had not been working at all. A pause counts the same way, and only over a question: a
          * pause taken over the card's own work interrupts it, and the turn that ends afterwards is that
          * interrupt's own (see [pause]).
+         *
+         * Helpers of the dead turn may go on reporting while the question stands, each report a turn of
+         * its own: what every such turn said is held as it ends, or only the last would reach the head.
          */
         if (phase == Phase.QUESTION || phase == Phase.BLOCKED) {
             cardTurnEnded = true
+            holdWhileHelpersWork()
             return
         }
         if (phase == Phase.PAUSED) {
-            if (resumeTo == Phase.QUESTION || resumeTo == Phase.BLOCKED) cardTurnEnded = true
+            if (resumeTo == Phase.QUESTION || resumeTo == Phase.BLOCKED) {
+                cardTurnEnded = true
+                holdWhileHelpersWork()
+            }
             return
         }
         if (phase != Phase.CARD) return
 
-        judgeTheCard()
+        turnOver()
+    }
+
+    /**
+     * The card started a turn by itself: a helper's report woke it, or a message of ours that went missing
+     * went in again (see CodexSession.checkDeliveries).
+     *
+     * Waiting for its helpers, that is what was expected and nothing changes. Being judged, the card was not
+     * done after all: a helper that reported in the last moments of a turn is taken up by the CLI with a
+     * turn of its own right after it, by which time nothing was left to wait for and the card had gone to
+     * the head on what it said before reading the report. The question is taken back from the head, and the
+     * card is judged again when this turn ends, with everything it said before. Paused, the brake holds: the
+     * turn is interrupted, and resuming goes back to the card rather than to a verdict on words it has since
+     * gone past.
+     */
+    @Synchronized
+    private fun onCardTurnStarted(from: CodexSession) {
+        if (!isCard(from)) return
+        when (phase) {
+            Phase.CARD -> cardWaits = false
+
+            Phase.VERDICT -> {
+                // A head answering the person was never put the verdict (see [askAgain]): there is nothing to take
+                // back from it, and its answer to the person is left to finish.
+                if (answeringPerson) {
+                    deferred = false
+                } else {
+                    interrupting = true
+                    head?.interrupt()
+                    interrupting = false
+                }
+                pendingHead = ""
+                headAskedAt = 0
+                heldEndings += judged
+                judged = emptyList()
+                cardTurn.clear()
+                phase = Phase.CARD
+                run.steps.getOrNull(at)?.let { step -> editStep(step.key) { it.copy(state = StepState.RUNNING) } }
+                changed()
+            }
+
+            // The turn under the question had died (see [cardTurnEnded]) and a report has brought the card back:
+            // answered now, the question leads to waiting for this turn's end, not to a verdict in its middle.
+            Phase.QUESTION, Phase.BLOCKED -> cardIsBack()
+
+            Phase.PAUSED -> when (resumeTo) {
+                Phase.CARD, Phase.VERDICT -> {
+                    interrupting = true
+                    card?.interrupt()
+                    interrupting = false
+                    if (resumeTo == Phase.VERDICT) {
+                        pendingHead = ""
+                        headAskedAt = 0
+                        deferred = false
+                    }
+                    resumeTo = Phase.CARD
+                }
+
+                // The brake holds over a question too - over one whose turn had died, that is: a live turn standing
+                // on its question is never interrupted (see [pause]). The interrupted turn ends dead, as the one
+                // before it did, and its end is read the way that one's was.
+                Phase.QUESTION, Phase.BLOCKED -> if (cardTurnEnded) {
+                    cardIsBack()
+                    interrupting = true
+                    card?.interrupt()
+                    interrupting = false
+                }
+
+                else -> Unit
+            }
+
+            else -> Unit
+        }
+    }
+
+    /** A turn that died under a question is alive again: what it said is held, and the new one's end is awaited. */
+    private fun cardIsBack() {
+        if (!cardTurnEnded) return
+        cardTurnEnded = false
+        heldEndings += cardTurn.last
+        cardTurn.clear()
+    }
+
+    /** What every new message to the card starts from: nothing it ended with before is this turn's ending. */
+    private fun freshCardTurn() {
+        cardTurn.clear()
+        heldEndings.clear()
+        judged = emptyList()
+        cardWaits = false
+        // See [cardTurnEnded].
+        cardTurnEnded = false
+    }
+
+    /**
+     * The card's helpers have all finished while it waited for them: ask it for its report.
+     *
+     * Claude Code starts the card's next turn with each report by itself; Codex never wakes a thread whose
+     * spawned agents are done (measured on 0.160), so the card would wait on into its three-hour ceiling with
+     * its report unwritten. It is told the way the reports would have told it, and judged when that turn ends
+     * with everything it said on the way (see [turnOver]). Once per wait: a card that answers without ending is
+     * judged by the clock as before (see [watchTheCard]).
+     */
+    @Synchronized
+    private fun helpersFinished(from: CodexSession) {
+        if (!isCard(from) || !cardWaits || helpersAsked || helpers.busy() || from.isBusy) return
+        helpersAsked = true
+        from.sendPrompt(HeadTalk.HELPERS_FINISHED)
+    }
+
+    /** The card was asked for its report after its helpers finished - see [helpersFinished]. */
+    private var helpersAsked = false
+
+    /** Keep what the card said at a turn it ended while its helpers were still at work (see [heldEndings]). */
+    private fun holdWhileHelpersWork(): Boolean {
+        if (!helpers.busy()) return false
+        heldEndings += cardTurn.last
+        cardTurn.clear()
+        return true
+    }
+
+    /**
+     * The card's turn is over: hand it to the head - unless helpers it started in the background are still
+     * at work, and then wait for them.
+     *
+     * Their reports start the card's next turn by themselves, so waiting is staying in the card's phase
+     * with the card's clock running on: it is the card's work, and a helper that never comes back is caught
+     * by the card's three-hour ceiling, a wait that ran out without a turn by the clock (see [watchTheCard]).
+     * A turn that died under a question comes here as well (see
+     * [afterQuestion]) and goes back to the card's phase the same way. A pause taken while the card waits
+     * interrupts it as it would mid-turn, and the CLI stops the helpers with it (measured on 2.1.280) - the
+     * same full stop as everywhere else, and the card told to carry on starts them again if it needs them.
+     */
+    private fun turnOver() {
+        if (!holdWhileHelpersWork()) return judgeTheCard()
+
+        cardTurnEnded = false
+        cardWaits = true
+        helpersAsked = false
+        if (phase == Phase.CARD) return
+
+        phase = Phase.CARD
+        run = run.copy(state = RunState.RUNNING)
+        run.steps.getOrNull(at)?.let { step -> editStep(step.key) { it.copy(state = StepState.RUNNING) } }
     }
 
     /**
@@ -741,14 +1372,21 @@ internal class ScenarioEngine(
      * A turn that died halfway leaves a short answer or none at all, and that is told to the head as it
      * is rather than decided here - `ok` is what it managed to say. Whether half an answer is worth
      * another go is the head's judgement, and it already has the machinery for it.
+     *
+     * [overdue] is a wait given up on while a helper's command was still running (see [watchTheCard]): the
+     * head is told so, because then the last thing the card said is likely "waiting", not a report.
      */
-    private fun judgeTheCard() {
+    private fun judgeTheCard(overdue: Boolean = false) {
         val step = run.steps.getOrNull(at) ?: return
         val stage = scenario.stages.firstOrNull { it.id == step.stageId } ?: return
         val definition = stage.cards.firstOrNull { it.id == step.cardId } ?: return
 
         cardTurnEnded = false
-        val endings = cardTurn.last
+        cardWaits = false
+        val waited = heldEndings.isNotEmpty()
+        val endings = heldEndings + cardTurn.last
+        heldEndings.clear()
+        judged = endings
         val answer = endings.joinToString("\n\n")
         editStep(step.key) { it.copy(state = StepState.JUDGING, said = "", summary = shorten(answer, SUMMARY_CHARS)) }
 
@@ -757,6 +1395,8 @@ internal class ScenarioEngine(
             HeadTalk.verdictRequest(
                 card = definition,
                 endings = endings,
+                waited = waited,
+                overdue = overdue,
                 ok = answer.isNotBlank(),
                 nudgesLeft = (scenario.head.retries - nudges).coerceAtLeast(0),
                 handsOver = canTakeOver(stopAsked = false),
@@ -777,9 +1417,7 @@ internal class ScenarioEngine(
             cardStartedAt = System.currentTimeMillis()
             pausedFor = 0
             pausedAt = 0
-            cardTurn.clear()
-            // A fresh turn of the card's: whatever ended before it is not this turn ending (see [cardTurnEnded]).
-            cardTurnEnded = false
+            freshCardTurn()
             card?.sendPrompt(retry)
             return
         }
@@ -979,13 +1617,39 @@ internal class ScenarioEngine(
     private fun raiseHead(takingOver: Boolean) {
         head?.stop()
         unfenced = takingOver
-        head = openHead(resumeFrom = run.headConversationId, takingOver = takingOver, roleChange = true)
+        // Over its conversation only once that is on the disk: an identifier the CLI handed out before a word
+        // was written does not resume at all, and the process dies on it (see CodexHistory.transcriptFile).
+        head = openHead(resumeFrom = run.headConversationId.takeIf(::onDisk).orEmpty(), takingOver = takingOver, roleChange = true)
+        /*
+         * The process that was answering the person went down with its answer unsaid (a card taken over while
+         * the head was talking): the words wait again, and the first thing said to the new process carries
+         * them (see [askAgain]).
+         */
+        takeBackTheirWords()
+        headTalking = false
+        deferred = false
     }
+
+    /** The person's words the head was answering go back to waiting, pictures and all - its answer will not come. */
+    private fun takeBackTheirWords() {
+        if (!answeringPerson) return
+        run = run.copy(notes = HeadMail.undelivered(run.notes, carrying), answering = false)
+        toldImages.putAll(carryingImages)
+        answeringPerson = false
+        personAskedAt = 0
+        carrying = emptyList()
+        carryingImages = emptyMap()
+    }
+
+    /** Whether a conversation of this run's can be come up over: it has an identifier and a transcript. */
+    private fun onDisk(conversation: String): Boolean =
+        conversation.isNotEmpty() && CodexHistory.transcriptFile(workingDirectory, conversation) != null
 
     // --- Questions the cards raise -------------------------------------------------
 
     @Synchronized
-    private fun onCardQuestion(request: PermissionChannel.ToolPermission) {
+    private fun onCardQuestion(from: CodexSession, request: PermissionChannel.ToolPermission) {
+        if (!isCard(from)) return
         // A card taken over is a card taken down: a request still in flight from it belongs to nobody.
         if (phase == Phase.OVER || phase == Phase.TAKEOVER) return
         val step = run.steps.getOrNull(at) ?: return
@@ -1073,14 +1737,15 @@ internal class ScenarioEngine(
          * Everything still in the queue belongs to that same dead turn: put to a person at three in the
          * morning it would be a question about work that has already stopped, and answered it would be
          * written into a request the CLI discards. The card goes to the head with whatever it managed to
-         * say (see [judgeTheCard]).
+         * say (see [judgeTheCard]) - or, with helpers of its still at work, waits for them first (see
+         * [turnOver]).
          */
         if (cardTurnEnded) {
             questions.clear()
             deciding = ""
             if (phase == Phase.BLOCKED) release()
             run = run.copy(question = null)
-            judgeTheCard()
+            turnOver()
             return
         }
 
@@ -1100,7 +1765,8 @@ internal class ScenarioEngine(
      * that the run stops waiting, or it waits for ever on a question nobody is asking any more.
      */
     @Synchronized
-    private fun onQuestionWithdrawn(requestId: String) {
+    private fun onQuestionWithdrawn(from: CodexSession, requestId: String) {
+        if (!isCard(from)) return
         // One further back in the queue: it was never put to anybody, so nothing that is on the screen or
         // in flight is about it, and dropping it is the whole of the work.
         val current = questions.firstOrNull()?.requestId == requestId
@@ -1218,8 +1884,10 @@ internal class ScenarioEngine(
      * work stands in for that card, and is answered by the card's rules instead (see TakeOver.answer).
      */
     @Synchronized
-    private fun onHeadPermission(request: PermissionChannel.ToolPermission) {
-        val session = head ?: return
+    private fun onHeadPermission(from: CodexSession, request: PermissionChannel.ToolPermission) {
+        // A head replaced while it was asking: its process is gone, and nobody is left to answer.
+        if (!isHead(from)) return
+        val session = from
         val verdict = if (unfenced) TakeOver.answer(scenario.head, request) else HeadFence.judge(request)
         session.answerPermission(request.requestId, allow = verdict.ok, message = verdict.why)
     }
@@ -1236,11 +1904,37 @@ internal class ScenarioEngine(
      */
     @Synchronized
     fun pause() {
-        if (phase == Phase.OVER || phase == Phase.PAUSED) return
+        if (phase == Phase.OVER) return
+        if (phase == Phase.PAUSED) {
+            /*
+             * Standing on a limit, or on its way to another account: paused by a person now, it is theirs. It
+             * does not carry on by itself at the reset, and a move under way lands paused (see [restOnLimit],
+             * [swap]). Any other pause is already exactly what was asked for.
+             */
+            if (!restingOnLimit && pendingSwap?.thenResume != true && pendingRelief?.thenResume != true) return
+            stopResting()
+            pendingSwap?.thenResume = false
+            pendingRelief?.thenResume = false
+            // What the person writes to the head meanwhile still goes once the refusal ends.
+            windMailClock()
+            changed()
+            return
+        }
 
+        halt()
+        changed()
+        deliverTold()
+    }
+
+    /** The heart of [pause], shared with the moves between accounts, which pause the run on their way (see [swap]). */
+    private fun halt() {
         interrupting = true
         hold()
-        head?.interrupt()
+        /*
+         * The head is interrupted only when it is answering the run. Answering the person, it is left to finish:
+         * the pause is the run's work standing still, and talking it over is what a pause is often taken for.
+         */
+        if (!answeringPerson) head?.interrupt()
         /*
          * The card is interrupted only when it is actually working.
          *
@@ -1260,7 +1954,6 @@ internal class ScenarioEngine(
             state = RunState.PAUSED,
             steps = run.steps.map { if (StepState.over(it.state) || it.state == StepState.WAITING) it else it.copy(state = StepState.PAUSED) },
         )
-        changed()
     }
 
     /**
@@ -1269,9 +1962,28 @@ internal class ScenarioEngine(
      * The head is asked its question again - an interrupted turn has no answer to be had, and the
      * question is the one thing that survives it (see [pendingHead]). A card that was working is simply
      * told to carry on: the session is the same one, so "carry on" is a whole instruction.
+     *
+     * A run waiting out a limit is tried now rather than at the reset - the person may know something the
+     * clock does not, and a refusal costs one request and puts it back to waiting. A run on its way to another
+     * account carries on there, once the processes have been replaced (see [swap]).
      */
     @Synchronized
     fun resume() {
+        if (phase != Phase.PAUSED) return
+        pendingRelief?.let { relief ->
+            relief.thenResume = true
+            return
+        }
+        pendingSwap?.let { swap ->
+            swap.thenResume = true
+            return
+        }
+        stopResting()
+        carryOnFromPause()
+    }
+
+    /** The heart of [resume], shared with the moves between accounts and the end of a wait on a limit. */
+    private fun carryOnFromPause() {
         if (phase != Phase.PAUSED) return
 
         /*
@@ -1292,6 +2004,10 @@ internal class ScenarioEngine(
             run = run.copy(state = RunState.RUNNING)
             editStep(standing.key) { it.copy(state = StepState.ASKING) }
             putQuestion(standing, waiting)
+            // Its turn is open on the question, so what the head passed on to it is held by the CLI until the
+            // answer (see [passOn]).
+            if (forCardOnResume.isNotBlank() && card?.sendPrompt(forCardOnResume) == true) forCardOnResume = ""
+            deliverTold()
             return
         }
 
@@ -1313,10 +2029,16 @@ internal class ScenarioEngine(
                 cardStartedAt = System.currentTimeMillis()
                 pausedFor = 0
                 pausedAt = 0
-                cardTurn.clear()
-                // A fresh turn of the card's: whatever ended before it is not this turn ending (see [cardTurnEnded]).
-                cardTurnEnded = false
-                card?.sendPrompt(CARRY_ON)
+                freshCardTurn()
+                // A card raised with no conversation to come up over knows nothing to carry on: it is given its
+                // work again (see [swap]).
+                val words = if (cardStartsOver) run.steps.getOrNull(at)?.prompt.orEmpty().ifBlank { CARD_CARRY_ON } else CARD_CARRY_ON
+                // What the head passed on to it during the pause goes with the words that carry it on (see [passOn]).
+                // Kept when no process came up: the card raised next is told them instead.
+                if (card?.sendPrompt(listOf(words, forCardOnResume).filter { it.isNotBlank() }.joinToString("\n\n")) == true) {
+                    cardStartsOver = false
+                    forCardOnResume = ""
+                }
             }
 
             Phase.BLOCKED -> run.steps.getOrNull(at)?.let { step -> editStep(step.key) { it.copy(state = StepState.ASKING) } }
@@ -1340,8 +2062,509 @@ internal class ScenarioEngine(
 
             else -> Unit
         }
+        /*
+         * A card standing on a question was never interrupted, and its turn is open: what the head passed on to
+         * it goes in now, and the CLI holds it until the question is answered.
+         */
+        if (forCardOnResume.isNotBlank() && phase in CARD_PHASES && card?.sendPrompt(forCardOnResume) == true) {
+            forCardOnResume = ""
+        }
+        changed()
+        deliverTold()
+    }
+
+    // --- Accounts: the person's choice, and a limit that refuses ----------------------------
+
+    /** Why an account will not take the run (see [ranIntoLimit]). */
+    private enum class Refusal {
+        /** Its limit refused a request. */
+        LIMIT,
+
+        /**
+         * An account the run moved to by itself failed before a single turn of its went through: a dead sign-in,
+         * a credential that will not resolve, a model its plan does not have (that last one comes up looking
+         * well and dies on its first message - see CodexAccounts.canRun).
+         */
+        UNFIT,
+    }
+
+    /**
+     * A move to another account under way (see [beginSwap]). A class rather than a value: [pause] and
+     * [resume] change what happens at its end, and the clock that forces it asks whether it is still the
+     * same move.
+     */
+    private class Swap(val to: String, val borrowed: Boolean, var thenResume: Boolean)
+
+    /**
+     * A refusal being dealt with: the run is paused, and where it goes on is decided off the processes' own
+     * threads (see [ranIntoLimit]). [thenResume] as on [Swap].
+     */
+    private class Relief(val window: String, val resets: Long, val reason: Refusal, var thenResume: Boolean)
+
+    /**
+     * The person chose another account: the run goes there, the way every open tab does (see
+     * CodexSessions.switchAllTo).
+     *
+     * Choosing an account is saying "everything I do is on this one", and a run went on spending the
+     * account it started on for as long as it lasted - on 8 October for forty minutes after the choice,
+     * until that account ran out under it. So the turns running now are interrupted, the processes are
+     * raised again over their own conversations on the chosen account once those turns have closed, and the
+     * run carries on where it stood (see [swap]). A run the person paused stays paused there; one waiting out
+     * a limit tries the chosen account at once - choosing one is the usual answer to "this one ran out".
+     *
+     * Only a choice that changed is followed, or a run that borrowed an account going home to one with room
+     * (see LimitRelief.follows): the choice is broadcast again on things that do not change it. The same
+     * subscription under another row (a merge, see CodexAccounts.sameAccount) moves nothing: nobody is billed
+     * differently, and the processes hold a credential that is just as good. A run not yet walking is left
+     * alone - it reads the account when it starts.
+     */
+    @Synchronized
+    fun follow(to: String) {
+        if (!started || phase == Phase.OVER) return
+        val now = System.currentTimeMillis()
+        // The account it borrowed was forgotten under it: whatever the choice, the run cannot stay. Left there,
+        // the next process it raises dies for want of a credential and takes the run down with it.
+        if (accountId != to && CodexAccounts.getInstance().variablesFor(accountId, workingDirectory) == null) {
+            return leaveGoneAccount(now)
+        }
+        if (!LimitRelief.follows(to, followedChoice, borrowed, refused = refusedUntil(to, now) != null)) return
+        followedChoice = to
+
+        val pending = pendingSwap
+        if (to == (pending?.to ?: accountId)) {
+            if (pending == null) borrowed = false
+            return
+        }
+        if (pending == null && CodexAccounts.getInstance().sameAccount(accountId, to)) {
+            accountId = to
+            borrowed = false
+            return
+        }
+
+        val thenResume = pendingRelief?.thenResume ?: pending?.thenResume ?: (phase != Phase.PAUSED || restingOnLimit)
+        if (phase != Phase.PAUSED) halt()
+        stopResting()
+        pendingRelief = null
+        beginSwap(
+            to = to,
+            borrowed = false,
+            thenResume = thenResume,
+            move = RunMove(reason = RunMove.CHOICE, from = labelOf(accountId), to = labelOf(to)),
+        )
         changed()
     }
+
+    /** The account the run is on no longer resolves: one more account that cannot take it (see [ranIntoLimit]). */
+    private fun leaveGoneAccount(now: Long) {
+        refusals[accountId] = maxOf(refusals[accountId] ?: 0L, now + UNFIT_MS)
+        if (settlingAccount()) return
+
+        val personPaused = phase == Phase.PAUSED
+        if (!personPaused) halt()
+        val relief = Relief(window = "", resets = now + UNFIT_MS, reason = Refusal.UNFIT, thenResume = !personPaused)
+        pendingRelief = relief
+        AppExecutorUtil.getAppExecutorService().execute {
+            runCatching { relieve(relief) }
+                .onFailure { thisLogger().warn("A scenario run could not look for another account", it) }
+        }
+        changed()
+    }
+
+    /**
+     * What either stream says about the limit and the account: the window and the reset of a stop, a refusal,
+     * and a turn that went through.
+     *
+     * Read on the processes' own threads, before the line is taken for anything else - the refusal arrives as
+     * an answer of the agent's, and read as one it is a card judged on "you've hit your session limit".
+     */
+    private fun noticeLimit(line: String, from: CodexSession, head: Boolean) {
+        CodexRateLimit.of(line)?.let { verdict -> if (verdict.stopped) rememberStop(from, verdict) }
+        when {
+            AgentStream.isLimitRefusal(line) -> ranIntoLimit(from, head, Refusal.LIMIT)
+            AgentStream.isAuthFailure(line) -> ranIntoLimit(from, head, Refusal.UNFIT)
+            AgentStream.isTurnResult(line) && !line.contains(ERROR_RESULT) -> noteProven(from)
+        }
+    }
+
+    @Synchronized
+    private fun rememberStop(from: CodexSession, verdict: CodexRateLimit.Verdict) {
+        if (!isHead(from) && !isCard(from)) return
+        lastStop = verdict
+        // Filed under the account whose process said it, as a tab's are - a window of the whole plan only: the
+        // next run looking for room must not land here either, and a model's own week refuses only that model.
+        if (verdict.window in AccountUsage.SHARED_WINDOWS) {
+            verdict.resetsAt?.let { AccountUsage.getInstance().noteRefused(from.accountId, it) }
+        }
+    }
+
+    /** A turn went through on the account the run is on: it serves this process's model (see [Refusal.UNFIT]). */
+    @Synchronized
+    private fun noteProven(from: CodexSession) {
+        if (isHead(from) || isCard(from)) provenModels += from.model
+    }
+
+    /**
+     * Whether [from] failing is the account it was raised on not taking the run: one the run borrowed, on a model
+     * no turn has gone through on there yet.
+     */
+    private fun untried(from: CodexSession): Boolean = borrowed && from.model !in provenModels
+
+    /**
+     * The account the run is on will not take it: the run pauses, and goes on on another account with room -
+     * or, with none, waits for the first refusal to end (see LimitRelief).
+     *
+     * Paused rather than left to the turn's end: the card's turn closes on a placeholder answer, and judged on it
+     * the card is "not done", while the head, refused the same way, answers without an object and the run is
+     * written off as a head that never decided - which is how the evening of 8 October ended. The pause holds
+     * every clock, and a run a person paused is not resumed behind their back: it only moves, if anything has room.
+     *
+     * The refusal is kept as this run's own, by the account of the process that said it (see [refusals]): what
+     * the run does next - its words to the head held back, the account it leaves - rests on what its own
+     * processes were told, not on what the IDE heard elsewhere. Where it goes on is decided off this thread
+     * (see [relieve]): this is called from inside a process's own delivery, and from inside a send that a
+     * process failed to start for, and a move made there would raise the next process while the last one is
+     * still answering the call that raised it.
+     *
+     * [Refusal.UNFIT] counts only on an account the run moved to by itself. On the one the person chose, a dead
+     * sign-in is theirs to see and to renew (see CodexSessions.renewAfterSignIn).
+     */
+    @Synchronized
+    private fun ranIntoLimit(from: CodexSession, head: Boolean, reason: Refusal) {
+        if (phase == Phase.OVER) return
+        if (if (head) !isHead(from) else !isCard(from)) return
+        if (reason == Refusal.UNFIT && !borrowed) return
+
+        val now = System.currentTimeMillis()
+        val stop = lastStop?.takeIf { reason == Refusal.LIMIT }
+        val until = when {
+            reason == Refusal.UNFIT -> now + UNFIT_MS
+            stop?.resetsAt != null && stop.resetsAt > now -> stop.resetsAt
+            else -> now + LimitRelief.UNKNOWN_RESET_MS
+        }
+        refusals[from.accountId] = maxOf(refusals[from.accountId] ?: 0L, until)
+
+        // Its answer to the person dies with the turn: the words wait for a head that can answer them.
+        if (head) takeBackTheirWords()
+
+        // The same wall met by the other process, or the same turn saying it twice: already being dealt with.
+        if (settlingAccount()) return
+
+        val personPaused = phase == Phase.PAUSED
+        if (!personPaused) halt()
+        val relief = Relief(window = stop?.window.orEmpty(), resets = until, reason = reason, thenResume = !personPaused)
+        pendingRelief = relief
+        AppExecutorUtil.getAppExecutorService().execute {
+            runCatching { relieve(relief) }
+                .onFailure { thisLogger().warn("A scenario run could not look for another account", it) }
+        }
+        changed()
+    }
+
+    /** Where the run goes on from the account that has just refused it (see LimitRelief.choose). */
+    @Synchronized
+    private fun relieve(relief: Relief) {
+        if (pendingRelief !== relief || phase == Phase.OVER) return
+        pendingRelief = null
+        val now = System.currentTimeMillis()
+        val chosen = CodexAccounts.getInstance().currentId
+
+        when (val way = LimitRelief.choose(accountId, chosen, candidates(now), now)) {
+            is LimitRelief.Way.Go -> if (way.account == accountId) {
+                if (relief.thenResume) carryOnFromPause()
+            } else {
+                beginSwap(
+                    to = way.account,
+                    borrowed = way.account != chosen,
+                    thenResume = relief.thenResume,
+                    move = moveFor(relief.reason, to = way.account, window = relief.window, until = relief.resets),
+                )
+            }
+
+            /*
+             * A run the person paused is left as they left it: it is not theirs to wait out a limit on its own. What
+             * they wrote to the head is, though - held back while the account refuses, it is put when the first
+             * refusal ends, or it would wait in silence for a word nobody knows to say (see [deliverTold]).
+             */
+            is LimitRelief.Way.Wait -> if (relief.thenResume) restOnLimit(way.at, relief) else windMailClock()
+        }
+        changed()
+    }
+
+    /**
+     * Every account the run could go on on, as the IDE and the run itself know it right now: the ones added
+     * here, the CLI's own sign-in once it is known to be somebody, and the one the run is on. An account that
+     * will not resolve for this project at all (a drawer inside WSL, a folder gone) is no way on and is left out.
+     */
+    private fun candidates(now: Long): List<LimitRelief.Candidate> {
+        val accounts = CodexAccounts.getInstance()
+        val models = runModels()
+        val ids = buildList {
+            // A person who logged out of the CLI's own sign-in has no such account to go to; one whose address
+            // was ever learned does (see CodexAccounts.defaultIdentity), and a dead one is refused and left.
+            if (accountId.isEmpty() || accounts.currentId.isEmpty() || accounts.defaultIdentity("").isNotEmpty()) add("")
+            accounts.list().filterNot { it.isPending }.forEach { add(it.id) }
+        }.filter { id -> accounts.variablesFor(id, workingDirectory) != null }.plus(accountId).distinct()
+
+        return ids.map { id ->
+            val answers = models.map { accounts.canRun(id, it) }
+            LimitRelief.Candidate(
+                id = id,
+                standing = standingOf(id, now),
+                twinOfHere = id != accountId && accounts.sameAccount(id, accountId),
+                runs = when {
+                    answers.any { it == false } -> false
+                    answers.all { it == true } -> true
+                    else -> null
+                },
+            )
+        }
+    }
+
+    /** What the IDE knows about [account], with this run's own refusals of it on top (see [refusals]). */
+    private fun standingOf(account: String, now: Long): AccountUsage.Standing {
+        val known = AccountUsage.getInstance().standing(account, now)
+        val own = refusals[account]?.takeIf { it > now }
+        return known.copy(refusedUntil = listOfNotNull(known.refusedUntil, own).maxOrNull())
+    }
+
+    private fun refusedUntil(account: String, now: Long): Long? = standingOf(account, now).refusedUntil
+
+    /** Every model the run's sessions are raised with - an account has to run all of them to take the run on. */
+    private fun runModels(): Set<String> {
+        val head = scenario.head.model.ifBlank { defaultModel }
+        return (listOf(head) + scenario.stages.flatMap { stage -> stage.cards.map { it.model.ifBlank { head } } })
+            .filter { it.isNotBlank() }
+            .toSet()
+    }
+
+    /**
+     * No account has room: the run stays paused and carries on by itself at [at] - the first refusal known to
+     * end. Its card says so, and so does the timeline, so the pause is not taken for one somebody forgot.
+     */
+    private fun restOnLimit(at: Long, relief: Relief) {
+        restingOnLimit = true
+        val unfit = relief.reason == Refusal.UNFIT
+        val limit = RunLimit(
+            account = labelOf(accountId),
+            window = relief.window,
+            until = at,
+            reason = if (unfit) RunMove.UNFIT else RunMove.LIMIT,
+        )
+        run = run.copy(limit = limit)
+        noteMove(moveFor(relief.reason, to = "", window = relief.window, until = at).copy(to = "", waits = true))
+        windRestClock(at)
+    }
+
+    private fun windRestClock(at: Long) {
+        restClock?.cancel(false)
+        restClock = AppExecutorUtil.getAppScheduledExecutorService().schedule(
+            { runCatching { wake() }.onFailure { thisLogger().warn("A scenario run could not wake from its limit", it) } },
+            (at - System.currentTimeMillis()).coerceAtLeast(0) + REST_SLACK_MS,
+            TimeUnit.MILLISECONDS,
+        )
+    }
+
+    /**
+     * The person's words held back by a refusal under a pause of theirs, put once the account the run is on stops
+     * refusing it (see [relieve], [pause]) - at the end of that account's own refusal, and wound again if it still
+     * stands then. Nothing to wind when it does not refuse: the words go as they always have.
+     */
+    private fun windMailClock() {
+        val until = refusals[accountId]?.takeIf { it > System.currentTimeMillis() } ?: return
+        mailClock?.cancel(false)
+        mailClock = AppExecutorUtil.getAppScheduledExecutorService().schedule(
+            {
+                runCatching {
+                    synchronized(this) {
+                        mailClock = null
+                        if (phase == Phase.OVER) return@synchronized
+                        if (refusedHere()) windMailClock() else deliverTold()
+                        changed()
+                    }
+                }.onFailure { thisLogger().warn("A scenario run could not pass on the person's words", it) }
+            },
+            (until - System.currentTimeMillis()).coerceAtLeast(0) + REST_SLACK_MS,
+            TimeUnit.MILLISECONDS,
+        )
+    }
+
+    /**
+     * The wait is over: the account the run is on carries it on if its refusal has ended, another one with room
+     * if that has not, and with none the run waits for the next refusal to end.
+     *
+     * Fresh processes either way, even on the same account: the refused ones have stood idle for hours, and one
+     * may have gone meanwhile without the run minding (see [onCrashed]).
+     */
+    @Synchronized
+    private fun wake() {
+        if (phase != Phase.PAUSED || !restingOnLimit) return
+        restClock = null
+        val now = System.currentTimeMillis()
+        val chosen = CodexAccounts.getInstance().currentId
+
+        when (val way = LimitRelief.choose(accountId, chosen, candidates(now), now)) {
+            is LimitRelief.Way.Go -> {
+                val limit = run.limit
+                stopResting()
+                val reason = if (limit?.reason == RunMove.UNFIT) Refusal.UNFIT else Refusal.LIMIT
+                beginSwap(
+                    to = way.account,
+                    borrowed = way.account != chosen,
+                    thenResume = true,
+                    move = if (way.account == accountId) null else moveFor(reason, to = way.account, window = limit?.window.orEmpty()),
+                )
+            }
+
+            is LimitRelief.Way.Wait -> {
+                run = run.copy(limit = run.limit?.copy(until = way.at))
+                windRestClock(way.at)
+            }
+        }
+        changed()
+    }
+
+    private fun stopResting() {
+        restingOnLimit = false
+        restClock?.cancel(false)
+        restClock = null
+        if (run.limit != null) run = run.copy(limit = null)
+    }
+
+    /**
+     * Whether the run stands paused while its account is being dealt with - a refusal being looked past, a move
+     * under way, a wait for a reset. A process failing or dying meanwhile is not news (a fresh one takes its
+     * place), and the person's words are not put to a head about to be replaced.
+     */
+    private fun settlingAccount(): Boolean =
+        phase == Phase.PAUSED && (restingOnLimit || pendingSwap != null || pendingRelief != null)
+
+    /**
+     * Start moving the run to [to]. The run is already paused; the processes are replaced once the turns that
+     * were running have closed, or after [SWAP_GRACE_MS] if one will not (see [trySwap]).
+     *
+     * Waited for rather than cut, for the reason a tab's move waits for its `result`: the CLI writes the
+     * interrupted turn into the conversation as it closes it, and the process raised on the new account carries
+     * on from everything that was said. A head answering the person is left to finish its answer the same way.
+     * [move] is what the timeline is told, and nothing when the run only gets fresh processes where it is.
+     */
+    private fun beginSwap(to: String, borrowed: Boolean, thenResume: Boolean, move: RunMove?) {
+        swapClock?.cancel(false)
+        val swap = Swap(to, borrowed, thenResume)
+        pendingSwap = swap
+        move?.let(::noteMove)
+        swapClock = AppExecutorUtil.getAppScheduledExecutorService().schedule(
+            { runCatching { forceSwap(swap) }.onFailure { thisLogger().warn("A scenario run could not move to another account", it) } },
+            SWAP_GRACE_MS,
+            TimeUnit.MILLISECONDS,
+        )
+        trySwap()
+    }
+
+    /** The move under way, if nothing is left to wait for: no turn of the head's open, and none of the card's. */
+    private fun trySwap() {
+        val swap = pendingSwap ?: return
+        if (phase == Phase.OVER) return
+        // A card standing on a question holds its turn open for as long as nobody answers: it closes only when it
+        // is taken down, so there is nothing to wait for.
+        val cardOpen = card?.isBusy == true && questions.isEmpty()
+        if (head?.isBusy == true || cardOpen) return
+        swap(swap)
+    }
+
+    @Synchronized
+    private fun forceSwap(swap: Swap) {
+        if (pendingSwap !== swap || phase == Phase.OVER) return
+        swap(swap)
+    }
+
+    /**
+     * Both processes taken down and raised again over their own conversations, on the account the move is to.
+     *
+     * The head by [raiseHead], fenced as it was. The card, if the board has one, over its conversation - or, with
+     * nothing on the disk to come up over, started on its work again (see [cardStartsOver]). Questions it stood on
+     * died with its process: carried on, it comes back to the same step and asks again, so the run goes back to
+     * the card rather than to a question nobody can answer any more. What the processes had started in the
+     * background dies with them, which the card is told by the words that carry it on (see CARD_CARRY_ON).
+     */
+    private fun swap(swap: Swap) {
+        pendingSwap = null
+        swapClock?.cancel(false)
+        swapClock = null
+        accountId = swap.to
+        borrowed = swap.borrowed
+        // Untried until a turn on each model goes through (see [Refusal.UNFIT]).
+        provenModels.clear()
+        lastStop = null
+
+        if (head != null) raiseHead(takingOver = unfenced)
+
+        val step = run.steps.getOrNull(at)
+        val definition = step?.let(::definitionOf)
+        if (card != null && step != null && definition != null) {
+            closeCard()
+            val resumable = onDisk(step.conversationId)
+            card = openCard(step, definition, resumeFrom = if (resumable) step.conversationId else "")
+            cardStartsOver = !resumable
+            if (questions.isNotEmpty() || resumeTo == Phase.QUESTION || resumeTo == Phase.BLOCKED) {
+                questions.clear()
+                deciding = ""
+                cardTurnEnded = false
+                run = run.copy(question = null)
+                if (resumeTo == Phase.QUESTION || resumeTo == Phase.BLOCKED) {
+                    resumeTo = Phase.CARD
+                    pendingHead = ""
+                    headAskedAt = 0
+                }
+            }
+        }
+
+        changed()
+        if (swap.thenResume) carryOnFromPause() else deliverTold()
+    }
+
+    private fun definitionOf(step: RunStep): Card? =
+        scenario.stages.firstOrNull { it.id == step.stageId }?.cards?.firstOrNull { it.id == step.cardId }
+
+    private fun moveFor(reason: Refusal, to: String, window: String, until: Long = 0): RunMove = RunMove(
+        reason = if (reason == Refusal.UNFIT) RunMove.UNFIT else RunMove.LIMIT,
+        from = labelOf(accountId),
+        to = labelOf(to),
+        window = window,
+        until = until,
+    )
+
+    /**
+     * What the panel did about the run's account, in the timeline where it happened (see RunNote.PANEL).
+     *
+     * The words are chosen by the panel from [RunNote.move] in the reader's language; [RunNote.text] carries the
+     * English sentence for a phone whose page predates the panel's own notes, and would otherwise draw an empty
+     * line under the main thread's name.
+     */
+    private fun noteMove(move: RunMove) {
+        run = run.copy(
+            notes = run.notes + RunNote(
+                at = HeadMail.stamp(run.notes, System.currentTimeMillis()),
+                stepKey = boardKey(),
+                text = move.inEnglish(),
+                who = RunNote.PANEL,
+                move = move,
+            ),
+        )
+    }
+
+    /** An account as the person named it: the name they gave it, or its address. Empty for an unnamed CLI sign-in. */
+    private fun labelOf(id: String): String {
+        val accounts = CodexAccounts.getInstance()
+        if (id.isEmpty()) return accounts.defaultAlias.ifBlank { accounts.defaultIdentity("") }
+        return accounts.account(id)?.let { it.alias.ifBlank { it.email } }.orEmpty()
+    }
+
+    /**
+     * Whether the run's own processes were refused on the account it is on, and the refusal has not ended (see
+     * [refusals]). Its own rather than the IDE's: a tab's model week, or a full window being paid past as extra
+     * usage, refuses nothing this run does.
+     */
+    private fun refusedHere(): Boolean = (refusals[accountId] ?: 0L) > System.currentTimeMillis()
 
     /** Stop for good: both processes are taken down and the run is written as stopped. */
     @Synchronized
@@ -1367,9 +2590,22 @@ internal class ScenarioEngine(
     /** Both processes, the clock and the questions - everything the run holds while it is alive. */
     private fun takeEverythingDown() {
         phase = Phase.OVER
+        answeringPerson = false
+        deferred = false
+        toldImages.clear()
+        carryingImages = emptyMap()
 
         clock?.cancel(false)
         clock = null
+        pendingSwap = null
+        swapClock?.cancel(false)
+        swapClock = null
+        pendingRelief = null
+        restingOnLimit = false
+        restClock?.cancel(false)
+        restClock = null
+        mailClock?.cancel(false)
+        mailClock = null
         closeCard()
         head?.stop()
         head = null
@@ -1400,6 +2636,7 @@ internal class ScenarioEngine(
      */
     @Synchronized
     private fun tick() {
+        if (watchThePersonsTurn()) return
         when {
             phase == Phase.CARD -> watchTheCard()
             phase == Phase.TAKEOVER -> watchTheTakeOver()
@@ -1420,8 +2657,18 @@ internal class ScenarioEngine(
      * A card that ran past its time is one its session could not finish, so it goes to the head where the
      * scenario says so. What it was saying at that moment travels with it: the head never judged a turn
      * that never ended, and it is the one clue to where three hours went.
+     *
+     * A card waiting for its helpers is looked at on the same beat. A helper's report starts the card's
+     * next turn by itself, so nothing is left to wait for while it still waits only when that never came:
+     * a command of a helper's that outlived its allowance (see BackgroundWork.HELPERS_COMMAND_MS), or a
+     * report the CLI did not take up. Its answer is then what it said so far, and the head judges that.
      */
     private fun watchTheCard() {
+        if (cardWaits && !helpers.busy()) {
+            // Done while the card waited, and the card not asked yet: it is asked now (see [helpersFinished]).
+            if (!helpersAsked) return card?.let(::helpersFinished) ?: judgeTheCard(overdue = helpers.overdue())
+            if (card?.isBusy != true) return judgeTheCard(overdue = helpers.overdue())
+        }
         if (!pastTheCeiling()) return
 
         val step = run.steps.getOrNull(at) ?: return
@@ -1457,6 +2704,32 @@ internal class ScenarioEngine(
         end(RunState.FAILED, RunFailure.HEAD_SILENT, "the main thread stopped answering")
     }
 
+    /**
+     * How long the head has been answering the person - the same half hour as a question of the run's, and for
+     * the same reason: a head that says nothing for that long about a few sentences is not about to speak, and a
+     * question of the run's may be waiting behind it (see [askAgain]). True when it ended the run.
+     */
+    private fun watchThePersonsTurn(): Boolean {
+        if (!answeringPerson || personAskedAt == 0L) return false
+        if (System.currentTimeMillis() - personAskedAt < HEAD_CEILING_MS) return false
+
+        end(RunState.FAILED, RunFailure.HEAD_SILENT, "the main thread stopped answering")
+        return true
+    }
+
+    /**
+     * Start or stop the run's own clock as the phase moves (see RunClock).
+     *
+     * Standing still is a pause, and a question nobody but a person can answer - the same two the card's
+     * ceiling does not count (see [hold]). A head deciding a question is work, and so is a card waiting for
+     * its helpers: something is being done and paid for. The end of the run closes a stretch it ended in -
+     * a run stopped while paused did not work through its pause either.
+     */
+    private fun restsFollow(phase: Phase) {
+        val resting = phase == Phase.PAUSED || phase == Phase.BLOCKED
+        run = RunClock.follow(run, resting = resting, board = at, now = System.currentTimeMillis())
+    }
+
     private fun hold() {
         if (pausedAt == 0L) pausedAt = System.currentTimeMillis()
     }
@@ -1468,10 +2741,17 @@ internal class ScenarioEngine(
     }
 
     @Synchronized
-    private fun onSessionError(head: Boolean, message: String) {
+    private fun onSessionError(from: CodexSession, head: Boolean, message: String) {
         if (phase == Phase.OVER) return
+        if (if (head) !isHead(from) else !isCard(from)) return
         // A card taken over was taken down by us, so nothing it still says is about the run (see [onCrashed]).
         if (!head && phase == Phase.TAKEOVER) return
+        // A process being replaced or waited past says nothing about the run: a fresh one takes its place.
+        if (settlingAccount()) return
+        // An account the run moved to by itself that fails before a turn on this process's model went through is
+        // one more account that cannot take the work - a credential that will not resolve, a model its plan does
+        // not have - not the end of the run (see [ranIntoLimit]).
+        if (untried(from)) return ranIntoLimit(from, head, Refusal.UNFIT)
         // A first failure of the head is a head that never came up at all - a missing executable, an
         // account that is not signed in. Worth saying differently from a head that answered badly later.
         val failure = when {
@@ -1483,10 +2763,14 @@ internal class ScenarioEngine(
     }
 
     @Synchronized
-    private fun onCrashed(head: Boolean) {
+    private fun onCrashed(from: CodexSession, head: Boolean) {
         if (phase == Phase.OVER) return
+        if (if (head) !isHead(from) else !isCard(from)) return
         // A card already taken over was taken down by us: whatever it reports now is about nothing.
         if (!head && (phase == Phase.TAKEOVER || tookOver)) return
+        // The same two as in [onSessionError]: a process being replaced, and an untried account the run borrowed.
+        if (settlingAccount()) return
+        if (untried(from)) return ranIntoLimit(from, head, Refusal.UNFIT)
         /*
          * A card whose process went away while it was working, or while it stood on a question, is a card
          * its session could not finish. The head is not asked about it first - there is no turn to judge -
@@ -1512,6 +2796,8 @@ internal class ScenarioEngine(
             failure = failure.ifEmpty { run.failure },
             error = error.ifEmpty { run.error },
             question = null,
+            answering = false,
+            limit = null,
             /*
              * The cards still in the air when the run ended, told apart by whether they had begun.
              *
@@ -1574,8 +2860,32 @@ internal class ScenarioEngine(
 
         /** The phases in which the card's own turn is open - working, or standing on a question. */
         val CARD_PHASES = setOf(Phase.CARD, Phase.QUESTION, Phase.BLOCKED)
+
+        /**
+         * The phases in which nothing is asked of the head: a card at work, a question standing for the person,
+         * a pause - when words the person wrote to it can be a turn of their own (see HeadMail.way).
+         */
+        val WAITING_PHASES = setOf(Phase.CARD, Phase.BLOCKED, Phase.PAUSED)
         const val HOUR_MS = 60L * 60 * 1000
         const val TICK_SECONDS = 30L
+
+        /** How long a move to another account waits for the turns it interrupted to close - a tab's eight seconds. */
+        const val SWAP_GRACE_MS = 8_000L
+
+        /**
+         * How long after a limit's reset a resting run looks again. The reset is the server's clock, not ours, and a
+         * request a few seconds early is refused and puts the run back to waiting for nothing.
+         */
+        const val REST_SLACK_MS = 30_000L
+
+        /**
+         * How long an account the run moved to by itself, and found unable to take it, is left alone - long
+         * enough not to be tried again and again through one night, short enough for a sign-in renewed meanwhile.
+         */
+        const val UNFIT_MS = HOUR_MS
+
+        /** How a turn's result says the turn failed - such a turn proves nothing about the account. */
+        const val ERROR_RESULT = "\"is_error\":true"
         /**
          * The newest words a row keeps (see LiveWords). Its live line shows the last three lines of them,
          * and across a wide panel three lines of the card's 11px type hold some seven hundred characters.
@@ -1587,6 +2897,15 @@ internal class ScenarioEngine(
         const val TAKE_OVER_CHARS = 400
         const val DETAIL_CHARS = 2000
         const val CARRY_ON = "Carry on from where you stopped."
+
+        /**
+         * The same words for a card, and one thing more: its helpers in the background did not survive. A
+         * stop takes the process down, and a pause interrupts the card, which the CLI answers by stopping
+         * them (measured on 2.1.280). Told nothing, a card last seen waiting for its reviewers goes on
+         * waiting for reports that will never come, ends its turn on that, and is judged on it.
+         */
+        const val CARD_CARRY_ON = "$CARRY_ON Helpers you had started in the background did not survive the stop: " +
+            "start again any you still need."
 
         /** Everything a turn was charged for - the cache is most of it on a card that reads a lot. */
         val TOKEN_FIELDS = listOf(

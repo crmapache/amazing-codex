@@ -1,7 +1,8 @@
 import { ASIDE_COMMAND } from '../feed/side'
 import { calmVividOf } from '../calmColors'
 import type { CommandEntry, CommandHint } from '../feed/slash'
-import { buildCommands } from '../feed/slash'
+import { buildCommands, withAdded } from '../feed/slash'
+import { withBranch, type BranchFacts } from '../feed/branch'
 import { emptyUsageBook, mergeUsageBook, usageOf, type UsageBook, type UsageFacts } from '../feed/usage'
 import type { Dict } from '../i18n/en'
 import type {
@@ -25,7 +26,7 @@ import type {
  * they outlive the screen. Walking out of a chat and back into it must not empty the limit rings and
  * blank the branch while the IDE gets round to saying them again.
  */
-export interface ProjectFacts extends UsageFacts {
+export interface ProjectFacts extends UsageFacts, BranchFacts {
   /**
    * The subscription's figures of every account this machine runs, not just one set.
    *
@@ -40,12 +41,11 @@ export interface ProjectFacts extends UsageFacts {
    * and a shape that differs from the desk's for no reason is a shape that drifts from it.
    */
   usage: UsageBook
-  gitBranch?: string
-  pullRequest?: string
-  pullRequestUrl?: string
   /** The project's paths, for the "@" hint. Trimmed on the way out - see RemoteFeed.forPhone. */
   files: string[]
   hints: Record<string, CommandHint>
+  /** The commands a conversation came to know after its catalogue - a mod's (see `addedCommands`). */
+  added: Record<string, CommandHint>
   /**
    * The names of the commands the agent knows, as the IDE last heard them (see the `commands` message).
    * A phone never sees a conversation start, so this is the only route by which the MCP servers'
@@ -145,6 +145,7 @@ export interface ScenarioShelves {
 export const emptyFacts = (): ProjectFacts => ({
   files: [],
   hints: {},
+  added: {},
   commands: [],
   runs: {},
   usage: emptyUsageBook(),
@@ -173,6 +174,7 @@ export const isFact = (message: ShellMessage): boolean =>
   message.type === 'project' ||
   message.type === 'files' ||
   message.type === 'commandHints' ||
+  message.type === 'addedCommands' ||
   message.type === 'commands' ||
   message.type === 'locale' ||
   message.type === 'calmColors' ||
@@ -198,29 +200,18 @@ export const applyFact = (facts: ProjectFacts, message: ShellMessage, watching =
       // Into the account it names, never over the picture on screen - see [ProjectFacts.usage].
       return { ...facts, usage: mergeUsageBook(facts.usage, message) }
 
-    /*
-     * The branch and its pull request, each falling back to what is already held.
-     *
-     * The machine says the whole of this fact every time (see ProjectCatalog.sayProject), so on a current
-     * plugin nothing ever falls back. The fallback is for the other case, which is the ordinary one for a
-     * week after a release: this page is served by the relay and updates with it, while the plugin
-     * updates when somebody gets round to it - and an older one sends the branch and the pull request as
-     * two separate messages, each carrying its half. Replaced whole, the second of them wiped the first,
-     * so a project's card showed a branch that disappeared at the next look at GitHub.
-     */
+    // The branch and its pull request, each falling back to what is already held - see withBranch.
     case 'project':
-      return {
-        ...facts,
-        gitBranch: message.gitBranch ?? facts.gitBranch,
-        pullRequest: message.pullRequest ?? facts.pullRequest,
-        pullRequestUrl: message.pullRequestUrl ?? facts.pullRequestUrl,
-      }
+      return withBranch(facts, message)
 
     case 'files':
       return { ...facts, files: message.files }
 
     case 'commandHints':
       return { ...facts, hints: message.hints }
+
+    case 'addedCommands':
+      return { ...facts, added: message.hints }
 
     case 'commands':
       return { ...facts, commands: message.commands }
@@ -331,8 +322,11 @@ export const phoneCommands = (
   t: Dict,
   commands: ProjectFacts['commands'],
   hints: ProjectFacts['hints'],
+  added: ProjectFacts['added'] = {},
 ): CommandEntry[] =>
-  buildCommands(t, commands, hints).filter((command) => command.group !== 'panel' || command.id === ASIDE_COMMAND)
+  buildCommands(t, commands, withAdded(hints, added)).filter(
+    (command) => command.group !== 'panel' || command.id === ASIDE_COMMAND,
+  )
 
 /**
  * The runs going in a project right now, or nothing.
@@ -352,3 +346,24 @@ export const phoneCommands = (
  * joining late, and a paused run sends no beat at all.
  */
 export const liveRunsOf = (facts: ProjectFacts | undefined): ScenarioRunSummary[] => facts?.liveRuns ?? []
+
+/**
+ * The models added by hand on the machine a project belongs to (see CustomModels.tsx).
+ *
+ * The project's own fact first, when there is one: it is live for an open project, while the machine's
+ * list in the inventory is as fresh as the last knock. The machine's list otherwise - and that is the
+ * case it was added for: a project closed at the desk has no facts at all, and its new chat used to
+ * offer every model Claude Code lists and not the one this machine's provider serves. An IDE older than
+ * that list says nothing about it, and the fact remains the only answer there is.
+ *
+ * Asked of that machine alone, unlike the language and the colour mode: those are about the person and
+ * any answer will do, while a model is about a Claude Code - a name added on one machine says nothing
+ * about what another one can launch, and offering it would be offering a turn that dies on its first
+ * message.
+ */
+export const customModelsOf = (
+  facts: Record<string, ProjectFacts>,
+  machine: string[] | undefined,
+  agentId: string,
+  projectKey: string,
+): string[] => facts[`${agentId}:${projectKey}`]?.customModels ?? machine ?? []

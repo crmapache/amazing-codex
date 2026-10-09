@@ -75,6 +75,12 @@ export const CAP_OPEN_BARE = 'openBare'
  */
 export const CAP_PARTS = 'parts'
 
+/**
+ * Writing to the main thread of a run that is going - see RemoteAgent.CAP_TELL and `scenarioTell`. A machine
+ * without it would refuse the words as a message it has never heard of, so the run's screen offers no field.
+ */
+export const CAP_TELL = 'tellHead'
+
 export interface Inventory {
   projects: Array<{
     key: string
@@ -129,6 +135,11 @@ export interface Inventory {
   caps?: string[]
   models?: ModelInfo[]
   prefs?: SessionLaunch
+  /**
+   * The models added by hand at that desk - a machine-wide setting, beside the catalogue rather than only
+   * a fact of an open project (see customModelsOf in facts.ts). Absent from an IDE older than the field.
+   */
+  customModels?: string[]
 }
 
 /** What a conversation's mark says about it - the panel's own five states (see sessionState there). */

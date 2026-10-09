@@ -67,6 +67,9 @@ internal object CodexHistory {
         val hidden = ScenarioConversations(workingDirectory).all()
         val givenByModel = AutoTitles(workingDirectory).all()
         val entries = ArrayList<Entry>()
+        // A reverted thread is listed once per file it has (see CodexRollout) - newest first, so the first row
+        // of an id is the thread as it stands, and the others are the files it was cut from.
+        val listed = HashSet<String>()
         var cursor: String? = null
         var pages = 0
 
@@ -84,13 +87,12 @@ internal object CodexHistory {
             for (element in (result["data"] as? JsonArray).orEmpty()) {
                 val thread = element as? JsonObject ?: continue
                 val id = AppServer.text(thread["id"]).ifEmpty { null } ?: continue
-                if (id in hidden) continue
+                if (id in hidden || !listed.add(id)) continue
                 val name = AppServer.text(thread["name"]).trim()
                 // The preview is the start of the first message as Codex joined its parts - the editor note
                 // that went with it included, glued on without a break (measured on 0.152), so it is cut off
                 // at its heading (see IdeContextPrompt).
                 val preview = firstLine(AppServer.text(thread["preview"]).substringBefore(IdeContextPrompt.HEADER))
-                AppServer.text(thread["path"]).takeIf { it.isNotEmpty() }?.let { files[id] = File(it) }
 
                 entries += Entry(
                     id = id,
@@ -114,13 +116,30 @@ internal object CodexHistory {
      * has none, and that is what tells a tab worth resuming from an empty one (see CodexSessions.moveTo).
      */
     fun transcriptFile(workingDirectory: String?, id: String): File? {
-        files[id]?.takeIf { it.isFile }?.let { return it }
         val root = CodexHome.of(workingDirectory).sessionsDirectory
-        val found = runCatching {
-            root.walkTopDown().maxDepth(4).firstOrNull { it.isFile && it.name.endsWith("-$id.jsonl") }
-        }.getOrNull()
+        val known = files[id]?.takeIf { it.isFile }
+        if (known != null) {
+            // A revert since puts the thread into a new file - today's folder, where it would be (see
+            // CodexRollout). A look into one folder rather than a walk of all of them: this is asked per page.
+            return CodexRollout.current(listOf(known) + segmentsIn(dayFolder(root), id) + segmentsIn(known.parentFile, id))
+                ?.also { files[id] = it }
+        }
+        val found = CodexRollout.current(CodexRollout.filesOf(root, id, fresh = true))
         found?.let { files[id] = it }
         return found
+    }
+
+    /** The thread was reverted here - its next file is looked for afresh rather than taken from memory. */
+    fun forget(id: String) {
+        files.remove(id)
+    }
+
+    private fun segmentsIn(folder: File?, id: String): List<File> =
+        folder?.listFiles { file -> file.isFile && file.name.endsWith(".jsonl") && "${id}_" in file.name }?.toList().orEmpty()
+
+    private fun dayFolder(root: File): File {
+        val today = java.time.LocalDate.now()
+        return File(root, "%04d/%02d/%02d".format(today.year, today.monthValue, today.dayOfMonth))
     }
 
     private val files = ConcurrentHashMap<String, File>()
@@ -130,13 +149,56 @@ internal object CodexHistory {
         page(workingDirectory, id, before = null, local = true)
 
     /**
+     * The end of what a fork not born yet carries - its source up to the turn the fork ends on, and the seam
+     * after it (see ForkOrigin). What a fork's tab opens with the moment it is made: the fork is the same
+     * conversation going on, and its feed shows what its agent will remember.
+     */
+    fun forkOpening(workingDirectory: String?, origin: ForkOrigin): Page =
+        page(workingDirectory, origin.source, before = null, local = true, unborn = origin)
+
+    /** A page of the same, further back than [before] - see [earlier] for the sizes. */
+    fun forkEarlier(workingDirectory: String?, origin: ForkOrigin, before: String?, local: Boolean): Page =
+        page(workingDirectory, origin.source, before, local, unborn = origin)
+
+    /**
      * A page older than [before], sized for whoever asked. [local] is the IDE's own panel; a phone's page
      * has to fit into a relay frame capped at 256 KB, and a frame over the cap is dropped whole.
      */
     fun earlier(workingDirectory: String?, id: String, before: String?, local: Boolean): Page =
         page(workingDirectory, id, before, local)
 
-    private fun page(workingDirectory: String?, id: String, before: String?, local: Boolean): Page {
+    /**
+     * [unborn] is a fork not born yet, read off its source ([id] is the source then): the source's turns
+     * newer than the fork's last one are not the fork's, and the seam stands under the rest. A fork that is
+     * born reads its own thread - it holds what it inherited under the same turn ids (measured on 0.160) - and
+     * the seam goes in after the last inherited turn, by what the fork book says (see ForkBook).
+     */
+    private fun page(workingDirectory: String?, id: String, before: String?, local: Boolean, unborn: ForkOrigin? = null): Page =
+        page(
+            id,
+            before,
+            local,
+            unborn,
+            ask = { method, params -> CodexCatalog.call(method, params, timeoutSeconds = PAGE_TIMEOUT_SECONDS) },
+            asks = asksOf(transcriptFile(workingDirectory, id)),
+            book = { ForkBook(workingDirectory).origin(it) },
+            model = { lastModelOf(transcriptFile(workingDirectory, id)) },
+        )
+
+    /**
+     * The page itself, with what it reads handed in - Codex's turns ([ask]), the questions out of the thread's
+     * file ([asks]), the fork book ([book]) and the model - so a test can walk it over turns of its own.
+     */
+    internal fun page(
+        id: String,
+        before: String?,
+        local: Boolean,
+        unborn: ForkOrigin?,
+        ask: (String, JsonObject) -> JsonElement?,
+        asks: Map<String, List<Ask>>,
+        book: (String) -> ForkOrigin?,
+        model: () -> String,
+    ): Page {
         // A desk page is measured in characters, a phone's in bytes: the phone's has to fit a relay frame,
         // and a frame is bytes - Russian, Chinese and the like weigh two or three bytes a character, so a
         // page measured in characters went past the frame on exactly those conversations and was dropped
@@ -154,9 +216,19 @@ internal object CodexHistory {
         // Whether every turn down to the very first one is on this page.
         var exhausted = false
 
-        // The questions with options the conversation asked, by turn - they live in the thread's file alone
-        // (see [asksOf]), read once for the page.
-        val asks = asksOf(transcriptFile(workingDirectory, id))
+        // Where a fork's seam stands: under its last inherited turn, or above everything when it carries none.
+        val seam = unborn ?: book(id)
+        if (unborn != null && unborn.at == null) {
+            return Page(if (before == null) listOf(unborn.seamLine()) else emptyList(), cursor = null)
+        }
+        // A fork not born yet carries nothing past its last turn: those of its source are skipped until it. A
+        // page asked for by a boundary needs no skipping - the boundary is a turn the fork's own page showed,
+        // so nothing newer than the fork's last turn is left above it, and skipped there, every turn of the
+        // walk would be (it starts at the request that held the boundary, past the last turn already).
+        var inherited = unborn == null || before != null
+        // The seam under a fork not born yet goes in when the page is put together: counted as a turn of the
+        // page, a first turn heavier than the budget would have left a page of the seam alone.
+        val seamUnder = unborn?.takeIf { before == null }?.seamLine()
 
         // Where the request holding [before] began, when this reader asked for the page above it: the walk
         // starts there instead of at the newest turn. Still searched for [before] - a cursor is a place,
@@ -166,7 +238,7 @@ internal object CodexHistory {
         var guard = 0
         walk@ while (guard++ < MAX_PAGES_WALKED) {
             val requestCursor = cursor
-            val result = CodexCatalog.call(
+            val result = ask(
                 "thread/turns/list",
                 buildJsonObject {
                     put("threadId", id)
@@ -175,7 +247,6 @@ internal object CodexHistory {
                     put("itemsView", "full")
                     requestCursor?.let { put("cursor", it) }
                 },
-                timeoutSeconds = PAGE_TIMEOUT_SECONDS,
             ) as? JsonObject ?: break
 
             val turns = (result["data"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
@@ -183,6 +254,12 @@ internal object CodexHistory {
 
             for (turn in turns) {
                 val turnId = AppServer.text(turn["id"])
+
+                // Turns of the source a fork not born yet will not carry.
+                if (!inherited) {
+                    if (turnId != unborn?.at) continue
+                    inherited = true
+                }
 
                 if (!passed) {
                     if (turnId == before) {
@@ -210,7 +287,9 @@ internal object CodexHistory {
                     continue
                 }
 
-                val lines = CodexReplay.lines(turn, outputLimit, closeTurn = true, asks = asks[turnId].orEmpty())
+                val replayed = CodexReplay.lines(turn, outputLimit, closeTurn = true, asks = asks[turnId].orEmpty())
+                // A born fork's seam, right under the last turn it inherited.
+                val lines = if (unborn == null && seam != null && seam.at == turnId) replayed + seam.seamLine() else replayed
                 val full = collected.size >= maxTurns || chars + lines.sumOf(weigh) > budget
                 if (collected.isNotEmpty() && full) break@walk
 
@@ -227,16 +306,64 @@ internal object CodexHistory {
             cursor = next
         }
 
+        // A born fork that carried nothing has its seam above everything it said.
+        if (exhausted && unborn == null && seam != null && seam.at == null) collected += listOf(seam.seamLine())
+
         // The page above is found from where the oldest turn's request began (see [cursors]).
         val nextCursor = if (exhausted || oldestTurn == null) null else oldestTurn
         if (nextCursor != null) {
             if (oldestTurnRequest != null) cursors[id to nextCursor] = oldestTurnRequest else cursors.remove(id to nextCursor)
         }
 
-        val lines = collected.reversed().flatten()
-        val model = if (before == null) lastModelOf(transcriptFile(workingDirectory, id)) else ""
-        return Page(lines, nextCursor, model)
+        val lines = collected.reversed().flatten() + listOfNotNull(seamUnder)
+        return Page(lines, nextCursor, if (before == null) model() else "")
     }
+
+    /**
+     * A turn as a fork or a rewind needs it: its id, the ids of the person's messages in it in their order -
+     * the first began the turn, the rest were written into it - and whether it has finished. Codex forks and
+     * reverts by turns (see ForkOrigin, CodexSession.rewind).
+     */
+    data class TurnRef(val id: String, val messages: List<String>, val finished: Boolean)
+
+    /**
+     * Every turn of thread [id], oldest first - null when Codex knows no such thread. [ask] is who is asked:
+     * the shared catalog process by default, a conversation's own process when it holds the thread.
+     */
+    fun turnRefs(id: String, ask: (String, JsonObject) -> JsonElement? = { method, params -> CodexCatalog.call(method, params, timeoutSeconds = PAGE_TIMEOUT_SECONDS) }): List<TurnRef>? {
+        val refs = ArrayList<TurnRef>()
+        var cursor: String? = null
+        var guard = 0
+        while (guard++ < MAX_PAGES_WALKED) {
+            val result = runCatching {
+                ask(
+                    "thread/turns/list",
+                    buildJsonObject {
+                        put("threadId", id)
+                        put("limit", TURN_REFS_PER_REQUEST)
+                        put("sortDirection", "asc")
+                        put("itemsView", "summary")
+                        cursor?.let { put("cursor", it) }
+                    },
+                ) as? JsonObject
+            }.getOrNull() ?: return refs.takeIf { it.isNotEmpty() }
+
+            for (element in (result["data"] as? JsonArray).orEmpty()) {
+                val turn = element as? JsonObject ?: continue
+                val turnId = AppServer.text(turn["id"]).ifEmpty { null } ?: continue
+                val messages = (turn["items"] as? JsonArray).orEmpty()
+                    .mapNotNull { it as? JsonObject }
+                    .filter { AppServer.text(it["type"]) == "userMessage" }
+                    .map { AppServer.text(it["id"]) }
+                    .filter { it.isNotEmpty() }
+                refs += TurnRef(turnId, messages, finished = AppServer.text(turn["status"]) != "inProgress")
+            }
+            cursor = AppServer.text(result["nextCursor"]).ifEmpty { null } ?: break
+        }
+        return refs
+    }
+
+    private const val TURN_REFS_PER_REQUEST = 100
 
     /**
      * Where the request that held a turn began, by (thread, that turn's id) - the id the panel will hand back
@@ -254,7 +381,7 @@ internal object CodexHistory {
         if (file == null || !file.isFile) return ""
         var model = ""
         runCatching {
-            file.useLines { lines ->
+            CodexRollout.useLines(file) { lines ->
                 for (line in lines) {
                     if (!line.contains(TURN_CONTEXT)) continue
                     val payload = runCatching { Json.parseToJsonElement(line).jsonObject["payload"] as? JsonObject }.getOrNull()
@@ -272,7 +399,7 @@ internal object CodexHistory {
     internal fun lastTokenUsage(file: File?): JsonObject? {
         if (file == null || !file.isFile) return null
         var last: String? = null
-        runCatching { file.useLines { lines -> lines.forEach { if (it.contains(TOKEN_COUNT)) last = it } } }
+        runCatching { CodexRollout.useLines(file) { lines -> lines.forEach { if (it.contains(TOKEN_COUNT)) last = it } } }
         val line = last ?: return null
 
         val info = runCatching {
@@ -332,7 +459,7 @@ internal object CodexHistory {
         var lastSaid: String? = null
 
         runCatching {
-            file.useLines { lines ->
+            CodexRollout.useLines(file) { lines ->
                 for (line in lines) {
                     // The agent's own items are many and some heavy (a thought carries its encrypted body), so
                     // only their head is read, never the whole line.
@@ -455,10 +582,8 @@ internal object CodexHistory {
         return names
     }
 
-    /** The thread id a conversation file belongs to - the end of its name. */
-    fun threadIdOf(file: File): String? = THREAD_ID.find(file.name)?.groupValues?.get(1)
-
-    private val THREAD_ID = Regex("([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\\.jsonl$")
+    /** The thread id a conversation file belongs to - out of its name, a reverted thread's later files included. */
+    fun threadIdOf(file: File): String? = CodexRollout.nameOf(file)?.thread
 
     private const val TURN_CONTEXT = "\"turn_context\""
     private const val TITLE_CHARS = 80

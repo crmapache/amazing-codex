@@ -1,5 +1,7 @@
 package io.github.crmapache.amazingcodex.remote
 
+import com.intellij.openapi.components.State
+import com.intellij.util.ThreeState
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -46,6 +48,29 @@ class RemoteStateTest {
 
         assertFalse(state.wasRevoked("device-0"))
         assertTrue(state.wasRevoked("device-${RemoteState.REVOKED_REMEMBERED + 4}"))
+    }
+
+    /** The list a person revokes from is the list a resuming device is checked against (RemoteAgent.sessionInit). */
+    @Test
+    fun `only a remembered device is listed`() {
+        val state = RemoteState()
+        state.remember(device("phone"))
+
+        assertTrue(state.lists("phone"))
+        assertFalse(state.lists("tablet"))
+    }
+
+    /**
+     * Saved when asked, not once in five minutes. A non-roaming storage gets the platform's save threshold
+     * unless it opts out, and with it the save after a pairing wrote nothing: an IDE stopped soon after came
+     * back without the record while the key stayed in the keychain - a phone that connected and was listed
+     * nowhere.
+     */
+    @Test
+    fun `the record is saved without the platform's threshold`() {
+        val storage = RemoteState::class.java.getAnnotation(State::class.java).storages.single()
+
+        assertEquals(ThreeState.NO, storage.useSaveThreshold)
     }
 
     /** Revoking the same address twice must not spend two of those rows. */

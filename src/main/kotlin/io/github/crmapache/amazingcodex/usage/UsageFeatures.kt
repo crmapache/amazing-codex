@@ -48,9 +48,11 @@ internal object UsageFeatures {
         "ask_answer",
         "subagent_window",
         "message_reuse",
+        "rewind",
         "pin",
         "open_in_editor",
         "send_selection",
+        "send_path",
         "attach_file",
         "paste_file",
         "copy",
@@ -67,6 +69,7 @@ internal object UsageFeatures {
         "scenario_schedule",
         "scenario_queue",
         "scenario_answer",
+        "scenario_tell",
         "statistics_tab",
         "stats_share",
         "mcp_manage",
@@ -159,6 +162,7 @@ internal object UsageFeatures {
         "stopTask",
         "sideQuestion",
         "sideQuestionCancel",
+        "rewind",
         "resumeSession",
         "search",
         "searchAi",
@@ -171,6 +175,7 @@ internal object UsageFeatures {
         "mcpAdd",
         "mcpRemove",
         "scenarioAnswer",
+        "scenarioTell",
         "scenarioPause",
         "scenarioResume",
         "scenarioContinue",
@@ -185,6 +190,7 @@ internal object UsageFeatures {
         "scenarioSchedule",
         "scenarioUnschedule",
         "scenarioRunDelete",
+        "scenarioRunStar",
         "scenarioQueue",
         "scenarioQueueRemove",
         "scenarioQueueMove",
@@ -206,6 +212,9 @@ internal object UsageFeatures {
         "ready",
         "history",
         "historyPage",
+        // The rewind dialog asking what the code part would touch - it opens with the dialog; the press
+        // is the rewind itself.
+        "rewindPreview",
         "searchCancel",
         "renameSession",
         "mcpList",
@@ -272,6 +281,7 @@ internal object UsageFeatures {
         // not a feature used.
         "bash" -> "bash_mode"
         "sideQuestion" -> "side_question"
+        "rewind" -> "rewind"
         "improvePrompt" -> "improve_prompt"
         "setModel" -> "model_switch"
         "setEffort" -> "effort_switch"
@@ -295,6 +305,7 @@ internal object UsageFeatures {
         "scenarioSchedule" -> "scenario_schedule"
         "scenarioQueue" -> "scenario_queue"
         "scenarioAnswer" -> "scenario_answer"
+        "scenarioTell" -> "scenario_tell"
         "saveImage" -> "stats_share"
         "mcpAdd", "mcpRemove", "mcpReconnect", "mcpAuthenticate" -> "mcp_manage"
         // Installing and removing only. "pluginEnable" and "pluginDisable" stand for nothing, for the reason

@@ -168,4 +168,111 @@ class CodexSessionLiveTest : BasePlatformTestCase() {
 
         CodexCatalog.shutdown()
     }
+
+    /**
+     * A rewind against a real Codex: the conversation cut back by `thread/revert` and the agent's patches
+     * undone, a rewind refused over a message the asker has not seen, and a fork cut through a chosen turn -
+     * each the way the panel asks for it.
+     */
+    fun testARewindCutsTheConversationPutsTheCodeBackAndAForkEndsWhereItWasCut() {
+        if (!enabled) return
+        val directory = Files.createTempDirectory("acx-live-rewind").toFile()
+        try {
+            rewindAndFork(directory)
+        } finally {
+            forgetTrust(directory)
+            archiveThread()
+            directory.deleteRecursively()
+        }
+    }
+
+    private fun rewindAndFork(directory: File) {
+        ProcessBuilder("git", "init", "-q").directory(directory).start().waitFor()
+        val notes = File(directory, "notes.txt")
+        val first = java.util.UUID.randomUUID().toString()
+        val second = java.util.UUID.randomUUID().toString()
+
+        val recorder = Recorder()
+        val session = session(directory, recorder, PermissionModes.ACCEPT_EDITS)
+        session.sendPrompt("Using apply_patch (not the shell), create notes.txt containing exactly the line: one. Reply OK.", uuid = first)
+        assertTrue("the first turn did not end: ${recorder.errors}", recorder.turnEnded.await(240, TimeUnit.SECONDS))
+        assertEquals("one", notes.readText().trim())
+        thread = session.conversationId
+
+        recorder.turnEnded = CountDownLatch(1)
+        session.sendPrompt(
+            "Using apply_patch, change the line in notes.txt from one to two. Also remember the code word BANANA. Reply OK.",
+            uuid = second,
+        )
+        assertTrue(recorder.turnEnded.await(240, TimeUnit.SECONDS))
+        assertEquals("two", notes.readText().trim())
+
+        // What the dialog is shown before anything is touched.
+        val preview = java.util.concurrent.LinkedBlockingQueue<Rewind.Code>()
+        session.previewRewind(second) { preview += it }
+        val code = preview.poll(120, TimeUnit.SECONDS)
+        assertTrue("the preview was $code", code is Rewind.Code.Ready && code.files.any { it.endsWith("notes.txt") })
+
+        // A message the asker has not seen stops the rewind: it names the first message as its newest.
+        val refused = java.util.concurrent.LinkedBlockingQueue<Rewind.Outcome>()
+        session.rewind(second, lastSeen = first, conversation = true, files = false) { refused += it }
+        assertEquals(Rewind.Refusal.MOVED, (refused.poll(120, TimeUnit.SECONDS) as? Rewind.Outcome.Refused)?.refusal)
+
+        // The rewind itself: the second message and what came of it leave the conversation and the disk.
+        val outcomes = java.util.concurrent.LinkedBlockingQueue<Rewind.Outcome>()
+        session.rewind(second, lastSeen = second, conversation = true, files = true) { outcomes += it }
+        val done = outcomes.poll(180, TimeUnit.SECONDS)
+        assertTrue("the rewind came to $done", done is Rewind.Outcome.Done)
+        done as Rewind.Outcome.Done
+        assertEquals(Rewind.Files.RESTORED, done.files)
+        assertTrue(done.prefill.contains("from one to two"))
+        assertEquals("one", notes.readText().trim())
+
+        recorder.turnEnded = CountDownLatch(1)
+        recorder.lines.clear()
+        session.sendPrompt("Did I give you a code word in this conversation? If so, say it; otherwise reply NONE.")
+        assertTrue(recorder.turnEnded.await(240, TimeUnit.SECONDS))
+        assertFalse("the agent still remembers the cut part", recorder.lines.any { it.contains("BANANA") && it.contains("\"assistant\"") })
+
+        // The history reads the thread as Codex resumes it - from the file the revert started, not the old one.
+        val pool = com.intellij.openapi.application.ApplicationManager.getApplication()
+        val threadId = session.conversationId!!
+        val page = pool.executeOnPooledThread<CodexHistory.Page> { CodexHistory.opening(directory.absolutePath, threadId) }.get()
+        assertTrue(page.lines.any { it.contains("create notes.txt") })
+        assertFalse(page.lines.any { it.contains("from one to two") })
+        val listed = pool.executeOnPooledThread<List<CodexHistory.Entry>> { CodexHistory.list(directory.absolutePath) }.get()
+        assertEquals(1, listed.count { it.id == threadId })
+
+        // A fork through the first turn carries that turn and nothing after it.
+        val firstTurn = session.turnOf(first)
+        assertNotNull(firstTurn)
+        session.stop()
+        val forked = Recorder()
+        var born: String? = null
+        val fork = CodexSession(
+            workingDirectory = directory.absolutePath,
+            origin = lazyOf(ForkOrigin.Resolved(ForkOrigin(threadId, "Rewind test", cut = true, at = firstTurn))),
+            onForked = { id, _ -> born = id },
+            model = model,
+            effort = "low",
+            permissionMode = PermissionModes.ACCEPT_EDITS,
+            nameWanted = false,
+            onEvent = { forked.lines += it },
+            onError = { forked.errors += it },
+            onFinished = {},
+            onTurnEnded = { forked.turnEnded.countDown() },
+        ).also { com.intellij.openapi.util.Disposer.register(testRootDisposable, it) }
+        fork.sendPrompt("What file did you create in this conversation? Answer with the file name only.")
+        assertTrue("the fork's turn did not end: ${forked.errors}", forked.turnEnded.await(240, TimeUnit.SECONDS))
+        assertNotNull(born)
+        assertTrue(born != threadId)
+        assertTrue(forked.lines.any { it.contains("notes.txt") })
+        val forkTurns = pool.executeOnPooledThread<List<CodexHistory.TurnRef>?> { CodexHistory.turnRefs(born!!) }.get().orEmpty()
+        assertEquals(listOf(firstTurn), forkTurns.dropLast(1).map { it.id })
+        fork.stop()
+        pool.executeOnPooledThread {
+            CodexCatalog.call("thread/archive", kotlinx.serialization.json.buildJsonObject { put("threadId", kotlinx.serialization.json.JsonPrimitive(born!!)) })
+        }.get()
+        CodexCatalog.shutdown()
+    }
 }

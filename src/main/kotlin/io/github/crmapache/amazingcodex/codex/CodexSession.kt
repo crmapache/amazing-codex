@@ -5,6 +5,7 @@ import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.util.concurrency.AppExecutorUtil
 import io.github.crmapache.amazingcodex.codex.accounts.CodexAccounts
 import io.github.crmapache.amazingcodex.feedback.DiagnosticsLog
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
@@ -40,12 +41,21 @@ internal data class ImageAttachment(val mediaType: String, val data: String)
 internal class CodexSession(
     private val workingDirectory: String?,
     /**
-     * The conversation this one branches off. A branch gets the parent's whole history and an id of its
-     * own, so continuing inside it leaves the parent untouched. Readable from outside: a fork nobody has
-     * spoken in yet owes its whole conversation to this parent, and a tab replaced under it has to be
-     * raised as a fork again (see CodexSessions.moveTo).
+     * Where this conversation forks from - the conversation it branches off and the turn of it it ends on
+     * (see ForkOrigin). A branch gets that much of the other thread and an id of its own, so continuing
+     * inside it leaves the other one untouched.
+     *
+     * Worked out once, against the source's turns, by whoever asks first: the hub right after the fork is
+     * made, while it plays what the fork inherited into the tab, or the first launch if a message beat it
+     * there. Lazy rather than computed by the caller because the caller is the thread a panel talks on, and
+     * the answer is a question to Codex.
      */
-    val forkFrom: String? = null,
+    private val origin: Lazy<ForkOrigin.Resolved?> = lazyOf(null),
+    /**
+     * The fork's thread has been born under this id - see ForkBook, which keeps what only this moment knows:
+     * which conversation it came from, and where its own part begins.
+     */
+    private val onForked: (conversationId: String, origin: ForkOrigin) -> Unit = { _, _ -> },
     /** A past conversation being continued: it comes up with its own history. */
     resumeFrom: String? = null,
     /**
@@ -121,6 +131,19 @@ internal class CodexSession(
      * stand at "connecting…" for as long as the screen stays open without this.
      */
     private val onMcpSettled: () -> Unit = {},
+    /**
+     * The agents this conversation spawned, told as the start and the end of each one's work - in the shape
+     * Claude Code's background tasks have (`task_started`, `task_notification`), which is what a scenario
+     * card's count of helpers reads (see ScenarioEngine.openCard, BackgroundWork). Null - a tab's
+     * conversation - keeps none of this.
+     *
+     * A channel of its own rather than the stream: Codex runs a spawned agent in a thread of its own and
+     * never wakes the thread that spawned it when the agent is done (measured on 0.160 - the turn that spawned
+     * one ended at once, and the agent's own turn ended half a minute later with nothing said to its parent).
+     * Told to a tab's feed, the panel would wait for the turn a report starts under Claude Code, which here
+     * never comes.
+     */
+    private val onBackground: ((String) -> Unit)? = null,
 ) : Disposable {
 
     /** Every role gets the project's shared `.claude` contract when its process actually opens. */
@@ -182,8 +205,44 @@ internal class CodexSession(
      * back after a restart as a conversation that is not there (see CodexSessionHub.rememberTabs).
      */
     @Volatile
-    var hasHistory: Boolean = resumeFrom != null || forkFrom != null
+    var hasHistory: Boolean = resumeFrom != null
         private set
+
+    /**
+     * Where this conversation forks from (see [origin]) - null for one that is no fork.
+     *
+     * Readable from outside for one reason: a fork nobody has spoken in yet owes its whole conversation to its
+     * source, so a tab replaced under it - an account chosen, say - has to be raised as the same fork again
+     * (see CodexSessions.moveTo), and the tab remembers it across a restart (see TabMemory.Tab).
+     */
+    val forkOrigin: ForkOrigin?
+        get() = origin.value?.origin
+
+    /** [forkOrigin] when it has been worked out already, without working it out - for a thread that must not ask Codex. */
+    val forkOriginIfKnown: ForkOrigin?
+        get() = if (origin.isInitialized()) origin.value?.origin else null
+
+    /** The message the fork was to stop at was not found, and it carries the whole conversation (see ForkOrigin.resolve). */
+    val forkMissed: Boolean
+        get() = origin.value?.missed == true
+
+    /** A fork opened and not yet named by its process - see [threadOpened]. */
+    @Volatile
+    private var forkLaunched: ForkOrigin? = null
+
+    /**
+     * The turn each message began, by the name the panel gave the message (see [sendPrompt]) - what a rewind
+     * or a fork names it by later. A message written into a running turn is filed under that turn, which it
+     * belongs to without beginning it. Messages read from the history are named by Codex's own item ids and
+     * found in the turns instead (see [turnOf]).
+     */
+    private val turnOfMessage = ConcurrentHashMap<String, String>()
+
+    /**
+     * The names of the messages this conversation was given, in the order it was given them - what tells a
+     * message a client has seen from one it has not (see [movedPast]).
+     */
+    private val delivered = ArrayList<String>()
 
     /** The model the thread actually runs on, as Codex said when it opened it - the menu's empty "default". */
     @Volatile
@@ -200,8 +259,11 @@ internal class CodexSession(
     /** An explicit effort was sent at some point - choosing "auto" afterwards has to clear it. */
     private var effortSent = false
 
-    /** A message on its way: the person's words, the pictures, and the editor note that goes with them. */
-    private data class Outgoing(val text: String, val images: List<ImageAttachment>, val context: String?)
+    /**
+     * A message on its way: the person's words, the pictures, the editor note that goes with them, and the
+     * name the panel gave it (see [turnOfMessage]).
+     */
+    private data class Outgoing(val text: String, val images: List<ImageAttachment>, val context: String?, val uuid: String? = null)
 
     /** Messages written into a turn that would not take them in (see [steer]): sent when it ends. */
     private val afterTurn = ArrayList<Outgoing>()
@@ -240,7 +302,31 @@ internal class CodexSession(
         @Volatile var timeout: java.util.concurrent.ScheduledFuture<*>? = null
     }
 
-    private val stream = CodexStream(emit = ::emit, model = ::currentModel, threadId = { conversationId.orEmpty() })
+    private val stream = CodexStream(
+        emit = ::emit,
+        model = ::currentModel,
+        threadId = { conversationId.orEmpty() },
+        limitReached = { lastLimit?.takeIf { System.currentTimeMillis() - it.heardAt < LIMIT_MEMORY_MS }?.let { it.window to it.resetsAt } },
+    )
+
+    /** The account's limit as it last said a window was full - see CodexStream.limitReached. */
+    private class Limit(val window: String, val resetsAt: Long?, val heardAt: Long)
+
+    @Volatile
+    private var lastLimit: Limit? = null
+
+    /**
+     * An agent this conversation spawned - see [onBackground]. At work from its spawn until its turn ends, and
+     * again whenever it is sent back to work; [turn] is the turn to interrupt, once its thread has named it.
+     */
+    private class Helper(val callId: String, val description: String) {
+        @Volatile var working = true
+        @Volatile var turn: String? = null
+        @Volatile var said: String = ""
+    }
+
+    /** The agents this conversation spawned, by their threads' ids - kept only for [onBackground]. */
+    private val helpers = ConcurrentHashMap<String, Helper>()
 
     /** What each server request asked, by our id for it - see [answerPermission]. */
     private val awaitingPermission = ConcurrentHashMap<String, Pending>()
@@ -258,8 +344,6 @@ internal class CodexSession(
     @Volatile
     private var lastTokenUsage: JsonObject? = null
 
-    /** A counter that makes our request ids unique across the processes this conversation goes through. */
-    private val processEpoch = AtomicLong(0)
 
     private var titleAsked = false
 
@@ -293,13 +377,24 @@ internal class CodexSession(
 
     /**
      * A message from the person. [context] is the editor note that goes with it (see IdeContextPrompt) - a
-     * text item of its own after the words, never mixed into them.
+     * text item of its own after the words, never mixed into them. [uuid] is the name the panel gave the
+     * message (see CodexSessionHub.deliverPrompt), the one a rewind or a fork names it by later.
+     *
+     * Returns whether the message went into a process: false when none would come up, and then onError has
+     * already said why. A scenario run reads it to keep what it handed over waiting for the next process
+     * rather than marking it given (see ScenarioEngine.askAgain).
      */
-    fun sendPrompt(text: String, images: List<ImageAttachment> = emptyList(), context: String? = null) {
+    fun sendPrompt(
+        text: String,
+        images: List<ImageAttachment> = emptyList(),
+        context: String? = null,
+        uuid: String? = null,
+    ): Boolean {
         if (server == null && start() == null) {
             endTurn()
-            return
+            return false
         }
+        uuid?.let { synchronized(delivered) { delivered += it } }
         // A message that is not an answer to a waiting plan sets the plan aside, as typing past it does in
         // Codex's terminal: the plan is withdrawn and its turn ends before this one begins.
         if (heldPlanTurn != null) {
@@ -307,7 +402,8 @@ internal class CodexSession(
             releasePlanTurn(drain = false)
         }
         busy = true
-        whenOpen { deliver(Outgoing(text, images, context)) }
+        whenOpen { deliver(Outgoing(text, images, context, uuid)) }
+        return true
     }
 
     /**
@@ -315,11 +411,11 @@ internal class CodexSession(
      * the requests that do them, everything else is a turn - or, while one is running, words steered into it.
      */
     private fun deliver(message: Outgoing) {
-        val (text, images, context) = message
+        val (text, images, context, uuid) = message
         when (val command = CodexCommands.parse(text, CodexHome.of(workingDirectory).promptsDirectory, CodexSkills.of(workingDirectory))) {
             CodexCommands.Command.Compact -> compact()
             CodexCommands.Command.Clear -> clear()
-            CodexCommands.Command.Init -> startTurn(CodexLaunch.INIT_PROMPT, emptyList(), emptyList())
+            CodexCommands.Command.Init -> startTurn(CodexLaunch.INIT_PROMPT, emptyList(), emptyList(), uuid = uuid)
             is CodexCommands.Command.Review -> review(command.target)
             is CodexCommands.Command.Rename -> {
                 rename(command.title)
@@ -327,11 +423,21 @@ internal class CodexSession(
                 endTurn()
             }
             is CodexCommands.Command.Say ->
-                if (activeTurn != null) steer(command.text, images, command.skills, context) else startTurn(command.text, images, command.skills, context)
+                if (activeTurn != null) {
+                    steer(command.text, images, command.skills, context, uuid)
+                } else {
+                    startTurn(command.text, images, command.skills, context, uuid)
+                }
         }
     }
 
-    private fun startTurn(text: String, images: List<ImageAttachment>, skills: List<CodexCommands.Skill>, context: String? = null) {
+    private fun startTurn(
+        text: String,
+        images: List<ImageAttachment>,
+        skills: List<CodexCommands.Skill>,
+        context: String? = null,
+        uuid: String? = null,
+    ) {
         val srv = server ?: return endTurn()
         val thread = conversationId ?: return endTurn()
         val policy = PermissionModes.policyOf(permissionMode)
@@ -376,6 +482,7 @@ internal class CodexSession(
                 val turn = (result as? JsonObject)?.get("turn") as? JsonObject
                 AppServer.text(turn?.get("id")).takeIf { it.isNotEmpty() }?.let { id ->
                     if (activeTurn == null) activeTurn = id
+                    uuid?.let { turnOfMessage[it] = id }
                     if (interruptWanted) interruptNow(null)
                 }
             },
@@ -392,10 +499,10 @@ internal class CodexSession(
      * Words written into a running turn go INTO it, the way Codex's terminal steers: the agent reads them
      * at its next step. A turn that cannot be steered (a review, a compaction) keeps them until it ends.
      */
-    private fun steer(text: String, images: List<ImageAttachment>, skills: List<CodexCommands.Skill>, context: String?) {
+    private fun steer(text: String, images: List<ImageAttachment>, skills: List<CodexCommands.Skill>, context: String?, uuid: String?) {
         val srv = server ?: return
         val thread = conversationId ?: return
-        val turn = activeTurn ?: return startTurn(text, images, skills, context)
+        val turn = activeTurn ?: return startTurn(text, images, skills, context, uuid)
 
         srv.request(
             "turn/steer",
@@ -404,10 +511,11 @@ internal class CodexSession(
                 put("input", inputOf(text, images, skills, context))
                 put("expectedTurnId", turn)
             },
+            onResult = { uuid?.let { turnOfMessage[it] = turn } },
             onError = {
                 // The note goes along with the words it was taken for, so a message sent after the turn
                 // still says what the editor showed when it was written.
-                synchronized(afterTurn) { afterTurn += Outgoing(text, images, context) }
+                synchronized(afterTurn) { afterTurn += Outgoing(text, images, context, uuid) }
                 // The turn may have ended between the send and the refusal: then nobody else will drain.
                 if (activeTurn == null) drainAfterTurn()
             },
@@ -511,6 +619,9 @@ internal class CodexSession(
                     lastTokenUsage = null
                     titleAsked = false
                     awaitingPermission.clear()
+                    // A new conversation: nothing said into the old one is anything a rewind here can name.
+                    turnOfMessage.clear()
+                    synchronized(delivered) { delivered.clear() }
                     emit(CodexDialect.conversationReset(id))
                 }
                 endTurn()
@@ -590,9 +701,8 @@ internal class CodexSession(
      * parent's standing - the model's name stays the model's, anything else is a person's - so the title
      * question, which exists to replace stand-ins, does not write over a name somebody gave.
      */
-    private fun adoptForkName(thread: String, name: String) {
+    private fun adoptForkName(thread: String, name: String, parent: String) {
         if (name.isEmpty() || !nameWanted) return
-        val parent = forkFrom ?: return
         val book = AutoTitles(workingDirectory)
         if (AutoTitles.sourceOf(name, book.all()[parent]) == SessionSnapshot.TITLE_LLM) {
             modelNamed = name
@@ -1049,6 +1159,9 @@ internal class CodexSession(
     fun interrupt(onTimeout: () -> Unit = {}) {
         synchronized(afterTurn) { afterTurn.clear() }
         if (server == null) return
+        // A card's helpers stop with it, as Claude Code's background agents stop with its turn: the card is
+        // told afterwards that they did not survive (see HeadTalk.CARD_CARRY_ON), and that has to be true.
+        if (onBackground != null) interruptHelpers()
 
         // Stop over a plan nobody has decided: Codex has nothing running, only the panel's turn stands on
         // the card. The plan is withdrawn and the turn ends as stopped.
@@ -1085,6 +1198,261 @@ internal class CodexSession(
         )
     }
 
+    // --- Rewind ------------------------------------------------------------------------------------
+
+    /**
+     * What putting the code back to before [target] would touch - the rewind dialog's question, asked before
+     * anything is changed (see Rewind.Code). Worked out from the patches the thread holds; nothing is written.
+     */
+    fun previewRewind(target: String, onCode: (Rewind.Code) -> Unit) {
+        whenOpen {
+            AppExecutorUtil.getAppExecutorService().execute {
+                val code = runCatching {
+                    val srv = server ?: return@runCatching Rewind.Code.Unavailable(NO_PROCESS)
+                    val thread = conversationId ?: return@runCatching Rewind.Code.None
+                    val turn = turnOf(srv, thread, target) ?: return@runCatching Rewind.Code.None
+                    Rewind.codeOf(codePlan(srv, thread, turn))
+                }.getOrElse { error -> Rewind.Code.Unavailable(error.message.orEmpty()) }
+                onCode(code)
+            }
+        }
+    }
+
+    /**
+     * Cut the conversation back to before [target] - the turn that message began and every later one leave
+     * the agent's memory - and/or put the files its patches changed since then back the way they were.
+     *
+     * The order is chosen so that a refusal touches as little as it can:
+     * - the code is checked first (see CodeRewind.plan), so a code part that cannot be done stops the whole
+     *   thing before a word is dropped;
+     * - a turn still running is stopped, and the code checked again over what it wrote meanwhile;
+     * - the conversation is cut next (`thread/revert`) - the part with refusals no check can foresee;
+     * - the files are put back last, so a refused cut leaves no code rolled back under a conversation that
+     *   still talks about it.
+     *
+     * The stopped turn ends the way any stopped turn does, before the cut, and the hub holds the tab's queue
+     * for as long as the rewind is out (see CodexSessionHub.rewind): what was queued belonged to the turn
+     * that is thrown away.
+     *
+     * [lastSeen] is the newest message the asking client has on screen - a later one it has not seen stops the
+     * rewind rather than being dropped unread (see [movedPast]).
+     */
+    fun rewind(
+        target: String,
+        lastSeen: String?,
+        conversation: Boolean,
+        files: Boolean,
+        onOutcome: (Rewind.Outcome) -> Unit,
+    ) {
+        whenOpen {
+            AppExecutorUtil.getAppExecutorService().execute {
+                val outcome = runCatching { rewindNow(target, lastSeen, conversation, files) }.getOrElse { error ->
+                    val failure = error as? RpcFailure
+                    Rewind.Outcome.Refused(
+                        failure?.let { Rewind.Refusal.ofError(it.error.code, it.error.message) } ?: Rewind.Refusal.OTHER,
+                        error.message.orEmpty(),
+                    )
+                }
+                onOutcome(outcome)
+            }
+        }
+    }
+
+    private fun rewindNow(target: String, lastSeen: String?, conversation: Boolean, files: Boolean): Rewind.Outcome {
+        val srv = server ?: return Rewind.Outcome.Refused(Rewind.Refusal.NO_PROCESS, "")
+        val thread = conversationId ?: return Rewind.Outcome.Refused(Rewind.Refusal.GONE, "")
+        val refs = CodexHistory.turnRefs(thread) { method, params -> ask(srv, method, params).getOrThrow() }
+            ?: return Rewind.Outcome.Refused(Rewind.Refusal.GONE, "")
+        val turn = turnOf(target, refs) ?: return Rewind.Outcome.Refused(Rewind.Refusal.GONE, "")
+        // A message written into a turn is no turn's beginning: the panel never offers it (see UserItem.steering),
+        // and a phone or an older client asking anyway is told so rather than losing the turn it was written into.
+        val began = refs.first { it.id == turn }
+        val steered = when {
+            target == turn -> false
+            target in began.messages -> began.messages.first() != target
+            else -> firstMessageOf(turn) != target
+        }
+        if (steered) return Rewind.Outcome.Refused(Rewind.Refusal.MID_CALL, "")
+
+        if (!conversation) {
+            // Code alone, under a conversation that carries on: not over a turn still writing files.
+            if (busy) return Rewind.Outcome.Refused(Rewind.Refusal.BUSY, "")
+            val plan = codePlan(srv, thread, turn)
+            if (plan !is CodeRewind.Plan.Ready) return Rewind.Outcome.Refused(Rewind.Refusal.CODE, Rewind.detailOf(Rewind.codeOf(plan)))
+            return CodeRewind.apply(plan).fold(
+                onSuccess = { written -> Rewind.Outcome.Done(false, "", Rewind.Files.RESTORED, written) },
+                onFailure = { error -> Rewind.Outcome.Refused(Rewind.Refusal.CODE, error.message.orEmpty()) },
+            )
+        }
+
+        if (movedPast(target, lastSeen)) return Rewind.Outcome.Refused(Rewind.Refusal.MOVED, "")
+
+        // Checked before anything is stopped: a code part that cannot be done changes nothing at all.
+        if (files) {
+            val plan = codePlan(srv, thread, turn)
+            if (plan is CodeRewind.Plan.Conflict) return Rewind.Outcome.Refused(Rewind.Refusal.CODE, Rewind.detailOf(Rewind.codeOf(plan)))
+        }
+
+        if (!stopForRewind()) return Rewind.Outcome.Refused(Rewind.Refusal.BUSY, "")
+
+        // Again after the stop: the turn may have patched a file in its last seconds.
+        val plan = if (files) codePlan(srv, thread, turn) else CodeRewind.Plan.None
+        if (plan is CodeRewind.Plan.Conflict) return Rewind.Outcome.Refused(Rewind.Refusal.CODE, Rewind.detailOf(Rewind.codeOf(plan)))
+        val prefill = messageText(srv, thread, turn)
+
+        ask(srv, "thread/revert", buildJsonObject {
+            put("threadId", thread)
+            put("beforeTurnId", turn)
+        }, REVERT_TIMEOUT_SECONDS).getOrThrow()
+
+        cutBack(thread, target, turn, refs)
+
+        val (restored, written, detail) = when (plan) {
+            is CodeRewind.Plan.Ready -> CodeRewind.apply(plan).fold(
+                onSuccess = { Triple(Rewind.Files.RESTORED, it, "") },
+                onFailure = { Triple(Rewind.Files.FAILED, emptyList(), it.message.orEmpty()) },
+            )
+            else -> Triple(Rewind.Files.SKIPPED, emptyList(), "")
+        }
+        return Rewind.Outcome.Done(conversation = true, prefill = prefill, files = restored, changed = written, filesDetail = detail)
+    }
+
+    /**
+     * The turn a message this conversation was given began or was written into, by the panel's name for it -
+     * what a fork made from that message is cut by (see CodexSessions.originOf). Null for a message read from
+     * the history, which the fork finds among the turns by Codex's own name.
+     */
+    fun turnOf(uuid: String): String? = turnOfMessage[uuid]
+
+    /** The first message the panel sent into [turn] - the one that began it, when it was this conversation's. */
+    private fun firstMessageOf(turn: String): String? = synchronized(delivered) { delivered.firstOrNull { turnOfMessage[it] == turn } }
+
+    /**
+     * Whether the conversation has moved past what the asking client has seen: a message was given to it after
+     * [lastSeen] - the newest one on that client's screen - or, without one, after the [target] itself.
+     *
+     * Kept here because Codex keeps nothing of the kind: `thread/revert` cuts whatever it is told to. A message
+     * a phone sent while the dialog stood open at the desk is the case this is for - cut unread, it would be
+     * gone without anybody having seen it.
+     */
+    private fun movedPast(target: String, lastSeen: String?): Boolean {
+        val given = synchronized(delivered) { delivered.toList() }
+        if (given.isEmpty()) return false
+        val seen = lastSeen ?: target
+        val at = given.indexOf(seen)
+        // The client's newest message is none of the ones given here, while some were: it has not seen them.
+        if (at < 0) return lastSeen != null || target !in given
+        return at < given.lastIndex
+    }
+
+    /**
+     * The turn the message [uuid] began - by the panel's name for it, or by Codex's own for one read off the
+     * history. Null when this thread has no such message.
+     */
+    private fun turnOf(srv: AppServer, thread: String, uuid: String): String? {
+        turnOfMessage[uuid]?.let { return it }
+        val refs = CodexHistory.turnRefs(thread) { method, params -> ask(srv, method, params).getOrThrow() } ?: return null
+        return turnOf(uuid, refs)
+    }
+
+    private fun turnOf(uuid: String, refs: List<CodexHistory.TurnRef>): String? =
+        turnOfMessage[uuid]?.takeIf { turn -> refs.any { it.id == turn } }
+            ?: refs.firstOrNull { it.id == uuid || uuid in it.messages }?.id
+
+    /** Undoing the patches of [turn] and every later turn, worked out against the files as they are now. */
+    private fun codePlan(srv: AppServer, thread: String, turn: String): CodeRewind.Plan {
+        val turns = turnsFrom(srv, thread, turn)
+        return CodeRewind.plan(CodeRewind.changesOf(turns)) { path ->
+            java.io.File(path).takeIf { it.isFile }?.readText(Charsets.UTF_8)
+        }
+    }
+
+    /** [turn] and every turn after it, whole, oldest first. */
+    private fun turnsFrom(srv: AppServer, thread: String, turn: String): List<JsonObject> {
+        val newestFirst = ArrayList<JsonObject>()
+        var cursor: String? = null
+        var guard = 0
+        while (guard++ < MAX_TURN_PAGES) {
+            val result = ask(srv, "thread/turns/list", buildJsonObject {
+                put("threadId", thread)
+                put("limit", TURNS_PER_PAGE)
+                put("sortDirection", "desc")
+                put("itemsView", "full")
+                cursor?.let { put("cursor", it) }
+            }).getOrThrow() as? JsonObject ?: break
+            for (element in (result["data"] as? JsonArray).orEmpty()) {
+                val one = element as? JsonObject ?: continue
+                newestFirst += one
+                if (AppServer.text(one["id"]) == turn) return newestFirst.asReversed()
+            }
+            cursor = AppServer.text(result["nextCursor"]).ifEmpty { null } ?: break
+        }
+        return newestFirst.asReversed()
+    }
+
+    /** The words of the message that began [turn] - what goes back into a phone's field (see Rewind.Outcome). */
+    private fun messageText(srv: AppServer, thread: String, turn: String): String {
+        val first = turnsFrom(srv, thread, turn).firstOrNull() ?: return ""
+        val message = (first["items"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
+            .firstOrNull { AppServer.text(it["type"]) == "userMessage" } ?: return ""
+        return CodexDialect.userTextOf(message).first
+    }
+
+    /**
+     * The turn running now stopped, and its end waited for - Codex will not revert a thread under a turn. A plan
+     * waiting for a decision is set aside the way Stop sets it aside. False when the turn would not end in time.
+     */
+    private fun stopForRewind(): Boolean {
+        if (heldPlanTurn != null) {
+            withdrawPlans()
+            releasePlanTurn(drain = false)
+        }
+        if (!busy) return true
+
+        interrupt()
+        val deadline = System.currentTimeMillis() + STOP_WAIT_MS
+        while (busy && System.currentTimeMillis() < deadline) Thread.sleep(STOP_POLL_MS)
+        return !busy
+    }
+
+    /**
+     * What this side held about the dropped part, made to agree with Codex: the messages given into it are no
+     * longer the conversation's, the turn it ends on is the one before the cut, and the thread's file is the
+     * new one Codex has just started (see CodexRollout).
+     */
+    private fun cutBack(thread: String, target: String, turn: String, refs: List<CodexHistory.TurnRef>) {
+        val dropped = refs.dropWhile { it.id != turn }.map { it.id }.toSet()
+        turnOfMessage.entries.removeIf { it.value in dropped }
+        synchronized(delivered) {
+            val at = delivered.indexOf(target)
+            if (at >= 0) delivered.subList(at, delivered.size).clear() else delivered.clear()
+        }
+        synchronized(afterTurn) { afterTurn.clear() }
+        lastEndedTurn = refs.takeWhile { it.id != turn }.lastOrNull()?.id
+        CodexHistory.forget(thread)
+
+        // How full the window is now: the count Codex wrote after the last turn that stays.
+        lastTokenUsage = CodexHistory.lastTokenUsage(CodexHistory.transcriptFile(workingDirectory, thread))
+        CodexShapes.contextOf(lastTokenUsage)?.let { (used, max) -> onContext(used, max) }
+    }
+
+    /** A request answered on this thread - never the one reading [srv]'s answers, or it waits on itself. */
+    private fun ask(srv: AppServer, method: String, params: JsonObject, timeoutSeconds: Long = ASK_TIMEOUT_SECONDS): Result<JsonElement> {
+        val answer = CompletableFuture<Result<JsonElement>>()
+        srv.request(
+            method,
+            params,
+            timeoutSeconds = timeoutSeconds,
+            onResult = { answer.complete(Result.success(it)) },
+            onError = { answer.complete(Result.failure(RpcFailure(it))) },
+        )
+        return runCatching { answer.get(timeoutSeconds + 5, TimeUnit.SECONDS) }
+            .getOrElse { Result.failure(RpcFailure(AppServer.RpcError(AppServer.TIMED_OUT, "$method timed out"))) }
+    }
+
+    /** Codex's refusal of a request, carried through a [Result] with its code - see Rewind.Refusal.ofError. */
+    private class RpcFailure(val error: AppServer.RpcError) : Exception(error.message)
+
     fun wake(): Boolean = server != null || start() != null
 
     fun restart(): Boolean {
@@ -1096,6 +1464,7 @@ internal class CodexSession(
     fun stop() {
         val srv = server ?: return
         abandonAsides()
+        abandonHelpers()
         // A plan left undecided goes with the process; its turn is told to have ended, or the panel would
         // stand on a card nothing can answer any more.
         heldPlanTurn?.let(stream::turnCompleted)
@@ -1300,7 +1669,7 @@ internal class CodexSession(
             return null
         }
 
-        val epoch = processEpoch.incrementAndGet()
+        val epoch = PROCESS_EPOCHS.incrementAndGet()
         lateinit var created: AppServer
         created = AppServer(
             label = "conversation",
@@ -1361,6 +1730,7 @@ internal class CodexSession(
 
     private fun exited(process: AppServer, code: Int, requested: Boolean) {
         if (server === process) abandonAsides()
+        if (server === process) abandonHelpers()
         if (server === process) server = null
         val wasBusy = busy
         busy = false
@@ -1384,17 +1754,38 @@ internal class CodexSession(
         onFinished()
     }
 
-    /** The thread this process holds: a new one, the one being continued, or a fork of the parent. */
+    /**
+     * The thread this process holds: the one being continued, a fork of its source through the turn the fork
+     * ends on, or a new one - which is also what a fork that carries nothing is.
+     *
+     * A fork whose origin nobody has worked out yet has it worked out first, off this thread: it is a
+     * question to Codex (see CodexSessions.originOf), and the thread this runs on may be the one reading this
+     * process's answers.
+     */
     private fun openThread(srv: AppServer) {
+        if (conversationId == null && !origin.isInitialized()) {
+            AppExecutorUtil.getAppExecutorService().execute {
+                runCatching { origin.value }.onFailure { thisLogger().warn("Could not work out where a fork begins", it) }
+                if (server === srv) openThread(srv)
+            }
+            return
+        }
+
         resumed = conversationId != null
+        // A fork comes up off its source until its own thread exists - afterwards it is a conversation of its
+        // own, continued by its own id like any other. Codex writes a fork's file the moment it forks, so
+        // there is no fork-without-a-thread to come back to, as there was with Claude Code.
+        val fork = if (conversationId == null) runCatching { forkOrigin }.getOrNull() else null
+        forkLaunched = fork
         val (method, params) = when {
             conversationId != null -> "thread/resume" to buildJsonObject {
                 put("threadId", conversationId)
                 threadSettings(this)
                 put("excludeTurns", true)
             }
-            forkFrom != null -> "thread/fork" to buildJsonObject {
-                put("threadId", forkFrom)
+            fork?.at != null -> "thread/fork" to buildJsonObject {
+                put("threadId", fork.source)
+                put("lastTurnId", fork.at)
                 threadSettings(this)
                 put("excludeTurns", true)
             }
@@ -1442,6 +1833,15 @@ internal class CodexSession(
         threadModel = AppServer.text(result?.get("model"))
         planSent = false
         effortSent = false
+
+        // A fork's thread is born: what it came from is put down by its id, for the seam and for the tab that
+        // brings it back (see ForkBook). Once - the next launch resumes the thread by its id.
+        val forked = forkLaunched
+        forkLaunched = null
+        if (forked != null) {
+            if (forked.at != null) hasHistory = true
+            onForked(id, forked)
+        }
 
         emit(
             CodexDialect.systemInit(
@@ -1500,7 +1900,7 @@ internal class CodexSession(
         }
 
         namedAs = null
-        if (!resumed && forkFrom != null) adoptForkName(id, AppServer.text(thread?.get("name")).trim())
+        if (forked?.at != null) adoptForkName(id, AppServer.text(thread?.get("name")).trim(), forked.source)
         nameAfterPerson()
 
         // A conversation continued from the history knows how full its window is only after its next turn;
@@ -1543,7 +1943,12 @@ internal class CodexSession(
         // spawned. Their items are not this conversation's feed.
         if (thread.isNotEmpty() && thread != conversationId) {
             val aside = asideThreads[thread]
-            if (aside != null) asideNotification(aside, method, params) else CodexTitles.notification(method, params)
+            val helper = helpers[thread]
+            when {
+                aside != null -> asideNotification(aside, method, params)
+                helper != null -> helperNotification(thread, helper, method, params)
+                else -> CodexTitles.notification(method, params)
+            }
             return
         }
 
@@ -1567,6 +1972,7 @@ internal class CodexSession(
 
             "item/completed" -> (params["item"] as? JsonObject)?.let { item ->
                 CodexApps.authenticationFailure(item)?.let(onAppAuthRequired)
+                noteSpawned(item)
                 val plan = stream.itemCompleted(item)
                 itemCalls.remove(AppServer.text(item["id"]))
                 plan?.let(::proposePlan)
@@ -1634,8 +2040,10 @@ internal class CodexSession(
                 // A rolling update is sparse: an empty window means "not said this time", not "zero", and
                 // passed on it would wipe the rings the last full answer drew.
                 if (LIMIT_FIELDS.any { snapshot[it] is JsonObject }) onRateLimits(CodexShapes.usage(snapshot))
-                CodexShapes.reachedWindow(snapshot)?.let { window ->
-                    emit(CodexDialect.rateLimited(CodexShapes.resetOf(snapshot), window))
+                CodexShapes.stoppedWindow(snapshot)?.let { window ->
+                    val resets = CodexShapes.resetOf(snapshot)
+                    lastLimit = Limit(window, resets, System.currentTimeMillis())
+                    emit(CodexDialect.rateLimited(resets, window))
                 }
             }
 
@@ -1664,6 +2072,77 @@ internal class CodexSession(
                 val message = AppServer.text(params["message"]).ifEmpty { AppServer.text(params["summary"]) }
                 if (message.isNotBlank()) onDiagnostic(message)
             }
+        }
+    }
+
+    /** An agent this conversation has just spawned starts its work - see [onBackground]. */
+    private fun noteSpawned(item: JsonObject) {
+        val tell = onBackground ?: return
+        if (AppServer.text(item["type"]) != "collabAgentToolCall" || AppServer.text(item["tool"]) != "spawnAgent") return
+        if (AppServer.text(item["status"]) != "completed") return
+
+        val callId = AppServer.text(item["id"])
+        val threads = ((item["receiverThreadIds"] as? JsonArray).orEmpty().map { AppServer.text(it) } +
+            (item["agentsStates"] as? JsonObject)?.keys.orEmpty()).filter { it.isNotEmpty() }.distinct()
+        for (thread in threads) {
+            if (helpers.containsKey(thread)) continue
+            val helper = Helper(callId, AppServer.text(item["prompt"]).take(HELPER_DESCRIPTION_CHARS))
+            helpers[thread] = helper
+            tell(CodexDialect.taskStarted(thread, callId, helper.description))
+        }
+    }
+
+    /** What a spawned agent's own thread says: the start and the end of its work, and its last words. */
+    private fun helperNotification(thread: String, helper: Helper, method: String, params: JsonObject) {
+        val tell = onBackground ?: return
+        when (method) {
+            "turn/started" -> {
+                helper.turn = AppServer.text((params["turn"] as? JsonObject)?.get("id")).ifEmpty { null }
+                // Its first turn is told by the spawn itself; a later one is an agent sent back to work.
+                if (!helper.working) {
+                    helper.working = true
+                    tell(CodexDialect.taskStarted(thread, helper.callId, helper.description))
+                }
+            }
+
+            "item/completed" -> (params["item"] as? JsonObject)?.let { item ->
+                if (AppServer.text(item["type"]) == "agentMessage") {
+                    AppServer.text(item["text"]).takeIf { it.isNotBlank() }?.let { helper.said = it }
+                }
+            }
+
+            "turn/completed" -> {
+                helper.turn = null
+                if (!helper.working) return
+                helper.working = false
+                val status = when (AppServer.text((params["turn"] as? JsonObject)?.get("status"))) {
+                    "completed" -> "completed"
+                    "interrupted" -> "stopped"
+                    else -> "failed"
+                }
+                tell(CodexDialect.taskNotification(thread, helper.callId, status, helper.said.trim()))
+            }
+        }
+    }
+
+    /** The process is going, and the agents it spawned with it: each one still at work is told as stopped. */
+    private fun abandonHelpers() {
+        val tell = onBackground
+        for ((thread, helper) in helpers.entries.toList()) {
+            if (helper.working) tell?.invoke(CodexDialect.taskNotification(thread, helper.callId, "stopped", ""))
+        }
+        helpers.clear()
+    }
+
+    /** Stop every spawned agent still at work - a scenario's pause stops the card and its helpers together. */
+    private fun interruptHelpers() {
+        val srv = server ?: return
+        for ((thread, helper) in helpers) {
+            val turn = helper.turn ?: continue
+            srv.request("turn/interrupt", buildJsonObject {
+                put("threadId", thread)
+                put("turnId", turn)
+            })
         }
     }
 
@@ -1865,6 +2344,17 @@ internal class CodexSession(
     private fun currentModel(): String = modelOnWire() ?: threadModel
 
     private companion object {
+        /**
+         * What makes our ids for Codex's requests unique - `codex-<epoch>-<id>` (see [serverRequest]). One count
+         * for every conversation in the IDE rather than one per conversation: JSON-RPC ids start again at zero
+         * in every process, and so did a count of each conversation's own, so the first question of every new
+         * conversation was `codex-1-0`. The project's register of waiting cards is keyed by that id alone (see
+         * SessionPermissions), and with two conversations waiting at once, Allow pressed on one card - at the
+         * desk or on a phone - answered the other one's command (caught taking the listing's pictures: three
+         * fresh conversations, the first never moved, the third ran a command nobody had allowed).
+         */
+        val PROCESS_EPOCHS = AtomicLong(0)
+
         /** The menu's name for "whatever Codex runs by default" - never sent as a model. */
         const val DEFAULT_MODEL = "default"
 
@@ -1873,6 +2363,24 @@ internal class CodexSession(
         const val INTERRUPT_TIMEOUT_SECONDS = 20L
         const val MCP_LOGIN_TIMEOUT_SECONDS = 60L
         const val PLAN_FOLLOW_UP_DELAY_MS = 150L
+
+        /** A rewind's requests: the revert rewrites nothing, but a long thread takes a moment to cut. */
+        const val ASK_TIMEOUT_SECONDS = 60L
+        const val REVERT_TIMEOUT_SECONDS = 90L
+        const val TURNS_PER_PAGE = 20
+        const val MAX_TURN_PAGES = 500
+
+        /** How long a rewind waits for the turn it stopped to end - see [stopForRewind]. */
+        const val STOP_WAIT_MS = 15_000L
+        const val STOP_POLL_MS = 100L
+
+        const val NO_PROCESS = "The conversation is not running."
+
+        /** How long a full window heard of is what a refused turn is told with - see [lastLimit]. */
+        const val LIMIT_MEMORY_MS = 10L * 60 * 1000
+
+        /** How much of a spawned agent's task names it - see [onBackground]. */
+        const val HELPER_DESCRIPTION_CHARS = 200
 
         /** What a role change is introduced by - see [roleChange]. */
         const val ROLE_CHANGE =

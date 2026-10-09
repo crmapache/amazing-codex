@@ -38,6 +38,7 @@ import {
 import { CALM_VIVID_FULL, calmColorsSummary, calmVividOf } from './calmColors'
 import { pasteCollapseSummary } from './pasteCollapse'
 import { Confirm } from './components/Confirm'
+import { RewindDialog } from './components/RewindDialog'
 import { Feed } from './components/Feed'
 import type { FeedMemory, FeedPlace } from './feed/place'
 import {
@@ -84,6 +85,7 @@ import {
   toggleIndicator,
   type HiddenIndicators,
   type IndicatorId,
+  type ShownIndicators,
 } from './indicators'
 import { CustomModels } from './components/CustomModels'
 import { PasteCollapse } from './components/PasteCollapse'
@@ -110,10 +112,12 @@ import { useHoverTarget } from './hooks/useHoverTarget'
 import { useLowPanel } from './hooks/useLowPanel'
 import { StreamSwitcher } from './components/StreamSwitcher'
 import { TaskListPanel } from './components/TaskListPanel'
+import { ModDock } from './components/ModDock'
 import composer from './components/composer.module.css'
 import s from './components/shell.module.css'
-import { EMPTY_ASK_DRAFT, type AskDraft } from './feed/askDraft'
+import { askReply, EMPTY_ASK_DRAFT, type AskDraft } from './feed/askDraft'
 import { bashCommand, shellText, type ShellRun } from './feed/bash'
+import { withBranch, type BranchFacts } from './feed/branch'
 import { contextOf, initialPanelState, reducePanel, type PanelState } from './feed/build'
 import { deferFollowUpForCompact } from './feed/compact'
 import { waitsForTheTurn } from './feed/delivery'
@@ -122,6 +126,7 @@ import { normalizeSendKey, sendKeyOptions, sendKeySummary, type SendKey } from '
 import { DESIGN_SIZE, TEXT_SIZE_FOLLOW, normalizeTextSize, type TextSize } from './textSize'
 import { applyTheme, normalizeThemeChoice, resolveTheme, type ThemeChoice } from './theme'
 import { reusableMessage } from './feed/reuse'
+import { forkPointAfter, forkTakesCode, lastSeenUuid, newMessageUuid, type RewindChoice } from './feed/rewind'
 import { draftKey, restoredDraft, savableDraft, type SavedDraft } from './feed/draftMemory'
 import { isUntouchedTab, tabHolding, tabTakesConversation } from './feed/resume'
 import { chatHits, rowOf } from './feed/search'
@@ -135,6 +140,8 @@ import {
   localCommand,
   plainText,
   sameHints,
+  withAdded,
+  type CommandEntry,
   type LocalCommand,
 } from './feed/slash'
 import {
@@ -160,7 +167,7 @@ import {
 } from './feed/improve'
 import { voiceAppend, voiceGhost, voiceMessage } from './feed/voice'
 import { composePrompt, countSessionImages, imageAttachments, tokensText, trimTrailingSpace } from './feed/tokens'
-import type { FeedItem, TaskItem, TodoItem, UserItem, UserToken } from './feed/types'
+import type { DraftEdit, FeedItem, TaskItem, TodoItem, UserItem, UserToken } from './feed/types'
 import { emptyUsageBook, mergeUsageBook, usageOf, type UsageBook } from './feed/usage'
 import type {
   AvailablePluginInfo,
@@ -184,6 +191,9 @@ import type {
   VoiceHotkeySlot,
   StatisticsData,
   EditorRef,
+  RewindCode,
+  RewindRefusal,
+  ShellMessage,
   UsageStatsConsent,
 } from './protocol'
 import {
@@ -237,7 +247,9 @@ import {
   type ScenariosView,
 } from './components/scenarios/ScenariosTab'
 import { liveDot, pressedAgain, runDot, runMarks, type Presses } from './scenarios/runs'
+import { toldTokens } from './scenarios/timeline'
 import { ScenarioRunTab } from './components/scenarios/ScenarioRunTab'
+import { forgetRunPlace } from './components/scenarios/useRunPlace'
 import { useSelection } from './hooks/useSelection'
 
 const MAIN_SESSION = 'main'
@@ -422,6 +434,19 @@ interface Draft {
 
 const EMPTY_DRAFT: Draft = { tokens: [], quotes: [] }
 
+/**
+ * What the field on a run's tab goes without (see the composer handed to ScenarioRunTab): no commands to
+ * hint at, no models of its own, and none of the conversation's gauges - the run's figures are its own strip.
+ */
+const NO_COMMANDS: CommandEntry[] = []
+const NO_MODELS: string[] = []
+const NO_INDICATORS: Pick<ShownIndicators, 'contextBar' | 'contextFigure' | 'feedback' | 'thanks'> = {
+  contextBar: false,
+  contextFigure: false,
+  feedback: false,
+  thanks: false,
+}
+
 /** Nothing to send: no text, no attachment and no quote. A tab never written into has no draft at all. */
 const draftEmpty = (draft: Draft | undefined): boolean =>
   !draft ||
@@ -491,6 +516,12 @@ export const App = () => {
   const sessionsRef = useRef(sessions)
   sessionsRef.current = sessions
   const [active, setActive] = useState(MAIN_SESSION)
+  /**
+   * The branch and its pull request on the header - the folder's, not any tab's (see feed/branch.ts). They
+   * lived in the opening tab's feed once, and closing that tab took them off the header until the branch
+   * next changed.
+   */
+  const [branch, setBranch] = useState<BranchFacts>({})
   const [drafts, setDrafts] = useState<Record<string, Draft>>({})
   /**
    * A queued message taken out into this tab's field to be edited, by tab - and where it goes back to:
@@ -1027,6 +1058,16 @@ export const App = () => {
   const [stopping, setStopping] = useState<{ id: string; title: string; subject: string } | null>(null)
 
   /**
+   * The rewind dialog over one of the person's messages, while it is open (see RewindDialog). `code` is the
+   * IDE's answer about the files, absent until it comes; `working` is a press on its way; `refusal` is why
+   * the last one did not happen - the dialog stays, saying it, rather than closing on nothing.
+   */
+  const [rewinding, setRewinding] = useState<RewindState | null>(null)
+  /** The same for the subscription, which is held once at mount (see activeRef for the reason). */
+  const rewindingRef = useRef<RewindState | null>(null)
+  rewindingRef.current = rewinding
+
+  /**
    * A conversation chosen in the history, while the question about it goes unanswered: taking a tab for it
    * means killing the process of the conversation currently in it, and with it the turn running at that
    * moment. We ask only about a busy tab: a free one has nothing to lose, its conversation goes nowhere -
@@ -1094,6 +1135,8 @@ export const App = () => {
   const [files, setFiles] = useState<string[]>([])
   /** The slash commands' descriptions and argument syntax - of the same nature as files. */
   const [commandHints, setCommandHints] = useState<Record<string, { description: string; argumentHint: string }>>({})
+  /** The commands a conversation came to know after its catalogue - a mod's (see `addedCommands`). */
+  const [addedCommands, setAddedCommands] = useState<Record<string, { description: string; argumentHint: string }>>({})
   /**
    * The names of the commands the agent knows, as it named them last time round (see the `commands`
    * message). Stands in for the conversation's own list until the first message of the tab brings it:
@@ -1829,6 +1872,13 @@ export const App = () => {
    * is worth catching up on rather than starting from nothing.
    */
   const seen = useRef<Record<string, number>>({})
+  /**
+   * Per conversation, the journal number of the latest entry its feed holds - what a rewind to a message this
+   * feed does not have is judged by (see lastHeld in mobile/feed.ts, which keeps the same for the phone). Not
+   * [seen]: that one outlives a feed replaced (a reset, a restore from nothing), and is what a reconnect asks
+   * to continue from rather than what is on screen.
+   */
+  const held = useRef<Record<string, number>>({})
 
   /**
    * The feeds being restored right now, by conversation. A conversation is in here between
@@ -2105,8 +2155,11 @@ export const App = () => {
           dispatchPanel({ ...event, at })
         }
 
+        // What the feed held before this message - a rewind is judged by it (see `case 'rewound'`).
+        const heldBefore = 'sessionId' in message && typeof message.sessionId === 'string' ? held.current[message.sessionId] : undefined
         if (message.seq !== undefined && 'sessionId' in message && typeof message.sessionId === 'string') {
           seen.current[message.sessionId] = message.seq
+          held.current[message.sessionId] = message.seq
         }
 
         switch (message.type) {
@@ -2159,15 +2212,14 @@ export const App = () => {
               setShareEditorState(message.preferences.shareEditor !== false)
             }
             if (message.improve) setImproveInstructions(message.improve)
+            // Only until the fact itself has said: `project` is sent again whenever the branch changes, and
+            // carries the PR along with it, while this is a snapshot taken when the panel was put together.
+            setBranch((held) => ({ ...held, gitBranch: held.gitBranch ?? message.gitBranch }))
             feed({
               session: MAIN_SESSION,
               action: {
                 kind: 'init',
-                project: {
-                  name: message.projectName,
-                  workingDirectory: message.workingDirectory,
-                  gitBranch: message.gitBranch,
-                },
+                project: { name: message.projectName, workingDirectory: message.workingDirectory },
               },
             })
             break
@@ -2268,15 +2320,7 @@ export const App = () => {
             break
 
           case 'project':
-            feed({
-              session: MAIN_SESSION,
-              action: {
-                kind: 'project',
-                gitBranch: message.gitBranch,
-                pullRequest: message.pullRequest,
-                pullRequestUrl: message.pullRequestUrl,
-              },
-            })
+            setBranch((held) => withBranch(held, message))
             break
 
           /**
@@ -2380,7 +2424,10 @@ export const App = () => {
            */
           case 'restoreStarted':
             restoring.current[message.sessionId] = []
-            if (message.from === 0) dispatchPanel({ session: message.sessionId, reset: true })
+            if (message.from === 0) {
+              dispatchPanel({ session: message.sessionId, reset: true })
+              delete held.current[message.sessionId]
+            }
             if (message.truncated) {
               restoring.current[message.sessionId]?.push({
                 action: {
@@ -2434,6 +2481,7 @@ export const App = () => {
 
           case 'sessionReset':
             dispatchPanel({ session: message.sessionId, reset: true })
+            delete held.current[message.sessionId]
             // The tab holds a different conversation now, and a question of the old one is not in it.
             forgetAskDrafts(message.sessionId)
             break
@@ -2485,6 +2533,7 @@ export const App = () => {
                 quotes: message.quotes ?? [],
                 steering: message.steering,
                 ...(message.editor ? { editor: message.editor } : {}),
+                ...(message.uuid ? { uuid: message.uuid } : {}),
               },
             })
             break
@@ -2989,6 +3038,36 @@ export const App = () => {
             })
             break
 
+          // The rewind dialog's question about the code, answered (see RewindDialog). The first answer picks
+          // the choice: both when there is code to put back - the terminal's own first option - and the
+          // conversation alone otherwise. A second answer for the same dialog leaves a choice already made.
+          case 'rewindPreview':
+            setRewinding((current) =>
+              current && current.session === message.sessionId && current.item.uuid === message.uuid
+                ? {
+                    ...current,
+                    code: message.code,
+                    choice: current.code ? current.choice : message.code.state === 'ready' ? 'both' : 'conversation',
+                  }
+                : current,
+            )
+            break
+
+          case 'rewindOutcome':
+            rewindOutcome.current(message)
+            break
+
+          // A conversation was cut back - here or from another window, a phone included. Every window takes
+          // the dropped part off its feed; the message goes back into the field of whoever pressed the
+          // button alone (see rewindOutcome).
+          case 'rewound': {
+            // A feed without the message that was handed part of the dropped stretch holds only what came after
+            // the message (see the rewound message in protocol.ts).
+            const all = message.fromSeq !== undefined && heldBefore !== undefined && heldBefore >= message.fromSeq
+            feed({ session: message.sessionId, action: { kind: 'rewound', uuid: message.uuid, all } })
+            break
+          }
+
           case 'sideAnswer':
             sideStep(message.sessionId, {
               kind: 'end',
@@ -3046,6 +3125,10 @@ export const App = () => {
 
           case 'commands':
             setKnownCommands(message.commands)
+            break
+
+          case 'addedCommands':
+            setAddedCommands((current) => (sameHints(current, message.hints) ? current : message.hints))
             break
 
           case 'dockAnchor':
@@ -3785,22 +3868,18 @@ export const App = () => {
       cards.answerAsk(itemId)
       forgetAskDraft(active, itemId)
 
-      const answered = answers.filter((entry) => entry.answer.trim().length > 0)
+      // The pairs, and the same as text for when nobody is left to wait for them - one shape for the desk
+      // and the phone (see askReply).
+      const reply = askReply(answers)
+      const answered = reply.answered
       if (answered.length === 0) return
-
-      // A question together with its answer, the pairs separated by an empty line. As answers alone in a
-      // row this line did not read in the feed at all: a "Only the multi-line one" without the question
-      // above it means nothing, and one call may hold up to six questions. The same text goes to the agent
-      // when there is nobody left to wait for the answer (see askAnswer in protocol) - it is clearer there
-      // too.
-      const text = answered.map((entry) => `${entry.question}\n${entry.answer}`).join('\n\n')
 
       send({
         type: 'askAnswer',
         sessionId: active,
         id: itemId,
-        answers: Object.fromEntries(answered.map((entry) => [entry.question, entry.answer])),
-        text,
+        answers: reply.answers,
+        text: reply.text,
       })
       dispatchPanel({
         session: active,
@@ -3900,18 +3979,30 @@ export const App = () => {
   }, [mode, availableModes, setMode, running, active, sideStep])
 
   /**
-   * A fork from a selected piece: the agent gets the whole conversation up to this point but carries on in
-   * a new conversation - the original stays as it was. The selection travels with it as a quote above the
-   * input field: it is not editable and does not clutter the field itself.
+   * A fork: the agent carries on in a new conversation, and the original stays as it was.
+   *
+   * Three doors lead here. The button on a tab and `/fork` fork the conversation whole. A selection's
+   * "Fork from here" forks it up to the turn the selection is in, and the selection travels as a quote above
+   * the input field (not editable, and not cluttering the field). The rewind dialog's "In a new tab" forks it
+   * up to before a message of the person's, and that message goes into the fork's field to be said again.
+   *
+   * [point.before] is the message the fork stops short of (see ForkOrigin.resolve in the plugin) - absent, the
+   * whole conversation. The fork's seam says which of the two it carries, so a fork that could not be cut where
+   * asked is never mistaken for one that was (see feed/rewind.ts, forkPointAfter). [point.from] is the tab
+   * forked - the one on screen unless said: the button stands on every tab (see Header.onFork). [point.code]
+   * puts the code back in that tab as well (see rewindInFork).
    */
   const fork = useCallback(
-    (quote = '') => {
+    (
+      quote = '',
+      point: { before?: string; tokens?: UserToken[]; quotes?: string[]; from?: string; code?: boolean } = {},
+    ) => {
       // An instant guess from the quote itself is already more meaningful than a generic "fork N"; the
       // first message in the fork replaces it with the LLM's answer (see sessionTitle).
       const short = deriveSessionTitle(quote, 48)
       const id = `branch-${Date.now()}`
-      const parent = sessions.find((session) => session.id === active)
-      const parentTitle = parent?.title ?? 'main session'
+      const parentId = point.from ?? active
+      const parent = sessions.find((session) => session.id === parentId)
 
       // A fork stays in its conversation's group - and a fork of a fork too. That way one subject's tabs
       // hold together and differ from other people's at a glance.
@@ -3934,7 +4025,16 @@ export const App = () => {
         return next
       })
 
-      send({ type: 'newSession', kind: 'branch', sessionId: id, parentId: active, title: short, quote })
+      send({
+        type: 'newSession',
+        kind: 'branch',
+        sessionId: id,
+        parentId,
+        title: short,
+        quote,
+        ...(point.before ? { before: point.before } : {}),
+        ...(point.before && point.code ? { code: true } : {}),
+      })
 
       if (quote) {
         setDrafts((current) => ({
@@ -3942,11 +4042,24 @@ export const App = () => {
           [id]: { ...EMPTY_DRAFT, quotes: [{ id: `q-${Date.now()}`, text: quote }] },
         }))
       }
+      // The message the fork stops short of, back in a field - this fork's - to be said again there. Into the
+      // draft directly: the fork's field is not on screen yet, and that is all the reuse road would do with a
+      // tab off screen (see applyTokens).
+      const carried = point.tokens
+      if (carried) {
+        setDrafts((current) => ({
+          ...current,
+          [id]: {
+            ...EMPTY_DRAFT,
+            tokens: reusableMessage({ tokens: carried }).tokens,
+            quotes: (point.quotes ?? []).map((text, index) => ({ id: `r-${Date.now()}-${index}`, text })),
+          },
+        }))
+      }
 
-      dispatchPanel({
-        session: id,
-        action: { kind: 'checkpoint', chip: 'FORK', target: `continues ${parentTitle} · nothing here goes back` },
-      })
+      // The fork's mark is not drawn here: the IDE plays what the fork carries into its tab and puts the seam
+      // under it, where the fork's own part begins (see CodexSessionHub.replayFork). Drawn here, it would
+      // stand on top of the history it is meant to close.
 
       /**
        * The context gauge starts where the parent's stands: a fork carries its parent's whole transcript,
@@ -3994,6 +4107,28 @@ export const App = () => {
     },
     [active, sessions],
   )
+
+  /** A tab's whole conversation, forked - the button on the tab (see Header). */
+  const forkWhole = useCallback((sessionId: string) => fork('', { from: sessionId }), [fork])
+
+  /**
+   * The rewind dialog's "In a new tab": the same cut, made in a fork, while this tab stays as it is. The code
+   * part, when it was chosen, is put back here all the same - the files are one for both tabs - by the IDE on
+   * the same command (see `code` of newSession).
+   */
+  const rewindInFork = useCallback(() => {
+    const current = rewindingRef.current
+    if (!current?.item.uuid || current.working) return
+
+    setRewinding(null)
+    fork('', {
+      before: current.item.uuid,
+      tokens: current.item.tokens,
+      quotes: current.item.quotes,
+      from: current.session,
+      code: forkTakesCode(current.choice, current.code),
+    })
+  }, [fork])
 
   /**
    * A new tab from scratch - both the ordinary one from the "+" button and the single one that greets the
@@ -4178,6 +4313,19 @@ export const App = () => {
     },
     [active, openResumed, sessions, shellRuns],
   )
+
+  /**
+   * The original of a fork, opened by its name in the fork's seam - the history's own rule decides where
+   * (see resume): the tab already holding it, else an untouched tab on screen, else a tab of its own.
+   *
+   * Stable on purpose: every card of the feed is memoised on its props (see Feed), and resume changes with
+   * every change of the strip.
+   */
+  const resumeRef = useRef(resume)
+  resumeRef.current = resume
+  const openOriginal = useCallback((conversationId: string, title: string) => {
+    resumeRef.current({ id: conversationId, title, updatedAt: 0, messages: 0, titleSource: 'heuristic' })
+  }, [])
 
   /**
    * The conversation above what this tab holds - asked for by pressing the mark over the feed.
@@ -4543,7 +4691,7 @@ export const App = () => {
       if (event.code !== 'KeyB' || !event.altKey) return
 
       event.preventDefault()
-      fork(selection.text)
+      fork(selection.text, forkPointAfter(panelsRef.current[activeRef.current]?.items ?? [], selection.itemId))
       clearSelection()
     }
 
@@ -4699,6 +4847,73 @@ export const App = () => {
   )
 
   /**
+   * The rewind button on a message of one's own: the dialog opens at once, and the IDE is asked what the
+   * code part would touch (see RewindDialog). Stable, for the memoized feed - the same reason as above.
+   */
+  const openRewind = useCallback((item: UserItem) => {
+    if (!item.uuid) return
+    const session = activeRef.current
+    setRewinding({ session, item, choice: 'conversation', working: false })
+    send({ type: 'rewindPreview', sessionId: session, uuid: item.uuid })
+  }, [])
+
+  /** The dialog's main button: the rewind itself, with what was chosen. */
+  const confirmRewind = useCallback(() => {
+    const current = rewindingRef.current
+    if (!current?.item.uuid || current.working) return
+
+    const files = current.choice !== 'conversation' && current.code?.state === 'ready'
+    const conversation = current.choice !== 'code'
+    if (!files && !conversation) return
+
+    send({
+      type: 'rewind',
+      sessionId: current.session,
+      uuid: current.item.uuid,
+      lastSeen: lastSeenUuid(panelsRef.current[current.session]?.items ?? []),
+      conversation,
+      files,
+    })
+    setRewinding({ ...current, working: true, refusal: undefined })
+  }, [])
+
+  /**
+   * How a rewind ended (see the rewindOutcome message) - read through a ref by the subscription, which is
+   * held once at mount, so that it always sees the dialog as it stands now.
+   *
+   * Done: the dialog closes and the message goes back into the field, chips, quotes and pictures and all,
+   * by the road the reuse button takes - one step of the undo history over whatever was being written. Its
+   * card is gone from the feed by now: the `rewound` message travels ahead of this answer. A code part that
+   * failed after the conversation went says so in the feed, where the person is looking once the dialog is
+   * gone. Refused: the dialog stays, and says why.
+   */
+  const rewindOutcome = useRef<(message: Extract<ShellMessage, { type: 'rewindOutcome' }>) => void>(() => {})
+  rewindOutcome.current = (message) => {
+    const current = rewindingRef.current
+    if (!current || current.session !== message.sessionId || current.item.uuid !== message.uuid) return
+
+    if (!message.ok) {
+      setRewinding({ ...current, working: false, refusal: { reason: message.reason ?? 'other', detail: message.detail } })
+      return
+    }
+
+    setRewinding(null)
+    if (message.conversation) intoField(current.session, current.item.tokens, current.item.quotes)
+    if (message.files === 'failed') {
+      dispatchPanel({
+        session: current.session,
+        action: { kind: 'error', message: t.chrome.rewind.filesFailed(message.detail ?? '') },
+      })
+    }
+    setFocusToken((value) => value + 1)
+  }
+
+  /** The dialog closes when its tab leaves the screen: the question is about a feed nobody is looking at. */
+  useEffect(() => {
+    setRewinding((current) => (current && current.session !== active && !current.working ? null : current))
+  }, [active])
+
+  /**
    * A queued message the IDE took out at the pencil's press, into the field it was pressed in (see
    * takeQueued in protocol.ts) - by the same road a sent message takes back (see reuseMessage), so it is
    * one step of the undo history over whatever was being written.
@@ -4782,8 +4997,13 @@ export const App = () => {
     // The tab's own catalogue while it has one, and the project's remembered one until then: this tab's
     // process may not have come up yet, and the two disagree only about a server switched on or off
     // since - where the live one is the truth.
-    () => buildCommands(t, panel.slashCommands.length > 0 ? panel.slashCommands : knownCommands, commandHints),
-    [t, panel.slashCommands, knownCommands, commandHints],
+    () =>
+      buildCommands(
+        t,
+        panel.slashCommands.length > 0 ? panel.slashCommands : knownCommands,
+        withAdded(commandHints, addedCommands),
+      ),
+    [t, panel.slashCommands, knownCommands, commandHints, addedCommands],
   )
 
   const submit = useCallback((queued: boolean, overrideText?: string) => {
@@ -4923,9 +5143,18 @@ export const App = () => {
     if (plan) {
       const echoId = `p-${Date.now()}-${promptCounter.current++}`
       ownPrompts.current.add(echoId)
+      // A name only when the remark goes as a message of its own - with pictures, below. Said as the plan's
+      // answer it never becomes a message of the conversation, and there is nothing to rewind to.
+      const uuid = images.length > 0 ? newMessageUuid() : undefined
       dispatchPanel({
         session: active,
-        action: { kind: 'prompt', tokens, quotes: quotes.map((quote) => quote.text), steering: true },
+        action: {
+          kind: 'prompt',
+          tokens,
+          quotes: quotes.map((quote) => quote.text),
+          steering: true,
+          ...(uuid ? { uuid } : {}),
+        },
       })
       // An image cannot be carried by a permission answer: exactly one string travels there (see
       // ClaudePanel.decidePlan). So a remark with attachments goes as an ordinary message afterwards - by
@@ -4937,6 +5166,7 @@ export const App = () => {
           type: 'prompt',
           sessionId: active,
           id: echoId,
+          uuid,
           tokens,
           quotes: quotes.map((quote) => quote.text),
           steering: true,
@@ -4976,6 +5206,9 @@ export const App = () => {
 
     const promptId = `p-${Date.now()}-${promptCounter.current++}`
     ownPrompts.current.add(promptId)
+    // The name the message goes into the conversation under, given on the press so the card can be rewound
+    // to from its first second (see feed/rewind.ts).
+    const uuid = newMessageUuid()
     dispatchPanel({
       session: active,
       action: {
@@ -4983,6 +5216,7 @@ export const App = () => {
         tokens,
         quotes: quotes.map((quote) => quote.text),
         steering: running,
+        uuid,
         ...(withEditor && editorContext ? { editor: editorContext } : {}),
       },
     })
@@ -4991,6 +5225,7 @@ export const App = () => {
       type: 'prompt',
       sessionId: active,
       id: promptId,
+      uuid,
       ...(withEditor ? { editor: true } : {}),
       // The pieces the card is drawn from travel with it: the shell keeps them for whoever was not here
       // (a second client, or this same page after a reload) - see promptEcho.
@@ -5024,8 +5259,77 @@ export const App = () => {
     editorSkips,
   ])
 
+  /**
+   * The field of the tab on screen changed - the conversation's, or a run's words for its main thread (see
+   * runComposer). One handler for both, so a rewrite and a dictation behave the same in either.
+   */
+  const changeDraft = (tokens: UserToken[], from: DraftEdit) => {
+    // Renumbered image captions are not an edit at all - nothing was said, and a complaint about
+    // the last rewrite is still worth reading.
+    if (from !== 'renumber') {
+      setImproveError(null)
+      setVoiceError('')
+    }
+
+    if (!applyingImprove.current && improveSources[active]) {
+      // A hand on the keyboard makes this a draft of one's own again: the next press of the
+      // sparkle starts from what is in the field rather than from what stood before the last
+      // rewrite.
+      if (from === 'hand') forgetImproveSource(active)
+      // Cmd+Z over a rewrite is the person going back to their own words rather than moving on
+      // from them: the chain stands, and only whether a take is on the screen changes with it.
+      else if (from === 'history') {
+        setImproveSources((current) => {
+          const held = current[active]
+          return held ? { ...current, [active]: improveShown(held, tokens) } : current
+        })
+      }
+    }
+
+    // A renumbering while a rewrite is in flight: the draft did not change, only the number in a
+    // caption did, so the answer must not be turned away as landing on a different draft (see
+    // the promptImproved case above).
+    if (from === 'renumber') {
+      setImproving((current) =>
+        current && current.sessionId === active ? { ...current, tokens } : current,
+      )
+    }
+
+    editDraft(active, { tokens })
+  }
+
   const sendNow = useCallback(() => submit(false), [submit])
   const queueNext = useCallback(() => submit(true), [submit])
+
+  /**
+   * How many pictures the person has already shown the main thread of the run on screen - the new ones are
+   * numbered on from here, so "Image #3" in a later message is not the "Image #1" of an earlier one.
+   */
+  const tellImageBase = useMemo(() => {
+    const run = runRecords[runOfTab(active)]
+    return run ? countSessionImages(run.notes.map((note) => ({ kind: 'user', tokens: toldTokens(note) }))) : 0
+  }, [runRecords, active])
+
+  /**
+   * Words for the main thread of the run on screen, out of the same field a chat has (see runComposer and
+   * `scenarioTell`).
+   *
+   * Composed exactly as a chat message is - a file goes as its path, a folded paste unfolded, a pasted picture
+   * as its bytes beside the words - and the field's tokens go along, for the timeline to draw the message the
+   * way the feed draws a sent one. The draft is this tab's, kept by the panel like any other.
+   */
+  const tellNow = () => {
+    const runId = runOfTab(active)
+    if (!runId) return
+    const tokens = trimTrailingSpace(draft.tokens)
+    const text = composePrompt({ tokens, quotes: [] }, tellImageBase)
+    const images = imageAttachments(tokens)
+    if (!text && images.length === 0) return
+
+    forgetImproveSource(active)
+    send({ type: 'scenarioTell', runId, text, images, tokens })
+    editDraft(active, { tokens: [], quotes: [] })
+  }
 
   /**
    * Whether there is anything to send: text, an attachment or a quote. An empty field means both buttons
@@ -5059,23 +5363,20 @@ export const App = () => {
 
   // The harness opens the statistics tab the way the menu's row does - dev builds only, like the hooks
   // above. Here, before the sign-in gate below, so the count of hooks does not change when it opens.
+  // Through the strip's own door (see openPanelTab): opened past it, the screen showed with no tab for it.
   useEffect(() => {
     if (!import.meta.env.DEV) return
 
     window.__accHarnessOpenStatistics = (view) => {
       setSideMenu((current) => ({ ...current, open: false }))
       setMenu(null)
-      setStatsTab((current) =>
-        current.open
-          ? { ...current, view }
-          : { open: true, view, place: placeAtEnd(groupOrder(sessions)) },
-      )
-      setActive(STATISTICS_GROUP)
+      setStatsTab({ open: true, view })
+      openPanelTab(STATISTICS_GROUP)
     }
     return () => {
       window.__accHarnessOpenStatistics = undefined
     }
-  }, [sessions])
+  }, [])
 
   // And the search window, as the magnifier beside the slash opens it - dev builds only, like the rest.
   useEffect(() => {
@@ -5283,6 +5584,16 @@ export const App = () => {
     setMenu(null)
     send({ type: 'stat', kind: 'feature', id: 'scenarios_tab' })
     send({ type: 'scenarios' })
+    /*
+     * The button opens the hub on its runs (see AT_FIRST), not on whichever band it was left on - with two
+     * exceptions. A form somebody is filling in, or a scenario half written in the editor, stays where it is:
+     * the view is kept up here precisely so that those survive (see scenariosView). And a press with the hub
+     * already on the screen is the way to re-read the list (above), so it does not move anybody off the band
+     * they are looking at.
+     */
+    if (active !== SCENARIOS_GROUP) {
+      setScenariosView((view) => (view.kind === 'list' && view.over.kind === 'none' ? { ...view, band: 'runs' } : view))
+    }
     openPanelTab(SCENARIOS_GROUP)
   }
 
@@ -5327,6 +5638,8 @@ export const App = () => {
     // The tab first, then the asking. The record is filed only into a tab that is already there, and a run
     // that has ended answers once and never again - asked first, its whole timeline is dropped on arrival
     // and the tab stays empty for as long as it is open.
+    // Opened, not come back to: it opens on what is happening, not where it was read last (see useRunPlace).
+    forgetRunPlace(runId)
     openPanelTab(runTabId(runId))
     send({ type: 'scenarioOpen', runId })
   }
@@ -5517,7 +5830,7 @@ export const App = () => {
    * under any layout.
    */
   const openPullRequest = () => {
-    const url = panels[MAIN_SESSION]?.project?.pullRequestUrl
+    const url = branch.pullRequestUrl
     if (url) send({ type: 'openExternal', url })
   }
 
@@ -5598,6 +5911,23 @@ export const App = () => {
     })
   })()
 
+  /**
+   * The tabs holding a conversation to fork - see Header.forkable. A tab nobody has written into has nothing
+   * to carry; one restored or opened from the history is named by the shell before it is ever looked at (the
+   * `conversation` message), so its button is live while its feed is still empty.
+   *
+   * Worked out on every draw rather than memoised: this stands below the sign-in screen's early return, where
+   * a hook would change the count of hooks between draws. The test stops at the first message of the person's.
+   */
+  const forkable = new Set(
+    sessions
+      .filter((session) => {
+        const state = panels[session.id]
+        return Boolean(state?.sessionId) || Boolean(state?.items.some((item) => item.kind === 'user'))
+      })
+      .map((session) => session.id),
+  )
+
   const header = (
     <Header
         sessions={tabs}
@@ -5642,6 +5972,8 @@ export const App = () => {
           if (active === id) setActive(tabAfterClosing(sessions, panelTabs, id) || MAIN_SESSION)
         }}
         onNewSession={() => startSession(`session-${Date.now()}`)}
+        onFork={forkWhole}
+        forkable={forkable}
         onReorderGroups={reorderGroups}
         onReorderTabs={reorderTabs}
         onNameSession={nameSession}
@@ -5654,8 +5986,8 @@ export const App = () => {
         onClosePanelTab={closePanelTab}
         calls={calls}
         watchers={watchers}
-        gitBranch={panels[MAIN_SESSION]?.project?.gitBranch}
-        pullRequest={panels[MAIN_SESSION]?.project?.pullRequest}
+        gitBranch={branch.gitBranch}
+        pullRequest={branch.pullRequest}
         onOpenPullRequest={openPullRequest}
       />
   )
@@ -5718,6 +6050,9 @@ export const App = () => {
       />
 
       <TaskListPanel item={latestTodo(panel.items)} layout={composerLayout} />
+
+      {/* What the conversation's mods say - nothing without a mod (see ModDock). */}
+      <ModDock status={panel.modStatus} panes={panel.modPanes} toast={panel.modToast} />
 
       {/* Nearest the field of everything that answers: it answers what was typed in it a moment ago. */}
       <SideQuestionCard
@@ -5791,6 +6126,22 @@ export const App = () => {
             send({ type: 'stopTask', sessionId: active, taskId: stopping.id })
             setStopping(null)
           }}
+        />
+      ) : null}
+
+      {rewinding && rewinding.session === active ? (
+        <RewindDialog
+          item={rewinding.item}
+          code={rewinding.code}
+          choice={rewinding.choice}
+          onChoice={(choice) => setRewinding((current) => (current ? { ...current, choice, refusal: undefined } : current))}
+          running={running}
+          queued={panel.queue.length}
+          working={rewinding.working}
+          refusal={rewinding.refusal}
+          onRewind={confirmRewind}
+          onFork={rewindInFork}
+          onCancel={() => setRewinding(null)}
         />
       ) : null}
 
@@ -5900,6 +6251,7 @@ export const App = () => {
           onRun={(scenario, inputs) => startScenario(scenario, inputs)}
           onOpenRun={openRun}
           onDeleteRun={(runId) => send({ type: 'scenarioRunDelete', runId })}
+          onStarRun={(runId, starred) => send({ type: 'scenarioRunStar', runId, starred })}
           onPauseRun={(runId) => send({ type: 'scenarioPause', runId })}
           onResumeRun={(runId) => send({ type: 'scenarioResume', runId })}
           onStopRun={(runId) => send({ type: 'scenarioStop', runId })}
@@ -5961,6 +6313,65 @@ export const App = () => {
           }}
           onAnswer={(allow, text) => send({ type: 'scenarioAnswer', runId: runOfTab(active), allow, text })}
           onOpenLink={openLink}
+          composer={
+            /*
+             * The same field a chat has, for the run's main thread: files, pictures, pasted text, dictation
+             * and the sparkle all behave as they do in a conversation, because it is the same component on the
+             * same draft machinery - keyed by this tab. What it has no use for stays out: commands, the shell
+             * through "!", the side question and the queue (see forConversation - the main thread only reads),
+             * the model and the meters (the run's, not the field's), the editor's chip and Stop.
+             */
+            <div
+              className={`${composer.dock} ${composer.dockAlone}`}
+              data-layout={composerLayout === 'compact' ? 'compact' : 'bottom'}
+            >
+            <Composer
+              sessionId={active}
+              tokens={draft.tokens}
+              streaming={false}
+              planMode={false}
+              contextPercent={0}
+              pasteCollapseLines={pasteCollapse}
+              sendKey={sendKey}
+              commands={NO_COMMANDS}
+              models={null}
+              customModels={NO_MODELS}
+              meters={null}
+              indicators={NO_INDICATORS}
+              files={files}
+              imageBaseCount={tellImageBase}
+              focusToken={focusToken}
+              // Its own place at the foot of the run, whatever the chat's layout: the side rail of left/right
+              // belongs to a conversation's screen.
+              layout={composerLayout === 'compact' ? 'compact' : 'bottom'}
+              placeholder={t.scenarios.run.tellPlaceholder}
+              forConversation={false}
+              fileDragOver={fileDragOver}
+              onTokensChange={changeDraft}
+              onAttach={() => send({ type: 'pick' })}
+              onDropFiles={(paths) => send({ type: 'dropped', paths })}
+              registerInsert={registerInsert}
+              registerApply={registerApply}
+              onImprove={improvePrompt}
+              improving={improving !== null}
+              improveRetry={improveSources[active] !== undefined}
+              improveError={improveErrorText}
+              improveRestore={improving?.sessionId !== active && Boolean(improveSources[active]?.applied)}
+              onImproveRestore={restoreDraft}
+              voice={{ enabled: voice.enabled, phase: voiceRun }}
+              onVoiceStart={() => send({ type: 'voiceStart', mode: 'hold' })}
+              onVoiceStop={() => send({ type: 'voiceStop' })}
+              voiceGhost={voiceTargetRef.current === active || !voiceTargetRef.current ? voiceInterim : ''}
+              voiceError={voiceErrorText}
+              onSubmit={tellNow}
+              onQueue={tellNow}
+              canSubmit={draftReady}
+              onStop={() => undefined}
+              stopStalled={false}
+              onForceStop={() => undefined}
+            />
+            </div>
+          }
         />
       ) : sessions.length === 0 ? (
         <Welcome onStart={() => startSession(MAIN_SESSION)} />
@@ -6030,7 +6441,9 @@ export const App = () => {
               signIn={signInOffer}
               onCodexConfig={openCodexConfig}
               onReuse={reuseMessage}
+              onRewind={openRewind}
               onLoadEarlier={loadEarlier}
+              onOpenConversation={openOriginal}
               earlierPages={panel.earlierPages}
               focus={feedFocus?.session === active ? feedFocus : undefined}
               onFocused={forgetFeedFocus}
@@ -6053,7 +6466,8 @@ export const App = () => {
             <SelectionMenu
               selection={selection}
               onFork={() => {
-                fork(selection.text)
+                // Up to the turn the selection is in, and no further - see forkPointAfter.
+                fork(selection.text, forkPointAfter(panel.items, selection.itemId))
                 clearSelection()
               }}
               onQuote={() => {
@@ -6116,40 +6530,7 @@ export const App = () => {
             onOpenScenarios={openScenarios}
             railContainer={railNode}
             fileDragOver={fileDragOver}
-            onTokensChange={(tokens, from) => {
-              // Renumbered image captions are not an edit at all - nothing was said, and a complaint about
-              // the last rewrite is still worth reading.
-              if (from !== 'renumber') {
-                setImproveError(null)
-                setVoiceError('')
-              }
-
-              if (!applyingImprove.current && improveSources[active]) {
-                // A hand on the keyboard makes this a draft of one's own again: the next press of the
-                // sparkle starts from what is in the field rather than from what stood before the last
-                // rewrite.
-                if (from === 'hand') forgetImproveSource(active)
-                // Cmd+Z over a rewrite is the person going back to their own words rather than moving on
-                // from them: the chain stands, and only whether a take is on the screen changes with it.
-                else if (from === 'history') {
-                  setImproveSources((current) => {
-                    const held = current[active]
-                    return held ? { ...current, [active]: improveShown(held, tokens) } : current
-                  })
-                }
-              }
-
-              // A renumbering while a rewrite is in flight: the draft did not change, only the number in a
-              // caption did, so the answer must not be turned away as landing on a different draft (see
-              // the promptImproved case above).
-              if (from === 'renumber') {
-                setImproving((current) =>
-                  current && current.sessionId === active ? { ...current, tokens } : current,
-                )
-              }
-
-              editDraft(active, { tokens })
-            }}
+            onTokensChange={changeDraft}
             onAttach={() => send({ type: 'pick' })}
             // The chips are assembled by the shell and come back as an ordinary picked - by the same route
             // as a choice through a dialog: only it knows whether this is a file or a folder.
@@ -6715,7 +7096,8 @@ const panelsReducer = (state: PanelsState, event: PanelsAction): PanelsState => 
   }
 
   // The project itself survives a reset: it describes the folder rather than the conversation, it
-  // arrives once at the start, and losing it would leave the status bar blank until the next restart.
+  // arrives once at the start, and losing it would leave the paths in the cards full until a process names
+  // its folder again.
   if ('reset' in event) {
     return { ...state, [event.session]: { ...initialPanelState, project: state[event.session]?.project } }
   }
@@ -6774,6 +7156,17 @@ const sessionState = (panel: PanelState | undefined, active: boolean, cards: Car
 }
 
 // --- Derived data -----------------------------------------------------------
+
+/** The rewind dialog while it is open - see `rewinding` in App and RewindDialog. */
+interface RewindState {
+  /** The tab whose message it is. The dialog closes when another tab is put on screen. */
+  session: string
+  item: UserItem
+  code?: RewindCode
+  choice: RewindChoice
+  working: boolean
+  refusal?: { reason: RewindRefusal; detail?: string }
+}
 
 /**
  * The last task list the agent sent - the panel above the input field mirrors only that one.

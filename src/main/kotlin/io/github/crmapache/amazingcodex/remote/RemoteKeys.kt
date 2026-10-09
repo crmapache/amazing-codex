@@ -93,18 +93,51 @@ internal object RemoteKeys {
         return kept
     }
 
-    /** The shared secret with one device, from which its two direction keys are derived. */
-    fun deviceSecret(agentId: String, deviceId: String): ByteArray? =
-        PasswordSafe.instance.get(attributesFor("remote-device-$agentId", deviceId))
-            ?.getPasswordAsString()
-            ?.let { runCatching { Base64.getDecoder().decode(it) }.getOrNull() }
+    /**
+     * The shared secret with one device, from which its two direction keys are derived.
+     *
+     * Read from the record of its own, and failing that from the one every device used to share - see
+     * [deviceAttributes]. A secret found there is moved, so each device leaves the shared record the first
+     * time it comes back.
+     */
+    fun deviceSecret(agentId: String, deviceId: String): ByteArray? {
+        stored(deviceAttributes(agentId, deviceId))?.let { return it }
+
+        val shared = sharedDeviceAttributes(agentId, deviceId)
+        val secret = stored(shared) ?: return null
+        rememberDevice(agentId, deviceId, secret)
+        PasswordSafe.instance.set(shared, null)
+        return secret
+    }
 
     fun rememberDevice(agentId: String, deviceId: String, secret: ByteArray) {
         PasswordSafe.instance.set(
-            attributesFor("remote-device-$agentId", deviceId),
+            deviceAttributes(agentId, deviceId),
             Credentials(deviceId, Base64.getEncoder().encodeToString(secret)),
         )
     }
+
+    private fun stored(attributes: CredentialAttributes): ByteArray? =
+        PasswordSafe.instance.get(attributes)
+            ?.getPasswordAsString()
+            ?.let { runCatching { Base64.getDecoder().decode(it) }.getOrNull() }
+
+    /**
+     * One keychain record per device, named after the device as well as the agent.
+     *
+     * Every device used to share one name and differ only by account, and on macOS that is one record: the
+     * keychain store looks for the record to update by name alone (the account counts only under the
+     * platform's bare default name), so saving the second device's secret wrote over the first's. Pairing
+     * a tablet left the phone paired on screen and unable to connect, and pairing the phone again did the
+     * same to the tablet. Reading and deleting do look at the account, which is how the old records are
+     * still found and removed one device at a time.
+     */
+    private fun deviceAttributes(agentId: String, deviceId: String): CredentialAttributes =
+        attributesFor("remote-device-$agentId-$deviceId", deviceId)
+
+    /** The name every device shared until each got its own - see [deviceAttributes]. */
+    private fun sharedDeviceAttributes(agentId: String, deviceId: String): CredentialAttributes =
+        attributesFor("remote-device-$agentId", deviceId)
 
     /**
      * Forget a device's secret.
@@ -118,7 +151,9 @@ internal object RemoteKeys {
      * machine with its lid shut - but that word is a courtesy on top of this, not a part of it.
      */
     fun forgetDevice(agentId: String, deviceId: String) {
-        PasswordSafe.instance.set(attributesFor("remote-device-$agentId", deviceId), null)
+        PasswordSafe.instance.set(deviceAttributes(agentId, deviceId), null)
+        // And under the old shared name, where a device not heard from since this changed still has it.
+        PasswordSafe.instance.set(sharedDeviceAttributes(agentId, deviceId), null)
     }
 
     fun forgetIdentity(agentId: String) {

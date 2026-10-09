@@ -467,7 +467,44 @@ internal class RemoteAgent : Disposable {
                 return
             }
 
+            // Still on the list, with its key gone - on macOS, pairing another device used to write over
+            // it (see RemoteKeys.deviceAttributes). No stranger either, so it is told the same, and the
+            // row stays where a person can see it and revoke it: a keychain that failed to answer this
+            // once must not cost a phone its pairing.
+            if (state.lists(deviceId) && volume.allow(deviceId, REVOKED)) {
+                thisLogger().info("A paired device whose key is gone asked to resume - told to pair again")
+                sendPlain(address, buildJsonObject { put("p", PROTOCOL_VERSION); put("k", REVOKED) })
+                return
+            }
+
             thisLogger().info("A device asked to resume that this agent has not paired with")
+            return
+        }
+
+        /*
+         * A key in the keychain with no record beside it, and it is let go of rather than let in.
+         *
+         * The two are written at the same moment of a pairing, but not to the same place: the key goes to
+         * the keychain on the spot, the record into the IDE's settings, which reach the disk when the
+         * platform saves them. An IDE that died between the two - for a long time, any time within five
+         * minutes of its start (see RemoteState) - came back with the key and without the record. Such a
+         * phone connected, watched its conversation and was pushed its facts, and nothing else: every
+         * answer goes to the devices on the list (see RelayClient.answer), so history, a past run and a
+         * search stood on "Loading…" for ever. Worse, it was on no screen here, so nobody could revoke it.
+         *
+         * The list is where a person decides who may reach this machine, so a key that list does not show
+         * opens nothing. Re-creating the record instead would put back a row with no fingerprint to compare
+         * and no name the device gave, on the word of a frame that travels in the open. Pairing again is the
+         * way back that a person approves, and the headstone tells the phone to offer it.
+         */
+        if (!state.lists(deviceId)) {
+            thisLogger().info("A device holds a key this agent no longer lists - let go")
+            RemoteKeys.forgetDevice(state.agentId(), deviceId)
+            state.noteRevoked(deviceId)
+            persist()
+            if (volume.allow(deviceId, REVOKED)) {
+                sendPlain(address, buildJsonObject { put("p", PROTOCOL_VERSION); put("k", REVOKED) })
+            }
             return
         }
 
@@ -728,12 +765,22 @@ internal class RemoteAgent : Disposable {
         // A phone paired is an achievement of its own - the one thing here the statistics count.
         runCatching { StatsLedger.getInstance().notePaired() }
 
-        // Written out now rather than at the next shutdown. The platform would save it eventually, but
-        // "eventually" includes crashing first - and a pairing lost that way is a person scanning a QR
-        // code again with no idea why.
-        runCatching { ApplicationManager.getApplication().saveSettings() }
+        persist()
 
         announceRemoteState()
+    }
+
+    /**
+     * The record written out now rather than at the next shutdown.
+     *
+     * The platform would save it eventually, but "eventually" includes crashing first - and the key is
+     * already in the keychain by then, which outlives any crash. A pairing that lost its record that way
+     * used to leave a phone that could still connect and was listed nowhere (see [sessionInit]). This only
+     * reaches the disk because the record is stored without the platform's save threshold (see RemoteState).
+     */
+    private fun persist() {
+        runCatching { ApplicationManager.getApplication().saveSettings() }
+            .onFailure { thisLogger().warn("The list of paired devices could not be saved", it) }
     }
 
     fun refusePairing() {
@@ -780,6 +827,9 @@ internal class RemoteAgent : Disposable {
         parts.forget(deviceId)
         outbox.forget(deviceId)
         countWatchers()
+        // As promptly as a pairing, and for its reason: a revocation the next start does not remember puts
+        // the device back on the list - dead, its key gone, but listed - and forgets the headstone with it.
+        persist()
         announceRemoteState()
     }
 
@@ -1326,6 +1376,9 @@ internal class RemoteAgent : Disposable {
                 // A message too big for one frame may come in several (see RemoteParts). An older machine
                 // knows nothing of parts, and a phone talking to one still squeezes its photos into a frame.
                 add(CAP_PARTS)
+                // Words for the main thread of a run that is going (scenarioTell). An older machine refuses
+                // the message as one it has never heard of, so the phone offers no field to type them in.
+                add(CAP_TELL)
             }
             // The catalogue of models, so a conversation started from a phone can be started on a
             // chosen one. It belongs to the machine rather than to a project - it is what this
@@ -1344,6 +1397,13 @@ internal class RemoteAgent : Disposable {
                 put("effort", StartingChoice.effort())
                 put("mode", CodexPreferences.mode)
             }
+            // And the models added by hand, beside the catalogue and for the same reason: the setting is
+            // the machine's, not a project's. Told only as a fact of an open project, it never reached
+            // the new chat of a project closed at the desk - that screen showed every model Claude Code
+            // offers and not the one this machine's provider actually serves (reported from Windows).
+            // The fact stays: for a project that is open it is live, while this is as fresh as the
+            // last knock (see customModelsOf on the phone).
+            putJsonArray("customModels") { CodexPreferences.customModels.forEach { add(it) } }
             putJsonArray("projects") {
                 for ((key, attachment) in projects) {
                     if (attachment.project.isDisposed) continue
@@ -1817,14 +1877,31 @@ internal class RemoteAgent : Disposable {
          * or a fleet's report with Russian previews weighs twice its characters on the wire. So what would
          * not fit is shortened the way the journal shortens - long text inside it cut and the cut said in
          * the text - rather than lost. Only what still does not fit after that is dropped.
+         *
+         * The tools' output goes first, as far down as it will go, and only then the words themselves: a
+         * page of history with one long answer in it and a file read beside it fits once the file is cut,
+         * and cutting the answer along with it would cost the phone the one thing it came for. The frame is
+         * a hard ceiling, so the words are not spared to the end - an answer heavier than a frame is still
+         * better cut and said so than missing. The note says so in its own words (JournalTrim.Reason.PHONE):
+         * it is the road to the phone that cut it, and the IDE has the whole of it.
          */
         private fun fitted(message: String): ByteArray? {
             val whole = envelope(message)
             if (whole.size <= FRAME_BODY_BYTES) return whole
 
-            for (limit in PHONE_STRING_LIMITS) {
-                val shorter = envelope(JournalTrim.trim(message, maxChars = 0, maxStringChars = limit))
-                if (shorter.size <= FRAME_BODY_BYTES) return shorter
+            for (spareWords in listOf(true, false)) {
+                for (limit in PHONE_STRING_LIMITS) {
+                    val shorter = envelope(
+                        JournalTrim.trim(
+                            message,
+                            maxChars = 0,
+                            maxStringChars = limit,
+                            spareWords = spareWords,
+                            reason = JournalTrim.Reason.PHONE,
+                        ),
+                    )
+                    if (shorter.size <= FRAME_BODY_BYTES) return shorter
+                }
             }
 
             thisLogger().info("A message of ${whole.size} bytes does not fit a frame even shortened - dropped")
@@ -1969,6 +2046,9 @@ internal class RemoteAgent : Disposable {
 
         /** A message too big for one frame may arrive in parts - see [part]. Spelled in mobile/projects.ts too. */
         const val CAP_PARTS = "parts"
+
+        /** Writing to the main thread of a going run - see ScenarioEngine.tell. Spelled in mobile/projects.ts too. */
+        const val CAP_TELL = "tellHead"
 
         /**
          * "This machine no longer knows you." One word for both ways of saying it - sealed at the moment

@@ -32,6 +32,7 @@ import {
   ErrorRow,
   LimitRow,
   MetaRow,
+  ModLogRow,
   ModelStuckRow,
   ModelSwitchRow,
   OutrankedRow,
@@ -120,6 +121,8 @@ interface FeedProps {
    * Absent on the phone: the field there is its own and holds plain text rather than the panel's tokens.
    */
   onReuse?: (item: UserItem) => void
+  /** Open the rewind dialog over a message of one's own - see UserCard.onRewind. Hand in a STABLE function. */
+  onRewind?: (item: UserItem) => void
   /**
    * A page of this conversation further back than the EARLIER mark - see historyPage in feed/build.ts.
    * Both screens want it: a tab opens a past conversation with its end rather than the whole of it (see
@@ -127,6 +130,11 @@ interface FeedProps {
    * plain, unclickable caption - the beginning is on screen, or there is nothing to anchor a request on.
    */
   onLoadEarlier?: () => void
+  /**
+   * Opens a past conversation by its id - the original's name in a fork's seam (see CheckpointRow). Undefined
+   * leaves the name a plain word. Hand in a STABLE function: every card is memoised on its props.
+   */
+  onOpenConversation?: (conversationId: string, title: string) => void
   /**
    * What stands over a sent message instead of "YOU" - see UserCard.userLabel.
    *
@@ -211,7 +219,9 @@ export const Feed = ({
   signIn,
   onCodexConfig,
   onReuse,
+  onRewind,
   onLoadEarlier,
+  onOpenConversation,
   userLabel,
   earlierPages,
   scrollRef,
@@ -839,7 +849,9 @@ export const Feed = ({
               signIn={signIn}
               onCodexConfig={onCodexConfig}
               onReuse={onReuse}
+              onRewind={onRewind}
               onLoadEarlier={onLoadEarlier}
+              onOpenConversation={onOpenConversation}
               userLabel={userLabel}
               onPin={onPin}
               pinned={pins?.includes(item.id) ?? false}
@@ -909,7 +921,9 @@ interface ItemViewProps {
   /** The screen of Codex's own settings - see FeedProps.onCodexConfig. */
   onCodexConfig?: () => void
   onReuse?: (item: UserItem) => void
+  onRewind?: (item: UserItem) => void
   onLoadEarlier?: () => void
+  onOpenConversation?: (conversationId: string, title: string) => void
   /** What stands over a sent message instead of "YOU" - see FeedProps.userLabel. */
   userLabel?: string
   /** Pin this row over the conversation, or unpin it - absent where there is no strip (see FeedProps). */
@@ -946,7 +960,9 @@ const ItemView = memo(({
   signIn,
   onCodexConfig,
   onReuse,
+  onRewind,
   onLoadEarlier,
+  onOpenConversation,
   userLabel,
   onPin,
   pinned,
@@ -967,6 +983,7 @@ const ItemView = memo(({
           userLabel={userLabel}
           onOpenLink={onOpenLink}
           onReuse={onReuse}
+          onRewind={onRewind}
           onPin={pin}
           pinned={pinned}
           pinsFull={pinsFull}
@@ -1016,7 +1033,13 @@ const ItemView = memo(({
       )
 
     case 'checkpoint':
-      return <CheckpointRow item={item} onLoadEarlier={item.chip === 'EARLIER' ? onLoadEarlier : undefined} />
+      return (
+        <CheckpointRow
+          item={item}
+          onLoadEarlier={item.chip === 'EARLIER' ? onLoadEarlier : undefined}
+          onOpenConversation={onOpenConversation}
+        />
+      )
 
     case 'compact':
       return <CompactRow item={item} />
@@ -1035,6 +1058,9 @@ const ItemView = memo(({
 
     case 'crash':
       return <CrashRow item={item} />
+
+    case 'modLog':
+      return <ModLogRow item={item} />
 
     case 'outranked':
       return <OutrankedRow item={item} onOpen={onCodexConfig} />

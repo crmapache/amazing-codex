@@ -192,6 +192,20 @@ internal class SessionCommands(private val hub: CodexSessionHub) {
 
             "sideQuestionCancel" -> hub.cancelAside(sessionId, field("id"))
 
+            // The rewind dialog: what the code part would touch, and then the rewind itself (see Rewind).
+            // Answered to the asker alone - the message comes back into the field of whoever pressed it.
+            "rewindPreview" -> hub.previewRewind(clientId, sessionId, field("uuid"), asker)
+
+            "rewind" -> hub.rewind(
+                clientId,
+                sessionId,
+                uuid = field("uuid"),
+                lastSeen = field("lastSeen").ifEmpty { null },
+                conversation = flag(payload, "conversation"),
+                files = flag(payload, "files"),
+                asker = asker,
+            )
+
             "stop" -> hub.interrupt(sessionId)
 
             "kill" -> hub.kill(sessionId)
@@ -204,12 +218,20 @@ internal class SessionCommands(private val hub: CodexSessionHub) {
             "newSession" -> {
                 if (!local) DiagnosticsLog.note(DiagnosticsLog.PHONE, "opened a conversation (${kindOf(field("kind").ifEmpty { "main" })})")
 
+                // "fork" is what a phone page of earlier versions sends for the same thing - read as what it
+                // meant, rather than as a new empty tab it never asked for.
+                val branch = field("kind") == "branch" || field("kind") == "fork"
+                val parentId = if (branch) field("parentId").ifEmpty { MAIN_SESSION } else null
+                val before = field("before").takeIf { branch && Rewind.isUuid(it) }
                 hub.openSession(
                     id = sessionId,
                     // A branch inherits the transcript of the conversation it was opened from.
-                    parentId = if (field("kind") == "branch") field("parentId").ifEmpty { MAIN_SESSION } else null,
+                    parentId = parentId,
                     title = field("title"),
                     quote = field("quote"),
+                    // And only as far as the message it was forked before, when it names one (see
+                    // ForkOrigin.resolve).
+                    before = before,
                     // Chosen in the request rather than taken from the settings - which is what a client
                     // with no selectors of its own has to do (see SessionLaunch). The panel sends none of
                     // these and behaves exactly as it did.
@@ -221,6 +243,13 @@ internal class SessionCommands(private val hub: CodexSessionHub) {
                         contextMode = field("contextMode"),
                     ),
                 )
+
+                // The rewind dialog's "In a new tab" with the code chosen too: the parent's files go back to
+                // before that message, on this same command - the desk and the phone send one thing, and the
+                // half that fails is said in the parent's feed (see CodexSessionHub.rewind).
+                if (parentId != null && before != null && flag(payload, "code")) {
+                    hub.rewind(clientId, parentId, before, lastSeen = null, conversation = false, files = true, asker = asker, behindFork = true)
+                }
             }
 
             "closeSession" -> hub.closeSession(sessionId)
@@ -519,7 +548,18 @@ internal class SessionCommands(private val hub: CodexSessionHub) {
 
             "scenarioOpen" -> hub.scenarios.sendRun(clientId, field("runId"))
 
+            // Words for the main thread of a run that is going - see ScenarioEngine.tell.
+            "scenarioTell" -> hub.scenarios.tell(
+                clientId,
+                field("runId"),
+                field("text"),
+                images = images(payload),
+                tokens = payload["tokens"],
+            )
+
             "scenarioRunDelete" -> hub.scenarios.deleteRun(clientId, field("runId"))
+
+            "scenarioRunStar" -> hub.scenarios.starRun(clientId, field("runId"), flag(payload, "starred"))
 
             // What one step of a run said, read off the conversation it said it in - see ScenarioDesk.
             "scenarioLog" -> hub.scenarios.sendLog(
@@ -723,7 +763,7 @@ internal class SessionCommands(private val hub: CodexSessionHub) {
 
     private companion object {
         /** What a message's echo carries besides its text - see [echo]. */
-        val ECHOED = listOf("id", "tokens", "quotes", "steering")
+        val ECHOED = listOf("id", "uuid", "tokens", "quotes", "steering")
 
         /** What a word of the protocol looks like - see [kindOf]. */
         val KIND = Regex("[A-Za-z]{1,40}")

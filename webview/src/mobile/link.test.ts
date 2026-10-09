@@ -1,5 +1,22 @@
 import { describe, expect, it } from 'vitest'
-import { cutInParts, FRAME_BODY_BYTES, handshakeBudget, PART_BYTES, reconnectAfter } from './link'
+import { cutInParts, FRAME_BODY_BYTES, handshakeBudget, PART_BYTES, reconnectAfter, unanswered } from './link'
+
+/**
+ * The word for a line whose IDE has not agreed keys. A refusal is an answer, and the wait that follows
+ * every offer used to put "no IDE is answering" over it seconds later - the phone said to wait for a
+ * machine that had just told it to pair again.
+ */
+describe('what a line without keys says', () => {
+  it('says the IDE let this device go once it has said so', () => {
+    expect(unanswered(true, false)).toBe('revoked')
+    expect(unanswered(true, true)).toBe('revoked')
+  })
+
+  it('says it is not answering, or silent for long, when nothing came back', () => {
+    expect(unanswered(false, false)).toBe('asleep')
+    expect(unanswered(false, true)).toBe('silent')
+  })
+})
 
 /**
  * When to connect again after the line dropped.

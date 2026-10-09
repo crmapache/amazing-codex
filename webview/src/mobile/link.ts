@@ -210,6 +210,15 @@ export class Link {
    */
   private retired = false
 
+  /**
+   * The IDE has said, in the open, that it no longer knows this device - see the `revoked` frame.
+   *
+   * Kept until keys are agreed, because the waits around a handshake have words of their own: the timer
+   * that says "no IDE is answering" put that back over "pair it again" a few seconds after the IDE had
+   * answered exactly that, and the phone told a person to wait for a machine that was refusing it.
+   */
+  private refused = false
+
   /** What is still going out, so that frames leave in the order they were asked for - see [send]. */
   private outgoing: Promise<void> = Promise.resolve()
 
@@ -260,7 +269,7 @@ export class Link {
     // A line that has answered nothing for minutes keeps saying so while it is rebuilt: without this
     // the words a person is reading are replaced by "connecting…" every three minutes, for a second,
     // by the very teardown that proves nothing is there.
-    this.events.onState(this.longQuiet() ? 'silent' : this.attempts === 0 ? 'connecting' : 'reconnecting')
+    this.events.onState(this.refused ? 'revoked' : this.longQuiet() ? 'silent' : this.attempts === 0 ? 'connecting' : 'reconnecting')
 
     const address = base64url(unbase64url(this.agent.deviceId))
     const socket = new WebSocket(`${relayAddress(this.agent.relay)}/v1/device?id=${address}`)
@@ -278,7 +287,7 @@ export class Link {
       this.startBeat()
       // Not "connected" yet: this is the relay taking the socket, and the relay is up whether or not
       // the machine with the IDE on it is. What answers that is the handshake below.
-      this.events.onState('connecting')
+      if (!this.refused) this.events.onState('connecting')
       void this.resume()
     }
 
@@ -302,7 +311,7 @@ export class Link {
       const displaced = event.code === CLOSE_DISPLACED
       if (!displaced) this.attempts += 1
 
-      this.events.onState(displaced ? 'elsewhere' : this.longQuiet() ? 'silent' : 'reconnecting')
+      this.events.onState(displaced ? 'elsewhere' : this.refused ? 'revoked' : this.longQuiet() ? 'silent' : 'reconnecting')
 
       const wait = reconnectAfter(event.code, document.visibilityState === 'visible', this.attempts)
       if (wait === null) return
@@ -535,7 +544,11 @@ export class Link {
        * and nothing else: the handshake goes on being offered on its own timetable, so a forgery costs
        * a wrong label until the real IDE answers, and never a phone that has stopped trying.
        */
-      if (opening?.k === 'revoked') this.events.onState('revoked')
+      if (opening?.k === 'revoked') {
+        this.refused = true
+        this.stopWaitingForAgent()
+        this.events.onState('revoked')
+      }
 
       return
     }
@@ -659,6 +672,7 @@ export class Link {
     // The IDE has spoken: this is the moment the machine is genuinely reachable, and the only honest
     // moment to say so.
     this.quietSince = 0
+    this.refused = false
     this.stopWaitingForAgent()
     this.events.onState('connected')
 
@@ -676,7 +690,7 @@ export class Link {
 
     this.answering = window.setTimeout(() => {
       this.answering = null
-      if (!this.keys && !this.closed) this.events.onState(this.longQuiet() ? 'silent' : 'asleep')
+      if (!this.keys && !this.closed) this.events.onState(unanswered(this.refused, this.longQuiet()))
     }, AGENT_SILENCE_MS)
   }
 
@@ -1021,6 +1035,15 @@ export const cutInParts = (text: string, id: string, limit: number = PART_BYTES)
 
 /** What a frame sent in the open begins with - see the note in receive. */
 const OPEN_BRACE = 0x7b
+
+/**
+ * What a line with no keys says once the wait for its IDE runs out.
+ *
+ * An IDE that refused this device has answered, so it is not "not answering": the refusal outranks
+ * both words about silence (see `refused` on the link).
+ */
+export const unanswered = (refused: boolean, longQuiet: boolean): LinkState =>
+  refused ? 'revoked' : longQuiet ? 'silent' : 'asleep'
 
 /**
  * How long to wait before connecting again, or null for "do not".

@@ -49,6 +49,8 @@ internal class CodexSessions(
      * doing it - see CodexSession.onAccountOutranked.
      */
     private val onAccountOutranked: (sessionId: String, names: List<String>) -> Unit = { _, _ -> },
+    /** A process of this conversation has just come up - see CodexSession.onProcessStarted. */
+    private val onProcessStarted: (sessionId: String) -> Unit = {},
     /**
      * A conversation has just been born, and this is the effort it was born with.
      *
@@ -159,6 +161,8 @@ internal class CodexSessions(
         images: List<ImageAttachment> = emptyList(),
         /** What the editor showed, for the agent alone - see CodexSession.userMessage. */
         context: String? = null,
+        /** The name the message goes in under - see CodexSession.sendPrompt. */
+        uuid: String? = null,
     ) {
         // Before anything is said into it: a move this tab was asked to make and has not made yet
         // happens now, so the words below are billed to the account the person chose (see
@@ -167,7 +171,7 @@ internal class CodexSessions(
         // And a restart it was asked for and has not made either - so that what is said below goes into
         // a process holding the servers as they stand now (see [applyPendingRestart]).
         applyPendingRestart(sessionId)
-        session(sessionId).sendPrompt(releasedRole(sessionId, text), images, context)
+        session(sessionId).sendPrompt(releasedRole(sessionId, text), images, context, uuid)
     }
 
     /**
@@ -205,9 +209,10 @@ internal class CodexSessions(
     }
 
     /**
-     * A branch off another conversation: the branch gets its whole transcript and an identifier of its
-     * own. Continuing in the branch leaves the parent untouched, and if the parent has never answered
-     * yet, there is nothing to branch off - we start an ordinary conversation.
+     * A branch off another conversation: the branch gets its transcript as it stands at this moment - to
+     * the end, or to the message it was cut at (see ForkOrigin) - and an identifier of its own. Continuing
+     * in the branch leaves the parent untouched, and if the parent has never answered yet, there is nothing
+     * to branch off - we start an ordinary conversation.
      *
      * It starts on what the PARENT runs on - its model, its effort, its permission mode - rather than on
      * what the settings hold. The two disagree more often than it seems: every selector writes the
@@ -220,7 +225,17 @@ internal class CodexSessions(
      * the fork of the conversation it continues without deciding anything about the next tab opened from
      * "+".
      */
-    fun branchFrom(parentId: String, branchId: String) {
+    fun branchFrom(
+        parentId: String,
+        branchId: String,
+        /**
+         * The parent's message the branch stops short of - everything before it, nothing from it on (see
+         * ForkOrigin.resolve). Null for the whole conversation.
+         */
+        before: String? = null,
+        /** The parent's name, for the seam in the branch's feed (see ForkOrigin.title). */
+        title: String = "",
+    ) {
         if (sessions.containsKey(branchId)) return
 
         val parent = sessions[parentId]
@@ -240,7 +255,46 @@ internal class CodexSessions(
         // everything else on this machine is on: that is the whole of the rule now, and a fork of a tab
         // launched last week was the last thing still quietly beating it.
 
-        sessions[branchId] = newSession(branchId, forkFrom = parent?.conversationId).also {
+        sessions[branchId] = newSession(branchId, origin = originOf(parent, title, before)).also {
+            Disposer.register(this, it)
+        }
+    }
+
+    /**
+     * Where a branch off [parent] forks from - worked out when first asked (see CodexSession.origin), which is
+     * a moment after the press, on the thread playing the inherited history into the tab.
+     *
+     * A parent that is itself a fork nobody has spoken in yet has no transcript of its own: everything it holds
+     * is its source's, up to its line, and a branch of it is a branch of that source - the whole of it at that
+     * same line, or cut at a message inside it. A parent with neither a transcript nor a source has nothing to
+     * branch off, and the branch starts an ordinary conversation.
+     */
+    private fun originOf(parent: CodexSession?, title: String, before: String?): Lazy<ForkOrigin.Resolved?> {
+        if (parent == null) return lazyOf(null)
+
+        return lazy {
+            val book = ForkBook(workingDirectory)
+            val turns = { id: String -> CodexHistory.turnRefs(id) }
+            val own = parent.conversationId?.takeIf { CodexHistory.transcriptFile(workingDirectory, it) != null }
+            val inherited = if (own == null) parent.forkOrigin else null
+
+            when {
+                own != null -> ForkOrigin.resolve(turns, book::origin, own, title, before, parent::turnOf)
+                inherited == null -> null
+                before == null -> ForkOrigin.Resolved(inherited)
+                else -> ForkOrigin.resolve(turns, book::origin, inherited.source, inherited.title, before, parent::turnOf)
+            }
+        }
+    }
+
+    /**
+     * A fork not born yet, brought back with its tab after a restart - the same fork, ending on the same line
+     * (see TabMemory.Tab.forkOrigin), whatever has become of the tab it was made from.
+     */
+    fun restoreFork(sessionId: String, origin: ForkOrigin) {
+        if (sessions.containsKey(sessionId)) return
+
+        sessions[sessionId] = newSession(sessionId, origin = lazyOf(ForkOrigin.Resolved(origin))).also {
             Disposer.register(this, it)
         }
     }
@@ -269,7 +323,7 @@ internal class CodexSessions(
             roleStillHeld.add(sessionId)
         }
 
-        sessions[sessionId] = newSession(sessionId, forkFrom = null, resumeFrom = conversationId).also {
+        sessions[sessionId] = newSession(sessionId, resumeFrom = conversationId).also {
             Disposer.register(this, it)
         }
     }
@@ -498,9 +552,11 @@ internal class CodexSessions(
             ?.takeIf { CodexHistory.transcriptFile(workingDirectory, it) != null }
 
         // A fork nobody has spoken in yet has no transcript of its own, and everything it is about
-        // belongs to its parent: raised as an ordinary tab it would come up empty, which is the same
-        // loss as a fork starting on the machine's defaults.
-        val forkFrom = if (conversationId == null) session.forkFrom else null
+        // belongs to its source: raised as an ordinary tab it would come up empty, which is the same
+        // loss as a fork starting on the machine's defaults. And it ends where it was made to end: carried
+        // whole, it would bring back the turns the person forked to get away from, and turns its feed
+        // never showed.
+        val origin = if (conversationId == null) session.forkOrigin else null
 
         val carried = SessionLaunch(
             // Clamped to what the account it is moving ONTO can actually run - see StartingChoice.clamp. Carried
@@ -517,7 +573,11 @@ internal class CodexSessions(
             close(sessionId)
             launches[sessionId] = carried
 
-            sessions[sessionId] = newSession(sessionId, forkFrom = forkFrom, resumeFrom = conversationId).also {
+            sessions[sessionId] = newSession(
+                sessionId,
+                origin = lazyOf(origin?.let { ForkOrigin.Resolved(it) }),
+                resumeFrom = conversationId,
+            ).also {
                 Disposer.register(this, it)
             }
         } finally {
@@ -720,6 +780,27 @@ internal class CodexSessions(
         onEnd: (SideQuestion.Answer) -> Unit,
     ) {
         awake(sessionId).askAside(id, question, history, onProgress, onEnd)
+    }
+
+    /**
+     * What restoring the code to before a message would put back - see CodexSession.previewRewind. A
+     * sleeping tab is woken for it: the answer is the process's, and the rewind it is the first step of
+     * needs the process anyway.
+     */
+    fun previewRewind(sessionId: String, target: String, onCode: (Rewind.Code) -> Unit) {
+        awake(sessionId).previewRewind(target, onCode)
+    }
+
+    /** Cut a conversation back and/or put its files back - see CodexSession.rewind. */
+    fun rewind(
+        sessionId: String,
+        target: String,
+        lastSeen: String?,
+        conversation: Boolean,
+        files: Boolean,
+        onOutcome: (Rewind.Outcome) -> Unit,
+    ) {
+        awake(sessionId).rewind(target, lastSeen, conversation, files, onOutcome)
     }
 
     /** Nothing to cancel in a conversation that is gone: its questions went with it, already answered as such. */
@@ -939,6 +1020,18 @@ internal class CodexSessions(
     }
 
     /**
+     * Where this tab's conversation forks from (see ForkOrigin) - worked out now if nobody has yet, so not for a
+     * thread that must not read files; null for a tab that is no fork.
+     */
+    fun forkOrigin(sessionId: String): ForkOrigin? = sessions[sessionId]?.forkOrigin
+
+    /** The same, only when it is known already - see CodexSession.forkOriginIfKnown. */
+    fun forkOriginIfKnown(sessionId: String): ForkOrigin? = sessions[sessionId]?.forkOriginIfKnown
+
+    /** The fork was to stop at a message its source does not hold, and carries the whole conversation instead. */
+    fun forkMissed(sessionId: String): Boolean = sessions[sessionId]?.forkMissed == true
+
+    /**
      * The name the person gave the tab, into the conversation behind it - see CodexSession.rename.
      *
      * Without creating a conversation, unlike [session]: a tab nobody has written into has no transcript
@@ -1056,6 +1149,28 @@ internal class CodexSessions(
     }
 
     /**
+     * What a tab opened with a choice of its own will start on, while it has not started yet - the model
+     * and the effort worked out the way its birth works them out (see [newSession]), the mode as chosen.
+     * Null for a tab with no such choice, and for one already started: past its birth [model] and [effort]
+     * are the answer, and the choice is spent.
+     *
+     * Asked so that such a tab is drawn by its choice from the first second. Until its first message it was
+     * drawn by the setting at the desk and by "default" on the phone: a conversation started from a phone on
+     * a model added by hand showed every model but that one, and read as "a custom model cannot be started
+     * from the phone" (reported from Windows, 0.13.20) - while the process, once raised, came up on it.
+     */
+    fun planned(sessionId: String): SessionLaunch? {
+        val launch = launches[sessionId] ?: return null
+        val account = CodexAccounts.getInstance().currentId
+
+        return SessionLaunch(
+            model = StartingChoice.model(account, requested = launch.model),
+            effort = StartingChoice.effort(account, requested = launch.effort),
+            mode = launch.mode,
+        )
+    }
+
+    /**
      * The model catalogue from a live conversation. Asking a sleeping one is pointless: the answer
      * comes from the process itself, and raising one for a list is not worth it - there is a one-off
      * lightweight ping for that (see CodexControlPing).
@@ -1125,12 +1240,12 @@ internal class CodexSessions(
 
     /** The process comes up lazily: an empty tab should start nothing. */
     private fun session(sessionId: String): CodexSession = sessions.getOrPut(sessionId) {
-        newSession(sessionId, forkFrom = null).also { Disposer.register(this, it) }
+        newSession(sessionId).also { Disposer.register(this, it) }
     }
 
     private fun newSession(
         sessionId: String,
-        forkFrom: String?,
+        origin: Lazy<ForkOrigin.Resolved?> = lazyOf(null),
         resumeFrom: String? = null,
     ): CodexSession {
         /*
@@ -1175,7 +1290,8 @@ internal class CodexSessions(
 
         return CodexSession(
             workingDirectory = workingDirectory,
-            forkFrom = forkFrom,
+            origin = origin,
+            onForked = { conversationId, fork -> ForkBook(workingDirectory).remember(conversationId, fork) },
             resumeFrom = resumeFrom,
             model = model,
             effort = effort,

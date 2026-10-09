@@ -177,6 +177,20 @@ internal object CodexShapes {
     fun reachedWindow(snapshot: JsonObject?): String? =
         AppServer.text(snapshot?.get("rateLimitReachedType")).takeIf { it.isNotEmpty() }
 
+    /**
+     * Which of the plan's windows stopped the work, in the panel's names - `five_hour` or `seven_day`, by the
+     * window's length as [usage] tells them apart - or Codex's own reason when no window is full. A scenario run
+     * files a refusal of a shared window against the account until it resets (see AccountUsage.SHARED_WINDOWS),
+     * and the panel words a window it knows.
+     */
+    fun stoppedWindow(snapshot: JsonObject?): String? {
+        val reached = reachedWindow(snapshot) ?: return null
+        val full = listOfNotNull(snapshot?.get("primary") as? JsonObject, snapshot?.get("secondary") as? JsonObject)
+            .filter { (AppServer.intOf(it["usedPercent"]) ?: 0) >= 100 }
+            .maxByOrNull { minutesOf(it) ?: 0 } ?: return reached
+        return if ((minutesOf(full) ?: 0) > SHORT_WINDOW_MAX_MINUTES) "seven_day" else "five_hour"
+    }
+
     /** When the window that stopped the work opens again, in seconds - for the panel's countdown. */
     fun resetOf(snapshot: JsonObject?): Long? {
         if (snapshot == null) return null

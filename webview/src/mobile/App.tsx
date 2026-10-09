@@ -14,7 +14,7 @@ import type {
 import { ClockContext } from '../hooks/useNow'
 import { asideQuestion, NO_THREAD, sideHistory, sideThread, type SideAction, type SideExchange, type SideThread } from '../feed/side'
 import { planDecisionOf, useCardState } from '../hooks/useCardState'
-import { applyFact, emptyFacts, factsFor, isFact, liveRunsOf, type ProjectFacts } from './facts'
+import { applyFact, customModelsOf, emptyFacts, factsFor, isFact, liveRunsOf, type ProjectFacts } from './facts'
 import { shelfHome, type RepositoryChoice, type ShelfChoice } from './scenarios'
 import { CALM_VIVID_FULL } from '../calmColors'
 import { useCalmColors } from '../hooks/useCalmColors'
@@ -47,6 +47,7 @@ import {
   buildProjects,
   CAP_OPEN_BARE,
   CAP_PARTS,
+  CAP_TELL,
   chatKey,
   waitingFor,
   type AgentEntry,
@@ -57,11 +58,22 @@ import {
 import { initialPanelState, reducePanel, type PanelState } from '../feed/build'
 import { tabHolding } from '../feed/resume'
 import { PIN_LIMIT, togglePin } from '../feed/pins'
-import type { FeedItem, TaskItem } from '../feed/types'
+import type { FeedItem, TaskItem, UserItem } from '../feed/types'
+import { clipboardMessage } from '../feed/tokens'
+import { forkPointAfter, forkTakesCode, lastSeenUuid, type RewindChoice } from '../feed/rewind'
 import { usageOf, type UsageFacts } from '../feed/usage'
 import { NARROW, ROOMY } from './images'
+import type { PhoneAsk } from './askSteps'
 import { chatHits, rowOf } from '../feed/search'
-import type { PaintedTerm, ScenarioScope, SearchHit, SearchProgressStep, SearchScope } from '../protocol'
+import type {
+  PaintedTerm,
+  RewindCode,
+  RewindRefusal,
+  ScenarioScope,
+  SearchHit,
+  SearchProgressStep,
+  SearchScope,
+} from '../protocol'
 import { Search, type SearchTab } from '../components/Search'
 import { useEarlierPages } from '../hooks/useEarlierPages'
 import { Accounts, type AccountsState } from './screens/Accounts'
@@ -71,6 +83,7 @@ import { Drawer } from './screens/Drawer'
 import { History } from './screens/History'
 import { Mcp } from './screens/Mcp'
 import { MessageSheet } from './screens/MessageSheet'
+import { RewindSheet } from './screens/RewindSheet'
 import { NewSession } from './screens/NewSession'
 import { Pairing, type PairingOffer } from './screens/Pairing'
 import { Plugins } from './screens/Plugins'
@@ -78,6 +91,7 @@ import { Projects, type HomeAnchor } from './screens/Projects'
 import { ScenarioCardScreen } from './screens/ScenarioCardScreen'
 import { ScenarioEditor } from './screens/ScenarioEditor'
 import { ScenarioRun } from './screens/ScenarioRun'
+import { forgetRunPlace } from '../components/scenarios/useRunPlace'
 import { ScenarioStep } from './screens/ScenarioStep'
 import { Scenarios } from './screens/Scenarios'
 import { RunSheet } from './screens/RunSheet'
@@ -162,7 +176,18 @@ type Screen =
 type Door = 'sessions'
 
 /** What is folded up over the screen, if anything - the six sheets and the drawer. */
-type Sheet = '' | 'tabs' | 'run' | 'message'
+type Sheet = '' | 'tabs' | 'run' | 'message' | 'rewind'
+
+/** The rewind sheet while it is open - see `rewinding` in App and RewindSheet. */
+interface PhoneRewind {
+  /** The conversation it is about, as chatKey names it. */
+  chat: string
+  item: UserItem
+  code?: RewindCode
+  choice: RewindChoice
+  working: boolean
+  refusal?: { reason: RewindRefusal; detail?: string }
+}
 
 /** A conversation being started in a project that has to be opened first - see [startSession]. */
 interface Opening {
@@ -197,6 +222,21 @@ export const App = () => {
 
   /** Which message the actions sheet is about - it outlives no conversation but its own. */
   const [acting, setActing] = useState<FeedItem | null>(null)
+
+  /**
+   * The rewind sheet over a message of one's own, while it is open (see RewindSheet) - the desk's dialog,
+   * with the same parts: the IDE's answer about the code, a press on its way, why the last one did not go.
+   * `chat` says which conversation it is about: the answers come back addressed by it.
+   */
+  const [rewinding, setRewinding] = useState<PhoneRewind | null>(null)
+  const rewindingRef = useRef(rewinding)
+  rewindingRef.current = rewinding
+
+  /**
+   * Text to put back into a chat's field - a message a rewind took out, to be said again (see Thread.refill).
+   * By chat, for the reason the quotes are: the field it goes into belongs to one conversation.
+   */
+  const [refills, setRefills] = useState<Record<string, { text: string; nonce: number }>>({})
 
   /**
    * What has been quoted out of a conversation and is waiting above the field, by chat.
@@ -237,14 +277,15 @@ export const App = () => {
   const [pins, setPins] = useState<Record<string, readonly string[]>>({})
 
   /**
-   * The questions of one call answered so far, by the call that asked them (see screens/Decision).
+   * What has been picked and written into one call's questions so far, by the call that asked them (see
+   * screens/Decision and askSteps).
    *
    * Here rather than in that screen for the reason the panel keeps its own outside the card: a phone
    * answers one question at a time, and the screen is taken down by everything ordinary - a step back to
    * the conversation, a look at the task list. Six questions answered down to the last one, gone because
    * somebody checked what the agent was doing.
    */
-  const [askAnswers, setAskAnswers] = useState<Record<string, Record<string, string>>>({})
+  const [askDrafts, setAskDrafts] = useState<Record<string, PhoneAsk>>({})
 
   /**
    * The three screens about the machine, by the IDE they were asked of.
@@ -739,6 +780,36 @@ export const App = () => {
       return
     }
 
+    // The rewind sheet's answers - to this phone alone, about the conversation the sheet stands over (see
+    // RewindSheet). Ahead of the guards below for the reason the side question's are.
+    if (message.type === 'rewindPreview' || message.type === 'rewindOutcome') {
+      const key = chatKey(agentId, projectKey, message.sessionId)
+      const current = rewindingRef.current
+      if (!current || current.chat !== key || current.item.uuid !== message.uuid) return
+
+      if (message.type === 'rewindPreview') {
+        setRewinding({
+          ...current,
+          code: message.code,
+          choice: current.code ? current.choice : message.code.state === 'ready' ? 'both' : 'conversation',
+        })
+        return
+      }
+
+      if (!message.ok) {
+        setRewinding({ ...current, working: false, refusal: { reason: message.reason ?? 'other', detail: message.detail } })
+        return
+      }
+
+      setRewinding(null)
+      setSheet('')
+      // Back into this chat's field as text - the phone's field holds words, not the desk's chips.
+      if (message.conversation) {
+        setRefills((all) => ({ ...all, [key]: { text: clipboardMessage(current.item), nonce: Date.now() } }))
+      }
+      return
+    }
+
     // The IDE has a message this phone sent (see outbox.ts). Ahead of every guard below: it may be about a
     // conversation no longer on screen, and the row it settles belongs to that one.
     if (message.type === 'promptReceived') {
@@ -1002,7 +1073,7 @@ export const App = () => {
     if (message.type === 'askResolved') {
       cards.answerAsk(message.id)
       // Answered - here, at the desk, or taken back by the agent: what was gathered has nowhere to go.
-      setAskAnswers((held) => {
+      setAskDrafts((held) => {
         if (held[message.id] === undefined) return held
 
         const next = { ...held }
@@ -1398,7 +1469,7 @@ export const App = () => {
 
       command(agentId, projectKey, {
         type: 'newSession',
-        kind: 'fork',
+        kind: 'branch',
         sessionId,
         parentId,
         // Empty when there is no parent to read: the IDE names such a tab itself, as it does a "+".
@@ -1411,24 +1482,42 @@ export const App = () => {
   )
 
   /**
-   * A conversation of one's own, carrying everything up to the message it was forked from.
+   * A conversation of one's own, carrying everything up to the message it was forked from - that message's
+   * turn included, and nothing after it (see forkPointAfter). With [before] it stops short of that message
+   * instead, and [refill] is put into the fork's field: the rewind sheet's "In a new tab".
    *
-   * The same request the panel's "/fork" makes, and allowed over the wire for the same reason starting
-   * a conversation is: it is no more than sending a message, which starts a process too (see
-   * RemoteCommands). The name is guessed from the message it grew out of, by the panel's own rule -
-   * a fork called "new session" is one nobody can tell from the next one.
+   * The same request the panel's fork makes, and allowed over the wire for the same reason starting a
+   * conversation is: it is no more than sending a message, which starts a process too (see
+   * RemoteCommands). The name is guessed from the message it grew out of, by the panel's own rule - a fork
+   * called "new session" is one nobody can tell from the next one.
    */
   const forkFrom = useCallback(
-    (agentId: string, projectKey: string, parentId: string, item: FeedItem) => {
+    (
+      agentId: string,
+      projectKey: string,
+      parentId: string,
+      item: FeedItem,
+      items: readonly FeedItem[],
+      cut?: { before: string; refill: string; code: boolean },
+    ) => {
       const sessionId = newSessionId()
+      const point = cut ? { before: cut.before } : forkPointAfter(items, item.id)
 
       command(agentId, projectKey, {
         type: 'newSession',
-        kind: 'fork',
+        kind: 'branch',
         sessionId,
         parentId,
         title: deriveSessionTitle(forkTitle(item)),
+        ...(point.before ? { before: point.before } : {}),
+        // The code put back in the parent too - the same one command the desk sends (see forkTakesCode).
+        ...(point.before && cut?.code ? { code: true } : {}),
       })
+
+      if (cut) {
+        const key = chatKey(agentId, projectKey, sessionId)
+        setRefills((all) => ({ ...all, [key]: { text: cut.refill, nonce: Date.now() } }))
+      }
 
       enter(agentId, projectKey, sessionId, false)
     },
@@ -1484,6 +1573,8 @@ export const App = () => {
       // Named before the asking, not at the next render: the answer is what the screen is opened for,
       // and a record that arrives before the screen is known would be let go of as somebody else's.
       watchedRun.current = runId
+      // Opened, not come back to: it opens on what is happening, not where it was read last (see useRunPlace).
+      forgetRunPlace(runId)
       setScreen({ at: 'scenarioRun', agentId, projectKey, runId, from })
       if (from === 'sessions') links.current[agentId]?.watch(projectKey, '', 0)
       command(agentId, projectKey, { type: 'scenarioOpen', runId })
@@ -2425,6 +2516,9 @@ export const App = () => {
             onPause={(runId) => command(at.agentId, at.projectKey, { type: 'scenarioPause', runId })}
             onResume={(runId) => command(at.agentId, at.projectKey, { type: 'scenarioResume', runId })}
             onStop={(runId) => command(at.agentId, at.projectKey, { type: 'scenarioStop', runId })}
+            onStarRun={(runId, starred) =>
+              command(at.agentId, at.projectKey, { type: 'scenarioRunStar', runId, starred })
+            }
             onBack={back}
           />
         </div>
@@ -2494,6 +2588,25 @@ export const App = () => {
                 conversationId: step.conversationId,
               })
             }}
+            tell={
+              (inventories[at.agentId]?.caps ?? []).includes(CAP_TELL)
+                ? {
+                    facts: facts[`${at.agentId}:${at.projectKey}`] ?? emptyFacts(),
+                    photos: (inventories[at.agentId]?.caps ?? []).includes(CAP_PARTS) ? ROOMY : NARROW,
+                    connected: states[at.agentId] === 'connected',
+                    voice: dictation,
+                  }
+                : null
+            }
+            onTell={(prompt: OutgoingPrompt) =>
+              command(at.agentId, at.projectKey, {
+                type: 'scenarioTell',
+                runId: at.runId,
+                text: prompt.text,
+                images: prompt.images,
+                tokens: prompt.tokens,
+              })
+            }
             onBack={back}
           />
         </div>
@@ -2528,7 +2641,6 @@ export const App = () => {
 
     if (screen.at === 'scenarioEditor') {
       const at = screen
-      const held = facts[`${at.agentId}:${at.projectKey}`]
 
       return (
         <div className={m.screen}>
@@ -2544,7 +2656,7 @@ export const App = () => {
             }
             repositories={repositories}
             models={inventories[at.agentId]?.models ?? null}
-            customModels={held?.customModels ?? []}
+            customModels={customModelsOf(facts, inventories[at.agentId]?.customModels, at.agentId, at.projectKey)}
             onChange={(draft) => setEdit((current) => (current ? { ...current, draft } : current))}
             onShelf={(shelf) => {
               const keep = (chosen: ShelfChoice) =>
@@ -2613,7 +2725,6 @@ export const App = () => {
 
     if (screen.at === 'scenarioCard') {
       const at = screen
-      const held = facts[`${at.agentId}:${at.projectKey}`]
       // The editor's own draft, which is where the card lives: walking back to it must find the change.
       if (!edit?.draft) return list
 
@@ -2624,7 +2735,7 @@ export const App = () => {
             stageId={at.stageId}
             cardId={at.cardId}
             models={inventories[at.agentId]?.models ?? null}
-            customModels={held?.customModels ?? []}
+            customModels={customModelsOf(facts, inventories[at.agentId]?.customModels, at.agentId, at.projectKey)}
             onChange={(draft) => setEdit((current) => (current ? { ...current, draft } : current))}
             onBack={back}
           />
@@ -2669,7 +2780,7 @@ export const App = () => {
           <NewSession
             project={project}
             models={inventory?.models ?? null}
-            customModels={customModelsOf(facts, screen.agentId, screen.projectKey)}
+            customModels={customModelsOf(facts, inventories[screen.agentId]?.customModels, screen.agentId, screen.projectKey)}
             prefs={inventory?.prefs ?? EMPTY_LAUNCH}
             busy={opening !== null && opening.error === ''}
             error={opening?.error ?? ''}
@@ -2752,9 +2863,9 @@ export const App = () => {
               title={entry?.title ?? 'A conversation'}
               project={entry?.projectName ?? ''}
               // The answers gathered so far are kept here, so stepping back into the conversation and
-              // returning does not start the questions over - see askAnswers.
-              answers={askAnswers}
-              onAnswers={setAskAnswers}
+              // returning does not start the questions over - see askDrafts.
+              answers={askDrafts}
+              onAnswers={setAskDrafts}
               onDecide={(id, decision) =>
                 command(screen.agentId, screen.projectKey, { type: 'permissionDecision', id, decision })
               }
@@ -2775,6 +2886,14 @@ export const App = () => {
                   text,
                 })
               }
+              // Closed here at once rather than when the IDE says so, as at the desk: the card is gone from
+              // this screen the moment it is pressed, and the person is taken to the conversation to say
+              // it there - which is what the press was for.
+              onDismissAsk={(id) => {
+                cards.answerAsk(id)
+                command(screen.agentId, screen.projectKey, { type: 'askDismiss', sessionId: screen.sessionId, id })
+                setScreen({ ...screen, at: 'thread' })
+              }}
               onOpenThread={() => setScreen({ ...screen, at: 'thread' })}
               onBack={back}
             />
@@ -2897,6 +3016,11 @@ export const App = () => {
             }
             earlierPages={feed.state.earlierPages}
             onLoadEarlier={loadEarlier}
+            // The original of a fork, on the machine this conversation lives on - opened the way the history
+            // opens one (see openPast): the tab already holding it, else a tab of its own.
+            onOpenConversation={(conversationId, title) =>
+              openPast(screen.agentId, screen.projectKey, { id: conversationId, title, updatedAt: 0, messages: 0 })
+            }
             onDecide={() => setScreen({ ...screen, at: 'decide' })}
             onBack={back}
             onTasks={() => setScreen({ ...screen, at: 'tasks' })}
@@ -2908,6 +3032,14 @@ export const App = () => {
               setActing(item)
               setSheet('message')
             }}
+            refill={refills[key]}
+            onRefilled={() =>
+              setRefills((all) => {
+                if (!(key in all)) return all
+                const { [key]: _done, ...rest } = all
+                return rest
+              })
+            }
             pins={pins[key] ?? EMPTY_PINS}
             onPin={(id) =>
               setPins((current) => ({ ...current, [key]: togglePin(current[key] ?? EMPTY_PINS, id) }))
@@ -3025,7 +3157,7 @@ export const App = () => {
       {sheet === 'run' && onThread && (
         <RunSheet
           models={inventories[onThread.agentId]?.models ?? null}
-          customModels={customModelsOf(facts, onThread.agentId, onThread.projectKey)}
+          customModels={customModelsOf(facts, inventories[onThread.agentId]?.customModels, onThread.agentId, onThread.projectKey)}
           model={feed.state.model ?? ''}
           effort={feed.state.effort ?? ''}
           mode={feed.state.permissionMode ?? ''}
@@ -3060,8 +3192,22 @@ export const App = () => {
           }
           onFork={() => {
             setSheet('')
-            forkFrom(onThread.agentId, onThread.projectKey, onThread.sessionId, acting)
+            forkFrom(onThread.agentId, onThread.projectKey, onThread.sessionId, acting, feed.state.items)
           }}
+          onRewind={
+            acting.kind === 'user' && acting.uuid && !acting.steering
+              ? () => {
+                  const item = acting
+                  setRewinding({ chat: sheetKey, item, choice: 'conversation', working: false })
+                  setSheet('rewind')
+                  command(onThread.agentId, onThread.projectKey, {
+                    type: 'rewindPreview',
+                    sessionId: onThread.sessionId,
+                    uuid: item.uuid ?? '',
+                  })
+                }
+              : undefined
+          }
           onPin={() =>
             setPins((current) => ({
               ...current,
@@ -3069,6 +3215,49 @@ export const App = () => {
             }))
           }
           onClose={() => setSheet('')}
+        />
+      )}
+
+      {sheet === 'rewind' && onThread && rewinding && rewinding.chat === sheetKey && (
+        <RewindSheet
+          item={rewinding.item}
+          code={rewinding.code}
+          choice={rewinding.choice}
+          onChoice={(choice) => setRewinding((current) => (current ? { ...current, choice, refusal: undefined } : current))}
+          running={feed.state.status === 'running'}
+          queued={feed.state.queue.length}
+          working={rewinding.working}
+          refusal={rewinding.refusal}
+          onRewind={() => {
+            const current = rewindingRef.current
+            if (!current?.item.uuid || current.working) return
+            const files = current.choice !== 'conversation' && current.code?.state === 'ready'
+            const conversation = current.choice !== 'code'
+            command(onThread.agentId, onThread.projectKey, {
+              type: 'rewind',
+              sessionId: onThread.sessionId,
+              uuid: current.item.uuid,
+              lastSeen: lastSeenUuid(feed.state.items),
+              conversation,
+              files,
+            })
+            setRewinding({ ...current, working: true, refusal: undefined })
+          }}
+          onFork={() => {
+            const current = rewindingRef.current
+            if (!current?.item.uuid || current.working) return
+            setRewinding(null)
+            setSheet('')
+            forkFrom(onThread.agentId, onThread.projectKey, onThread.sessionId, current.item, feed.state.items, {
+              before: current.item.uuid,
+              refill: clipboardMessage(current.item),
+              code: forkTakesCode(current.choice, current.code),
+            })
+          }}
+          onClose={() => {
+            setRewinding(null)
+            setSheet('')
+          }}
         />
       )}
 
@@ -3216,16 +3405,6 @@ const vividOf = (facts: Record<string, ProjectFacts>, screen: Screen): number | 
   return facts[key]?.calmVivid ?? Object.values(facts).find((fact) => fact.calmVivid !== undefined)?.calmVivid
 }
 
-/**
- * The models added by hand on the machine this project belongs to (see CustomModels.tsx).
- *
- * Asked of that machine alone, unlike the language and the colour mode above: those are about the person
- * and any answer will do, while a model is about a Claude Code - a name added on one machine says nothing
- * about what another one can launch, and offering it would be offering a turn that dies on its first
- * message.
- */
-const customModelsOf = (facts: Record<string, ProjectFacts>, agentId: string, projectKey: string): string[] =>
-  facts[`${agentId}:${projectKey}`]?.customModels ?? []
 
 /** Where the put-away conversations are remembered on this device - see the note on the state. */
 const HIDDEN_KEY = 'hiddenChats'

@@ -112,8 +112,12 @@ const SHARED_WITH_ENGLISH: Record<string, Locale[]> = {
   'selectors.effort': ['fr'],
   'selectors.mode': ['fr'],
   'feed.limit.label': ['de'],
+  'scenarios.run.limitLabel': ['de'],
+  'scenarios.run.panelSaid': ['es', 'de'],
   'feed.findings.label': ['de'],
   'feed.crash.label': ['fr'],
+  // "Mods" is the word the Latin languages use for them as well.
+  'feed.mods.label': ['es', 'pt-BR', 'de', 'fr'],
   'mobile.sessions.agent.offline': ['pt-BR', 'de'],
   // The phone's own screens, where the Latin languages happen to spell a word exactly as English does.
   'mobile.sessions.kind.permission': ['fr'],
@@ -128,6 +132,10 @@ const SHARED_WITH_ENGLISH: Record<string, Locale[]> = {
   'mobile.newSession.mode': ['fr'],
   'header.menu': ['pt-BR', 'fr'],
   'header.conversations': ['fr'],
+  // The rewind dialog's choice of what to put back: "Code" is the word in German and French, and so is
+  // "Conversation" in French.
+  'chrome.rewind.code': ['de', 'fr'],
+  'chrome.rewind.conversation': ['fr'],
   'remote.relay': ['es', 'pt-BR', 'de'],
   'feedback.kinds.bug.label': ['pt-BR', 'de', 'fr'],
   'feedback.kinds.idea.label': ['es'],

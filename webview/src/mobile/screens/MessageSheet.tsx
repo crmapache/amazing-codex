@@ -1,3 +1,4 @@
+import { copyToClipboard } from '../../clipboard'
 import { clipboardMessage } from '../../feed/tokens'
 import { paragraphsText } from '../../feed/markdown'
 import { isPinnable, pinLine } from '../../feed/pins'
@@ -13,12 +14,17 @@ interface MessageSheetProps {
   pinsFull: boolean
   onQuote: (text: string) => void
   onFork: () => void
+  /**
+   * Open the rewind sheet over this message (see RewindSheet). Absent where it cannot be: an answer, a
+   * message written into a running turn, one sent before messages were named (see feed/rewind.ts).
+   */
+  onRewind?: () => void
   onPin: () => void
   onClose: () => void
 }
 
 /**
- * What else one message can do: quote it, fork from it, copy it, pin it.
+ * What else one message can do: quote it, fork from it, rewind to it, copy it, pin it.
  *
  * A sheet rather than four buttons on the card, and rather than the panel's arrangement. At the desk a
  * quote is made by selecting the words it should be and a fork is a slash command typed into the field -
@@ -36,6 +42,7 @@ export const MessageSheet = ({
   pinsFull,
   onQuote,
   onFork,
+  onRewind,
   onPin,
   onClose,
 }: MessageSheetProps) => {
@@ -79,11 +86,27 @@ export const MessageSheet = ({
         </span>
       </button>
 
+      {/* Cutting the conversation back to before this message - the desk's rewind button, behind the same
+          three dots as the fork beside it. It opens a sheet of its own that asks first. */}
+      {onRewind ? (
+        <button type="button" className={m.sheetAction} onClick={onRewind}>
+          <span className={m.sheetActionGlyph} style={{ color: 'var(--acc-c-rose-4)' }}>
+            ⟲
+          </span>
+          <span className={m.sheetActionText}>
+            <span className={m.sheetActionName}>{t.mobile.message.rewind}</span>
+            <span className={m.sheetActionHint}>{t.mobile.message.rewindHint}</span>
+          </span>
+        </button>
+      ) : null}
+
       <button
         type="button"
         className={m.sheetAction}
         onClick={() => {
-          void navigator.clipboard?.writeText(text)
+          // The panel's one copy rather than the API straight - written by the API, a message that opens
+          // with "Subject:" pasted into Gmail as a percent-encoded link (see copyToClipboard).
+          void copyToClipboard(text)
           onClose()
         }}
       >

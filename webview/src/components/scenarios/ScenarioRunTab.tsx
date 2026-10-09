@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import type { ScenarioRun, ScenarioRunStep } from '../../protocol'
 import { formatTokens } from '../../feed/build'
 import { formatDuration } from '../../feed/tools'
@@ -6,19 +6,25 @@ import type { FeedItem } from '../../feed/types'
 import {
   cutCardOf,
   finished,
-  progressOf,
   resumable,
-  runElapsed,
+  runWorked,
+  stepWorked,
   timelineOf,
+  toldTokens,
   type StageStanding,
 } from '../../scenarios/timeline'
+import { limitText, moveText } from '../../scenarios/moves'
+import { roadOf, roadWidth } from '../../scenarios/roadmap'
 import { useTicking } from '../../hooks/useTicking'
 import { useT } from '../../i18n'
 import { Confirm } from '../Confirm'
 import { Glance } from '../items/Glance'
 import { SkeletonBar } from '../Skeleton'
+import { Roadmap } from './Roadmap'
 import { StatePill } from './StatePill'
 import { StepLog, stepFacts } from './StepLog'
+import { useRunPlace } from './useRunPlace'
+import { SentTokens } from '../items/UserCard'
 import s from './scenarios.module.css'
 
 /**
@@ -68,6 +74,13 @@ export interface ScenarioRunTabProps {
   onOpenChat: () => void
   onAnswer: (allow: boolean, text: string) => void
   onOpenLink: (url: string) => void
+  /**
+   * The field for words to the run's main thread while it goes - the same composer a chat has, built by App
+   * on this tab's draft (files, pictures, pastes, dictation and all; see `scenarioTell`). Drawn at the foot of
+   * a run that is going and not at all once it is over: the main thread reads nothing more by then, and its
+   * conversation opens as a chat for that.
+   */
+  composer: ReactNode
 }
 
 export const ScenarioRunTab = ({
@@ -84,12 +97,15 @@ export const ScenarioRunTab = ({
   onOpenChat,
   onAnswer,
   onOpenLink,
+  composer,
 }: ScenarioRunTabProps) => {
   const t = useT()
   const [confirmStop, setConfirmStop] = useState(false)
   const [answer, setAnswer] = useState('')
   /** Which step's window is open. Held here rather than read off [log]: the log arrives a moment later. */
   const [opened, setOpened] = useState('')
+  /** Which folded pastes in the person's notes are open, by note and place (see SentTokens). */
+  const [openPastes, setOpenPastes] = useState<Set<string>>(() => new Set())
 
   /*
    * The clock, ticking only while something is actually running.
@@ -101,6 +117,36 @@ export const ScenarioRunTab = ({
   const now = useTicking(live)
 
   const rows = useMemo(() => (run ? timelineOf(run) : []), [run])
+
+  /*
+   * Words just sent to the main thread are brought into view once they are on the run.
+   *
+   * They land under the card the run is at, which is wherever the work is - the middle of a long timeline as
+   * often as its end - while the field is at the foot of the tab. Without this, Enter is followed by nothing
+   * visibly happening. A person's note that was not there when this tab drew last is the one just sent - from
+   * here, or from a phone in the same hand; a reply of the main thread does not move the page, so one arriving
+   * while the person reads further up does not pull them away.
+   */
+  const body = useRef<HTMLDivElement>(null)
+  const told = run?.notes.filter((note) => note.who === 'person') ?? []
+  const lastTold = told.length > 0 ? told[told.length - 1].at : 0
+  const seenTold = useRef(lastTold)
+  useEffect(() => {
+    if (lastTold <= seenTold.current) return
+    seenTold.current = lastTold
+    body.current?.querySelector(`[data-note="${lastTold}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [lastTold])
+
+  // Opened on what is happening, come back to where it was left - after a step's log, or another tab (see
+  // useRunPlace). Here a finished run's ending, an error, a question and a limit being waited out stand above the
+  // timeline, so a run with any of them opens at the top.
+  const onScroll = useRunPlace(
+    body,
+    run?.id ?? '',
+    run !== null && (finished(run.state) || run.error.length > 0 || run.question !== null || run.limit != null)
+      ? 'top'
+      : 'present',
+  )
 
   if (!run) {
     return (
@@ -118,9 +164,8 @@ export const ScenarioRunTab = ({
   }
 
   const over = finished(run.state)
-  const progress = progressOf(run)
-  const elapsed = formatDuration(runElapsed(run, now))
-  const share = progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0
+  const road = roadOf(run)
+  const elapsed = formatDuration(runWorked(run, now))
 
   /**
    * The step whose window is open, found again on every draw rather than kept as a copy.
@@ -155,8 +200,12 @@ export const ScenarioRunTab = ({
         title={opened === HEAD ? run.scenarioName : openedStep?.title ?? ''}
         facts={
           openedStep
-            ? stepFacts(openedStep.startedAt, openedStep.finishedAt, openedStep.tokens, openedStep.cost)
-            : stepFacts(run.startedAt, run.finishedAt, run.tokens, run.cost)
+            ? stepFacts(
+                openedStep.finishedAt > 0 ? stepWorked(openedStep) : 0,
+                openedStep.tokens,
+                openedStep.cost,
+              )
+            : stepFacts(over ? runWorked(run, now) : 0, run.tokens, run.cost)
         }
         items={log && log.key === opened ? log.items : []}
         found={log?.key === opened && log.found}
@@ -213,50 +262,49 @@ export const ScenarioRunTab = ({
       </div>
 
       <div className={s.runBar}>
-        <StatePill state={run.state} failure={run.failure} />
-
-        <span className={s.progress}>
-          <span
-            className={[
-              s.progressFill,
-              run.state === 'done' ? s.progressDone : '',
-              run.state === 'failed' ? s.progressFailed : '',
-            ]
-              .filter(Boolean)
-              .join(' ')}
-            style={{ width: `${share}%` }}
-          />
+        {/* The same road as the run's card in the hub (see Roadmap), where a bar and "6/6 cards" used to be.
+            As wide as it needs and no wider, so the readings follow it; on a narrow panel it takes a line of
+            its own and folds there. */}
+        <span className={s.runBarRoad} style={{ '--acc-road': `${roadWidth(road.length)}px` } as CSSProperties}>
+          <Roadmap stops={road} state={run.state} />
         </span>
-        <span className={s.runValue}>{t.scenarios.run.cards(progress.done, progress.total)}</span>
 
         {/*
-          Three words for one number, because the number means three things. A finished run took that
-          long; a going one has been going that long; a paused one has merely been open that long -
-          nothing is being spent, and "running for" over a run that is standing still is a small lie.
+          How long it has genuinely worked (see runWorked): a pause, a question waiting for a person and an
+          IDE that went away are not in it, so a run standing still stands still here too - which is why one
+          word serves a going, a paused and a waiting run alike. A finished one took that long.
+          The three readings travel together: a long road leaves room for one of them, and a strip that broke
+          between "active" and "tokens" read as two unrelated lines.
         */}
-        <span className={s.runSegment}>
-          <span className={s.runKey}>
-            {over ? t.scenarios.run.took : run.state === 'paused' ? t.scenarios.run.openFor : t.scenarios.run.running}
+        <span className={s.runBarReadings}>
+          <span className={s.runSegment}>
+            <span className={s.runKey}>{over ? t.scenarios.run.took : t.scenarios.run.active}</span>
+            <span className={s.runValue}>{elapsed}</span>
           </span>
-          <span className={s.runValue}>{elapsed}</span>
+
+          {run.tokens > 0 ? (
+            <span className={s.runSegment}>
+              <span className={s.runKey}>{t.scenarios.run.tokens}</span>
+              <span className={s.runValue}>{formatTokens(run.tokens)}</span>
+            </span>
+          ) : null}
+
+          {run.cost > 0 ? (
+            <span className={s.runSegment}>
+              <span className={s.runKey}>{t.scenarios.run.cost}</span>
+              <span className={s.runValue}>${run.cost.toFixed(2)}</span>
+            </span>
+          ) : null}
         </span>
 
-        {run.tokens > 0 ? (
-          <span className={s.runSegment}>
-            <span className={s.runKey}>{t.scenarios.run.tokens}</span>
-            <span className={s.runValue}>{formatTokens(run.tokens)}</span>
-          </span>
-        ) : null}
-
-        {run.cost > 0 ? (
-          <span className={s.runSegment}>
-            <span className={s.runKey}>{t.scenarios.run.cost}</span>
-            <span className={s.runValue}>${run.cost.toFixed(2)}</span>
-          </span>
-        ) : null}
+        {/* The state at the strip's far edge, where the hub's card has it (see RunsBand): a reading, not the
+            first thing of the row - the road is. */}
+        <span className={s.runBarState}>
+          <StatePill state={run.state} failure={run.failure} />
+        </span>
       </div>
 
-      <div className={s.body}>
+      <div className={s.body} ref={body} onScroll={onScroll}>
         {run.error ? <div className={s.outcome}>{run.error}</div> : null}
 
         {/*
@@ -300,6 +348,18 @@ export const ScenarioRunTab = ({
                 </button>
               ) : null}
             </span>
+          </div>
+        ) : null}
+
+        {/*
+          A limit the run is waiting out, because no account it could work on had room: whose, and when it goes
+          on by itself - a pause that says nothing about itself reads as one somebody forgot (see
+          ScenarioRun.limit). Resume above tries now rather than at that time.
+        */}
+        {!over && run.limit ? (
+          <div className={`${s.limitWait} ${s.limitWaitTop}`}>
+            <span className={s.limitWaitLabel}>{t.scenarios.run.limitLabel}</span>
+            <span className={s.limitWaitText}>{limitText(t, run.limit)}</span>
           </div>
         ) : null}
 
@@ -394,7 +454,12 @@ export const ScenarioRunTab = ({
           {rows.map((row) => {
             if (row.kind === 'stage') {
               return (
-                <div key={row.key} className={`${s.stageRow} ${standingClass(row.standing)}`}>
+                <div
+                  key={row.key}
+                  className={`${s.stageRow} ${standingClass(row.standing)}`}
+                  data-row={row.key}
+                  data-ahead={row.standing === 'ahead' || undefined}
+                >
                   <span className={s.stageNumber}>{row.index}</span>
                   <span className={s.stageTitle}>
                     {t.scenarios.editor.stageHead(row.index, row.title || t.scenarios.stage)}
@@ -421,12 +486,54 @@ export const ScenarioRunTab = ({
             }
 
             if (row.kind === 'note') {
+              const person = row.note.who === 'person'
+              // The panel's own word: it moved the run to another account, or put it to wait for a limit.
+              const move = row.note.who === 'panel' ? row.note.move : undefined
+              // Only on a run that goes: a run that ended with words still waiting took them with it.
+              const waiting = person && !over && !row.note.deliveredAt
+              if (move) {
+                return (
+                  <div key={row.key} className={s.note} data-note={row.note.at} data-row={row.key}>
+                    <span className={s.noteRail} />
+                    <span className={`${s.noteBody} ${s.notePanel} ${move.reason === 'limit' ? s.notePanelLimit : ''}`}>
+                      <span className={s.noteWho}>{t.scenarios.run.panelSaid}</span>
+                      <span className={s.noteText}>{moveText(t, move)}</span>
+                    </span>
+                  </div>
+                )
+              }
               return (
-                <div key={row.key} className={s.note}>
+                <div key={row.key} className={s.note} data-note={row.note.at} data-row={row.key}>
                   <span className={s.noteRail} />
-                  <span className={s.noteBody}>
-                    <span className={s.noteWho}>{t.scenarios.run.headSaid}</span>
-                    <Glance text={row.note.text} className={s.noteText} />
+                  <span className={`${s.noteBody} ${person ? s.notePerson : ''}`}>
+                    <span className={s.noteWho}>{person ? t.scenarios.run.youSaid : t.scenarios.run.headSaid}</span>
+                    {/* The person's own message as a chat draws a sent one - words and attachment chips; the
+                        head's words are markdown. */}
+                    {person ? (
+                      <SentTokens
+                        className={s.notePersonText}
+                        tokens={toldTokens(row.note)}
+                        onOpenLink={onOpenLink}
+                        isOpen={(index) => openPastes.has(`${row.note.at}:${index}`)}
+                        onToggle={(index) =>
+                          setOpenPastes((current) => {
+                            const next = new Set(current)
+                            const key = `${row.note.at}:${index}`
+                            if (!next.delete(key)) next.add(key)
+                            return next
+                          })
+                        }
+                      />
+                    ) : row.note.text ? (
+                      <Glance text={row.note.text} className={s.noteText} />
+                    ) : null}
+                    {waiting ? <span className={s.noteWaiting}>{t.scenarios.run.tellWaiting}</span> : null}
+                    {row.note.relayed ? (
+                      <span className={s.noteRelayed}>
+                        <span className={s.noteRelayedLabel}>{t.scenarios.run.passedOn}</span>
+                        <Glance text={row.note.relayed} className={s.noteText} />
+                      </span>
+                    ) : null}
                   </span>
                 </div>
               )
@@ -435,16 +542,30 @@ export const ScenarioRunTab = ({
             return (
               <StepRow
                 key={row.key}
+                anchor={row.key}
                 step={row.step}
                 passes={row.passes}
                 untilDone={row.untilDone}
-                now={now}
+                worked={stepWorked(row.step, now, run)}
                 onOpen={() => openStep(row.step)}
               />
             )
           })}
         </div>
       </div>
+
+      {/* The main thread answering the person, said over the field the words came from. */}
+      {over ? null : (
+        <div className={s.tell}>
+          {run.answering ? (
+            <div className={s.tellStatus}>
+              <span className={s.tellDot} />
+              {t.scenarios.run.answering}
+            </div>
+          ) : null}
+          {composer}
+        </div>
+      )}
 
       {confirmStop ? (
         <Confirm
@@ -475,23 +596,26 @@ const standingClass = (standing: StageStanding): string =>
   standing === 'here' ? s.stageHere : standing === 'ahead' ? s.stageAhead : s.stageDone
 
 const StepRow = ({
+  anchor,
   step,
   passes,
   untilDone,
-  now,
+  worked,
   onOpen,
 }: {
+  /** Its key in the timeline, for holding the reading place by (see useRunPlace). */
+  anchor: string
   step: ScenarioRunStep
   /** How many passes its stage was given. One means the row has no loop to place itself in. */
   passes: number
   untilDone: boolean
-  now: number
+  /** How long it has genuinely worked so far (see stepWorked) - it stands still while the run does. */
+  worked: number
   onOpen: () => void
 }) => {
   const t = useT()
   const going = step.state === 'running' || step.state === 'asking' || step.state === 'judging'
-  const elapsed =
-    step.startedAt > 0 ? formatDuration((step.finishedAt > 0 ? step.finishedAt : now) - step.startedAt) : ''
+  const elapsed = step.startedAt > 0 ? formatDuration(worked) : ''
 
   /*
    * One line, and which line depends on what there is.
@@ -507,7 +631,7 @@ const StepRow = ({
   const ahead = step.state === 'waiting' || step.state === 'skipped'
 
   return (
-    <div className={s.stepRow}>
+    <div className={s.stepRow} data-row={anchor} data-ahead={ahead || undefined}>
       <span
         className={[
           s.stepRail,

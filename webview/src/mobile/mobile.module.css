@@ -1401,6 +1401,36 @@
   color: var(--acc-fg-dim);
 }
 
+/* A ticked option of a question that takes several. Louder than a picked choice elsewhere on the phone
+   (.choiceOptionPicked): here the tap no longer moves on, so the mark is all that says it took - and the
+   faint tint alone did not read as a tick on a phone screen in daylight. */
+.buttonOptionOn {
+  border-color: var(--acc-accent);
+  background: var(--acc-accent-12);
+}
+
+.buttonOptionOn .buttonOptionLabel {
+  display: flex;
+  align-items: center;
+  color: var(--acc-accent);
+}
+
+.buttonOptionOn .buttonOptionLabel::after {
+  content: '✓';
+  margin-left: auto;
+  padding-left: var(--acc-sp-2);
+}
+
+/* The answer in one's own words, in the place of the Other option it opened from. Paired with .input,
+   which comes later in this file and would otherwise win back its one-line pill shape. */
+.input.ownAnswer {
+  min-height: 96px;
+  padding: 10px 16px;
+  border-radius: var(--acc-r-md, 8px);
+  resize: none;
+  line-height: 1.5;
+}
+
 /* --- Pairing ------------------------------------------------------------------ */
 
 .pairingNote {
@@ -1673,8 +1703,11 @@
   gap: var(--acc-sp-3);
   padding: var(--acc-sp-4);
   /* Inset like the project cards below it, and by the same token: this band and they are one list, and
-     one list has one left edge. The width is left to the box - a full one plus these margins is a card
-     wider than the screen. */
+     one list has one left edge. The width is spelled out because this is a button, and a button is as
+     wide as its content rather than as its box: a conversation's title longer than the line pushed the
+     card past the right edge of the screen and took the Answer button with it. Full width plus these
+     margins is too wide the other way, hence the subtraction. */
+  width: calc(100% - 2 * var(--acc-sp-5));
   margin: 0 var(--acc-sp-5) var(--acc-sp-2);
   border: 1px solid var(--acc-accent-line);
   border-radius: var(--acc-r-card);
@@ -2453,6 +2486,15 @@
   overflow: hidden;
 }
 
+/* The rewind sheet's sentences stand under the quoted message, not out at the sheet's edge (see RewindSheet). */
+.rewindSheet {
+  padding: 0 var(--acc-sp-3);
+}
+
+.rewindSheet .selectedLine {
+  margin: 0 0 var(--acc-sp-3);
+}
+
 /* --- The tabs sheet -------------------------------------------------------- */
 
 .tabRow {
@@ -3203,7 +3245,35 @@
   color: var(--acc-fg-ghost);
 }
 
-/* How far along, as a bar. The one figure on the card that is read without reading. */
+/* The stage the run is in, by name - the desk card's line (see .runCardStage in scenarios.module.css), a
+   size up for a thumb's distance. Cut rather than wrapped, so the card keeps its height. */
+.runStage {
+  display: block;
+  min-width: 0;
+  margin-top: var(--acc-sp-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--acc-fg-body);
+}
+
+/* The road of its cards (see Roadmap) - what the bar below used to say, and the card the run is on. The
+   same room above it as the readings have below it. */
+.runRoad {
+  margin-top: var(--acc-sp-3);
+}
+
+/* The same road on the run's own screen, the last thing in its header: room under it as well, or the stops
+   sit on the header's bottom rule. */
+.runHeadRoad {
+  margin-top: var(--acc-sp-2);
+  padding-bottom: var(--acc-sp-5);
+}
+
+/* How far along, as a bar - drawn only for an IDE too old to send the road. */
 .runTrack {
   height: 5px;
   margin-top: var(--acc-sp-3);
@@ -3217,14 +3287,6 @@
   border-radius: var(--acc-r-pill);
   background: var(--acc-accent);
   transition: width 0.3s ease;
-}
-
-.runFillDone {
-  background: var(--acc-ok);
-}
-
-.runFillFailed {
-  background: var(--acc-bad);
 }
 
 /*
@@ -3256,18 +3318,59 @@
 /* --- The shelves: past runs, and the scenarios themselves -------------------- */
 
 .pastRun {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--acc-sp-3);
   width: 100%;
   min-height: var(--acc-hit);
   padding: var(--acc-sp-3) var(--acc-sp-4);
-  border: none;
   border-bottom: 1px solid var(--acc-bg-panel);
+  cursor: pointer;
+}
+
+/* The name is the button that opens the run, and its press reaches over the whole row (see PastRun). */
+.pastRunOpen {
+  display: block;
+  min-width: 0;
+  padding: 0;
+  border: none;
   background: none;
   text-align: left;
   font-family: inherit;
   cursor: pointer;
+}
+
+.pastRunOpen::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+}
+
+/* Above the row's press, so a thumb on the star marks the run instead of opening it. A thumb's target, a
+   star the size of the text. */
+.pastRunStar {
+  position: relative;
+  z-index: 1;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: var(--acc-hit);
+  height: var(--acc-hit);
+  margin: calc(var(--acc-sp-3) * -1) calc(var(--acc-sp-3) * -1) calc(var(--acc-sp-3) * -1) 0;
+  border: none;
+  background: none;
+  color: var(--acc-fg-ghost);
+}
+
+.pastRunStar svg {
+  width: 17px;
+  height: 17px;
+}
+
+/* The desk's orange (see .iconStarred in scenarios.module.css). */
+.pastRunStarred {
+  color: var(--acc-orange);
 }
 
 .pastRun:last-child {
@@ -3585,6 +3688,116 @@
 
 .noteText {
   min-width: 0;
+}
+
+/* What the person wrote to the main thread: the same note in the accent a sent message wears (see the desk's
+   .notePerson). */
+.notePerson {
+  border-left-color: var(--acc-accent);
+}
+
+.notePerson .noteWho {
+  color: var(--acc-accent-light);
+}
+
+.notePersonText {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--acc-fg-body);
+}
+
+/* What the panel itself did to keep the run going (see the desk's .notePanel): neither voice's colour, and the
+   limit's own tone when a limit is why. */
+.notePanel {
+  border-left-color: var(--acc-line);
+}
+
+.notePanel .noteWho {
+  color: var(--acc-fg-ghost);
+}
+
+.notePanelLimit {
+  border-left-color: var(--acc-warn-line);
+}
+
+.notePanelLimit .noteWho {
+  color: var(--acc-warn-light);
+}
+
+/* A limit the run is waiting out (see ScenarioRun.limit): on the run's screen over the timeline, and under the
+   facts on its card in the list. */
+.limitWait {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0 0 var(--acc-sp-3);
+  padding: var(--acc-sp-2) var(--acc-sp-3);
+  border: 1px solid var(--acc-warn-line);
+  border-radius: var(--acc-r-card);
+  background: var(--acc-warn-soft);
+  font-size: var(--acc-fs-meta);
+  line-height: 1.5;
+  color: var(--acc-fg-body);
+}
+
+.limitWaitLabel {
+  font-family: var(--acc-mono);
+  letter-spacing: 0.06em;
+  color: var(--acc-warn-light);
+}
+
+/* Under words the main thread has not read yet - it is judging a card and is not interrupted for them. */
+.noteWaiting {
+  font-style: italic;
+  color: var(--acc-fg-ghost);
+}
+
+/* What the main thread passed on to the card at work, under its answer. */
+.noteRelayed {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 2px;
+  padding-left: var(--acc-sp-2);
+  border-left: 1px solid var(--acc-c-iris-1);
+}
+
+.noteRelayedLabel {
+  color: var(--acc-fg-ghost);
+}
+
+/* --- Writing to the main thread of a going run ------------------------------------ */
+
+/* Over the chat's composer at the foot of the run: the main thread answering what was written in it. */
+.tellStatus {
+  display: flex;
+  align-items: center;
+  gap: var(--acc-sp-2);
+  padding: var(--acc-sp-2) var(--acc-sp-5) 0;
+  font-size: 13px;
+  color: var(--acc-c-iris-2);
+}
+
+.tellDot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--acc-c-iris-2);
+  animation: accTellPulse 1.4s ease-in-out infinite;
+}
+
+@keyframes accTellPulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tellDot {
+    animation: none;
+  }
 }
 
 /* --- The question a run is standing on --------------------------------------- */

@@ -7,6 +7,35 @@
 
 export type SessionKind = 'main' | 'branch'
 
+/**
+ * What putting the code back to before a message would touch, as the IDE found out (see Rewind.Code).
+ * `ready` lists the first files (`count` is all of them) and the lines; `none` - nothing changed since;
+ * `off` - the `checkpoints` setting is off; `notTracked` - this conversation's process keeps no copies;
+ * `noCheckpoint` - nothing was kept when this message went out; `unavailable` - the CLI said `detail`.
+ */
+export type RewindCode =
+  | { state: 'ready'; files: string[]; count: number; insertions: number; deletions: number }
+  | { state: 'none' | 'off' | 'notTracked' | 'noCheckpoint' }
+  | { state: 'unavailable'; detail?: string }
+  /**
+   * Files something else changed after the agent's patches, so they cannot be undone (see CodeRewind.kt) -
+   * Codex keeps the patches it applied rather than copies of the files, and a patch has to fit to be undone.
+   */
+  | { state: 'changed'; files: string[]; count: number }
+
+/** Why a rewind did not happen - see Rewind.Refusal. */
+export type RewindRefusal =
+  | 'busy'
+  | 'gone'
+  | 'moved'
+  | 'midCall'
+  | 'notSaved'
+  | 'code'
+  | 'unsupported'
+  | 'noProcess'
+  | 'ended'
+  | 'other'
+
 export interface SessionInfo {
   id: string
   title: string
@@ -647,6 +676,13 @@ export interface ScenarioRun {
    * there was such a thing.
    */
   idle?: number
+  /**
+   * Time it stood still while it was a run - paused, or standing on a question a person has to answer -
+   * and when the stretch it is standing still in began (0 while it works). Subtracted from its clock the
+   * way `idle` is (see runWorked). Absent on a record written before there was such a thing.
+   */
+  rested?: number
+  restingSince?: number
   /** Every card of every pass, in the order they were planned - loops written out flat. */
   steps: ScenarioRunStep[]
   /** What the head said in words as it went, wedged into the timeline where it was said. */
@@ -662,6 +698,55 @@ export interface ScenarioRun {
    * are the size of the work - the figure that says whether a step read half the repository.
    */
   tokens: number
+  /**
+   * The main thread is answering something the person wrote to it, right now (see `scenarioTell`). Absent
+   * from an IDE older than the conversation.
+   */
+  answering?: boolean
+  /**
+   * The limit the run is waiting out, while it waits: every account it could work on was refused, and it carries
+   * on by itself at `until`. The state is `paused` meanwhile, and this is what tells such a pause from a
+   * person's. Absent at every other moment, and from an IDE older than the wait.
+   */
+  limit?: ScenarioRunLimit
+}
+
+/** A limit a run is waiting out - see ScenarioRun.limit. */
+export interface ScenarioRunLimit {
+  /** Whose limit, as the person named the account - empty for the CLI's own sign-in with no name. */
+  account: string
+  /** Which window ran out, in the CLI's own words (`five_hour`, `seven_day`...) - see limitWindowName. */
+  window: string
+  /** When the run looks again, in milliseconds. */
+  until: number
+  /**
+   * Why the account cannot take the run: `limit` - its limit refused it; `unfit` - an account the run moved to
+   * by itself failed before a turn went through. Absent from an IDE older than the second reason.
+   */
+  reason?: 'limit' | 'unfit'
+}
+
+/**
+ * The run moved to another account, or stood still because none had room - what the panel itself did to keep
+ * a run going (a note with `who: 'panel'`). Names and figures rather than a sentence: the sentence is chosen
+ * here, in the reader's language.
+ */
+export interface ScenarioRunMove {
+  /**
+   * `limit` - the account it was on ran out; `unfit` - an account it had moved to by itself could not take it (a
+   * dead sign-in, a model its plan does not have); `choice` - the person chose another account.
+   */
+  reason: 'limit' | 'unfit' | 'choice'
+  /** The account it left - empty for the CLI's own sign-in with no name. */
+  from: string
+  /** The account it went to - empty for the CLI's own sign-in with no name, and when it waits. */
+  to: string
+  /** Nothing had room and the run waits rather than moving. */
+  waits?: boolean
+  /** For a limit: which window ran out, in the CLI's own words. */
+  window: string
+  /** For a limit: when the window resets - or, for a wait, when the run looks again. 0 when unknown. */
+  until: number
 }
 
 export interface ScenarioRunStep {
@@ -696,6 +781,8 @@ export interface ScenarioRunStep {
    * than the setting) when it never had to - see ScenarioHead.onGiveUp.
    */
   takeOver?: string
+  /** Time the run stood still while this card was the one on the board - see ScenarioRun.rested. */
+  rested?: number
 }
 
 export interface ScenarioRunNote {
@@ -703,6 +790,26 @@ export interface ScenarioRunNote {
   /** The card the head was busy with when it said this. */
   stepKey: string
   text: string
+  /**
+   * Who said it: the main thread (absent or empty), the person running the scenario, who can write to
+   * the main thread while the run goes (see `scenarioTell`), or the panel itself - it moved the run to
+   * another account, or put it to wait for a limit (see `move`).
+   */
+  who?: '' | 'person' | 'panel'
+  /**
+   * For the person's words: when they reached the main thread, and 0 while they wait for it to be free -
+   * it is not interrupted in the middle of judging a card to read them.
+   */
+  deliveredAt?: number
+  /** For the main thread's answer to the person: what it passed on to the card at work. */
+  relayed?: string
+  /**
+   * For the person's words: the field they were written in, text and attachment chips in order (UserToken[]
+   * - see toldTokens), for the timeline to draw them as a chat draws a sent message. Without image bytes.
+   */
+  tokens?: unknown
+  /** For the panel's own note: the account it moved the run to, and why. */
+  move?: ScenarioRunMove
 }
 
 export interface ScenarioRunQuestion {
@@ -740,20 +847,37 @@ export interface ScenarioRunSummary {
   tokens?: number
   /** See ScenarioRun.idle. */
   idle?: number
-  /** Which stage of how many it is standing in, counting from one. Zero when it has not begun. */
-  stage?: number
-  stages?: number
-  /** The card it is on right now, by name. */
+  /** See ScenarioRun.rested - stamps and sums rather than a figure, so the live frame does not tick. */
+  rested?: number
+  restingSince?: number
+  /**
+   * The name of the stage it stands in - the one line over the road on its card. The stage of the first stop
+   * that is not over, so it is there before any card begins (see RunSummary.stageTitle).
+   */
+  stageTitle?: string
+  /** The card it is on right now, by name - what the card says over its road for an IDE with no stage name. */
   at?: string
-  /** Which pass of that stage, and how many it may have. Zero when the stage does not loop. */
-  pass?: number
-  passes?: number
-  /** How many times the main thread has sent the card it is on back to work. */
-  nudges?: number
   /** What it has stopped to ask, when it is standing on a question. Empty otherwise. */
   asking?: string
-  /** Whether the card it is on is being finished by the main thread itself (see ScenarioRunStep.takeOver). */
-  takingOver?: boolean
+  /**
+   * Every card of every pass, in order, as the road on the card of a going run draws it. Empty for a
+   * finished run: the table draws no road, and the list of past runs goes out whole.
+   */
+  roadmap?: ScenarioRoadmapStop[]
+  /** A star a person put on it in the table of past runs. Absent from an IDE older than the star. */
+  starred?: boolean
+  /** The limit it is waiting out, while it waits - see ScenarioRun.limit. */
+  limit?: ScenarioRunLimit
+}
+
+/** One card of one pass on the road of a going run. */
+export interface ScenarioRoadmapStop {
+  state: ScenarioStepState
+  /** Which stage it belongs to, counting from one - what the tint behind the stage the run is in follows. */
+  stage: number
+  pass: number
+  /** Its name, cut short. */
+  title: string
 }
 
 /**
@@ -1110,6 +1234,37 @@ type ShellMessageBody =
       errorStatus?: number
     }
   /**
+   * What putting the code back to before a message would touch - the rewind dialog's answer, to the client
+   * that opened it (see rewindPreview below and Rewind.kt).
+   */
+  | { type: 'rewindPreview'; sessionId: string; uuid: string; code: RewindCode }
+  /**
+   * How a rewind ended, told to the client that pressed the button: the message goes back into its field.
+   * `prefill` is the message's text as the CLI kept it - for a client whose card does not carry the pieces.
+   * `files` says what came of the code part, `detail` is the CLI's own words when something did not go.
+   */
+  | {
+      type: 'rewindOutcome'
+      sessionId: string
+      uuid: string
+      ok: boolean
+      conversation?: boolean
+      prefill?: string
+      files?: 'skipped' | 'restored' | 'failed'
+      reason?: RewindRefusal
+      detail?: string
+    }
+  /**
+   * The conversation was cut back to before the message `uuid`: that message and everything after it are
+   * gone from the agent's memory, and every client takes them off its feed. Kept in the journal after the
+   * cut it describes (see CodexSessionHub.rewind). `fromSeq` is the journal number the cut began at: a
+   * client without the message whose last entry before this one is numbered from there on was handed part
+   * of what was dropped - everything it holds came after the message, and it clears it all. One whose last
+   * entry is below it was built from the journal after the cut (see SessionJournal.cutFrom). Absent from an
+   * IDE older than it.
+   */
+  | { type: 'rewound'; sessionId: string; uuid: string; fromSeq?: number }
+  /**
    * The tabs as the shell keeps them. It is the shell that owns this list now: the interface makes the
    * identifiers up (a "+" has to answer instantly) but the order, the grouping and the names live on
    * the other side, where a second client can see them too.
@@ -1244,6 +1399,8 @@ type ShellMessageBody =
       type: 'promptEcho'
       sessionId: string
       id?: string
+      /** The name the message went into the conversation under - what a rewind names it by (see Rewind.kt). */
+      uuid?: string
       /** UserToken[] from feed/types - opaque to the shell, which is why it is not typed here. */
       tokens?: unknown
       quotes?: string[]
@@ -1671,6 +1828,13 @@ type ShellMessageBody =
    */
   | { type: 'commandHints'; hints: Record<string, { description: string; argumentHint: string }> }
   /**
+   * The commands this project's conversations came to know after reporting their catalogue - a mod
+   * registers its commands while it loads, after the catalogue is out, and they are on no disk (see
+   * AddedCommands on the plugin's side). Shaped like the hints off the disk, and drawn under them: a file
+   * is the definition.
+   */
+  | { type: 'addedCommands'; hints: Record<string, { description: string; argumentHint: string }> }
+  /**
    * The names of the slash commands the agent itself knows - the catalogue it named the last time a
    * conversation's process came up in this project (see ClaudeCommandNames on the plugin's side).
    *
@@ -1997,6 +2161,12 @@ export type WebviewMessage =
       sessionId: string
       /** This message's own identifier - it comes back in promptEcho, and by it the sender knows its own. */
       id?: string
+      /**
+       * The name the message goes into the conversation under - a uuid, which the CLI takes for its own line
+       * (see CodexSession.sendPrompt). Made up on the press, so the card can be rewound to from its first
+       * second; one the IDE makes up when it is absent.
+       */
+      uuid?: string
       /** The pieces the feed draws this message from - see promptEcho. */
       tokens?: unknown
       quotes?: string[]
@@ -2066,6 +2236,14 @@ export type WebviewMessage =
     }
   /** Taking a side question back while it is still out - it then ends as `cancelled`. */
   | { type: 'sideQuestionCancel'; sessionId: string; id: string }
+  /** The rewind dialog opening over the message `uuid`: what would the code part touch? See rewindPreview above. */
+  | { type: 'rewindPreview'; sessionId: string; uuid: string }
+  /**
+   * Rewind to before the message `uuid`: drop it and everything after it from the conversation, put the
+   * files back the way they were then, or both. `lastSeen` is the newest message on this client's screen -
+   * one sent since from somewhere else stops the rewind instead of being dropped unread.
+   */
+  | { type: 'rewind'; sessionId: string; uuid: string; lastSeen?: string; conversation: boolean; files: boolean }
   | { type: 'stop'; sessionId: string }
   /** The ordinary Stop went unconfirmed - the user asked outright to kill the process. */
   | { type: 'kill'; sessionId: string }
@@ -2085,6 +2263,17 @@ export type WebviewMessage =
       /** The conversation we branch off. The branch gets its whole transcript. */
       parentId?: string
       quote?: string
+      /**
+       * The parent's message the branch stops short of: it carries everything said before that message and
+       * nothing from it on. Absent - the whole conversation.
+       */
+      before?: string
+      /**
+       * Put the code back in the parent tab as well, to before [before] - the rewind dialog's "In a new tab"
+       * with both chosen (see forkTakesCode in feed/rewind.ts). The IDE does it on this one command, and a
+       * code part it could not do is said in the parent's feed rather than to a dialog that has closed.
+       */
+      code?: boolean
       /**
        * What this conversation is to start on, when the client had to be asked rather than reading the
        * settings - which is the phone's case: the selectors it would read live at the desk.
@@ -2718,6 +2907,22 @@ export type WebviewMessage =
   /** The whole record of one run: the live one from memory, an older one off the disk. */
   | { type: 'scenarioOpen'; runId: string }
   | { type: 'scenarioRunDelete'; runId: string }
+  /** The star on a past run, put on or taken off - kept on the run's record in the IDE. */
+  | { type: 'scenarioRunStar'; runId: string; starred: boolean }
+  /**
+   * Words for the main thread of a run that is going. It reads them as soon as it is free and keeps them in
+   * mind to the end of the run; its answer comes back as a note on the run (see ScenarioRunNote.who).
+   */
+  | {
+      type: 'scenarioTell'
+      runId: string
+      /** What the main thread is told - composed as a chat message is (see composePrompt). */
+      text: string
+      /** Pictures pasted into the field, as bytes - they go to the main thread beside the words. */
+      images?: { mediaType: string; data: string }[]
+      /** The field itself, for the timeline to draw (see ScenarioRunNote.tokens). */
+      tokens?: unknown
+    }
   /**
    * What one step said, read off the conversation it said it in.
    *
@@ -3022,6 +3227,21 @@ export interface AgentSystemEvent {
   retry_delay_ms?: number
   error_status?: number | null
   error?: string
+  /**
+   * A mod speaking (Claude Code 2.1.287 and later; see feed/mods.ts): subtypes `ui_status`, `ui_toast`,
+   * `ui_log` carry the mod's name and its words (a status of null clears it), `ui_panes` the panes the mods
+   * hold open, and the toast how long it stays. The IDE drops what is only for drawing and keeps the states
+   * out of the journal (see ModLines on the plugin's side).
+   */
+  plugin?: string
+  text?: string | null
+  timeout_ms?: number
+  panes?: { id?: string; title?: string; plugin?: string }[]
+  /**
+   * A mod's question, as the IDE draws it (subtype `acc_mod_question`, of the IDE's own making): the
+   * question's input exactly as AskUserQuestion takes it, under [tool_use_id] - see feed/mods.ts.
+   */
+  input?: Record<string, unknown>
 }
 
 /**
@@ -3087,9 +3307,10 @@ export interface AgentUserEvent {
    *
    * The second mark beside `isMeta`, which such a record does not carry (checked across every transcript
    * on the machine: sixty-four notifications, not one of them marked). It says the same thing about the
-   * record and says it in a field, so it holds where the text does not - a notification longer than the
-   * history's limit arrives cut in half (see JournalTrim), and what was cut off is exactly the end tag
-   * everything else recognised it by.
+   * record and says it in a field, so it holds where the text does not - a notification can arrive cut
+   * short (see JournalTrim: the history cut every one over eight kilobytes until it learned to spare the
+   * conversation's own messages, and a phone's frame still cuts what does not fit it), and what was cut
+   * off is exactly the end tag everything else recognised it by.
    */
   origin?: { kind?: string } | null
   timestamp?: string
@@ -3184,8 +3405,23 @@ export interface AgentStreamEvent {
  * Only the events the panel draws are described. The stream is wider and grows over time, so the
  * parsing is obliged to skip what it does not know, silently.
  */
+/**
+ * Where a fork's own part begins - a line of the panel's own, played and paged with the conversation it
+ * belongs to (see ForkOrigin.seamLine in the plugin) and drawn as the fork's mark.
+ */
+export interface ForkSeamEvent {
+  type: 'fork_seam'
+  /** The conversation forked - what the mark opens. */
+  source: string
+  /** Its name when the fork was made. */
+  title: string
+  /** Forked from a chosen message rather than whole. */
+  cut: boolean
+}
+
 export type AgentEvent =
   | AgentSystemEvent
+  | ForkSeamEvent
   | AgentAssistantEvent
   | AgentUserEvent
   | AgentResultEvent

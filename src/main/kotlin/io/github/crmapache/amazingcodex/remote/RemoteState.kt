@@ -6,6 +6,7 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
 import com.intellij.openapi.components.service
+import com.intellij.util.ThreeState
 import com.intellij.util.xmlb.XmlSerializerUtil
 import java.security.SecureRandom
 
@@ -27,7 +28,11 @@ import java.security.SecureRandom
 @Service(Service.Level.APP)
 @State(
     name = "AmazingCodexRemote",
-    storages = [Storage("amazing-codex.xml", roamingType = RoamingType.DISABLED)],
+    // Without the save threshold the platform puts on every non-roaming storage: such a component is
+    // written at most once in five minutes, unless the save is forced, and the deliberate save after a
+    // pairing is not forced. A phone paired within five minutes of the IDE starting was therefore on the
+    // disk only after a clean exit, while its key was in the keychain at once (see RemoteAgent.persist).
+    storages = [Storage("amazing-codex.xml", roamingType = RoamingType.DISABLED, useSaveThreshold = ThreeState.NO)],
 )
 internal class RemoteState : PersistentStateComponent<RemoteState.Data> {
 
@@ -103,6 +108,9 @@ internal class RemoteState : PersistentStateComponent<RemoteState.Data> {
     fun address(): ByteArray = Frame.decodeAddress(agentId())
 
     fun devices(): List<Device> = data.devices.toList()
+
+    /** Whether this address is on the list a person sees and revokes from - see RemoteAgent.sessionInit. */
+    fun lists(deviceId: String): Boolean = data.devices.any { it.id == deviceId }
 
     fun remember(device: Device) {
         data.devices.removeIf { it.id == device.id }

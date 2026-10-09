@@ -194,7 +194,7 @@ internal class CodexAccounts {
             // CodexSessions.switchAllTo). Redrawing the screens is the callers' business and stays
             // theirs: it costs a process per account per project, and the one path that has nothing new
             // to ask about is the one where this book was re-read rather than written (see AccountsWatch).
-            CodexSessionHub.everyHub { it.conversations.switchAllTo() }
+            CodexSessionHub.everyHub { it.followChosenAccount() }
 
             // What the next tab starts on is part of the same choice and costs one small message rather
             // than a process: a new account brings its own memory of the last pick, and the chip over an

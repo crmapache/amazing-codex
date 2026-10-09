@@ -24,6 +24,11 @@ internal class CodexStream(
     private val emit: (String) -> Unit,
     private val model: () -> String,
     private val threadId: () -> String,
+    /**
+     * The window the account's own limit last said was full, and when it resets (seconds) - what a turn refused
+     * by the limit is told with, since the refusal itself names neither (see [turnCompleted]).
+     */
+    private val limitReached: () -> Pair<String, Long?>? = { null },
 ) {
 
     /** A plan-mode turn proposed this plan; the session turns it into the plan card's question. */
@@ -293,8 +298,23 @@ internal class CodexStream(
             )
         }
 
-        if (failed && CodexErrors.isUsageLimit(info)) {
-            emit(CodexDialect.rateLimited(resetsAtSeconds = null, window = "codex"))
+        // A turn refused by the limit is said the way Claude Code says it, which is what everything reading the
+        // dialect knows: the limit's own event, then a placeholder answer of the CLI's under `rate_limit` (see
+        // AgentStream.isLimitRefusal) - a scenario run moves to another account on exactly that (see
+        // ScenarioEngine.ranIntoLimit), and a card is not judged on the refusal as its answer.
+        val limited = failed && CodexErrors.isUsageLimit(info)
+        if (limited) {
+            val known = limitReached()
+            emit(CodexDialect.rateLimited(resetsAtSeconds = known?.second, window = known?.first ?: "codex"))
+            emit(
+                CodexDialect.assistantText(
+                    id = "limit-${turnId ?: now}",
+                    text = message.ifEmpty { "You've hit your usage limit." },
+                    model = SYNTHETIC,
+                    uuid = "limit-${turnId ?: now}",
+                    error = RATE_LIMITED,
+                ),
+            )
         }
 
         // A remark cut off by the end of the turn (Stop, as a rule) stays as far as it got: the person has
@@ -312,7 +332,7 @@ internal class CodexStream(
             CodexDialect.result(
                 threadId = threadId(),
                 durationMs = duration,
-                isError = failed && !CodexErrors.isAuth(info),
+                isError = failed && !CodexErrors.isAuth(info) && !limited,
                 resultText = if (failed) message.ifEmpty { "The turn failed." } else lastAgentText,
                 usage = lastUsage,
                 apiErrorStatus = if (failed) CodexErrors.httpStatus(info) else null,
@@ -373,6 +393,9 @@ internal class CodexStream(
 
         /** The machine word the panel's sign-in door is keyed on - see AgentStream.isAuthFailure. */
         const val AUTH_FAILED = "authentication_failed"
+
+        /** Claude Code's word for a turn its limit refused - see AgentStream.isLimitRefusal. */
+        const val RATE_LIMITED = "rate_limit"
 
         /** Codex does not say how many retries it will make; the card needs a figure, and this is its own. */
         const val MAX_RETRIES_SHOWN = 5

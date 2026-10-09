@@ -683,23 +683,18 @@ internal class ProjectCatalog(
      */
     fun sendHistoryPage(clientId: String, sessionId: String, before: String?) {
         val conversationId = hub.conversations.conversationIdOf(sessionId)
-        if (conversationId == null) {
-            hub.emitTo(
-                clientId,
-                buildJsonObject {
-                    put("type", "historyPage")
-                    put("sessionId", sessionId)
-                    putJsonArray("entries") {}
-                    // The boundary is echoed even here: the reader tells one page from another by it, and
-                    // an answer that names none looks to it like an answer to somebody else's question.
-                    if (before != null) put("before", before)
-                }.toString(),
-            )
-            return
-        }
 
         ApplicationManager.getApplication().executeOnPooledThread {
-            val page = CodexHistory.earlier(project.basePath, conversationId, before, hub.isLocal(clientId))
+            // A fork nobody has spoken in yet has no transcript, and what it shows is its source's (see
+            // CodexSessionHub.replayFork) - so its pages come from there too.
+            val fork = hub.unbornFork(sessionId)
+            val page = when {
+                fork != null -> CodexHistory.forkEarlier(project.basePath, fork, before, hub.isLocal(clientId))
+                conversationId != null -> CodexHistory.earlier(project.basePath, conversationId, before, hub.isLocal(clientId))
+                // The boundary is echoed even here: the reader tells one page from another by it, and an answer
+                // that names none looks to it like an answer to somebody else's question.
+                else -> CodexHistory.Page(emptyList(), null)
+            }
 
             hub.emitTo(
                 clientId,

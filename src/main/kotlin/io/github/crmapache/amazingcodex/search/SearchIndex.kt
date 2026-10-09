@@ -2,6 +2,7 @@ package io.github.crmapache.amazingcodex.search
 
 import com.intellij.openapi.diagnostic.thisLogger
 import io.github.crmapache.amazingcodex.codex.CodexHistory
+import io.github.crmapache.amazingcodex.codex.CodexRollout
 import io.github.crmapache.amazingcodex.codex.SessionSnapshot
 import io.github.crmapache.amazingcodex.scenario.ScenarioConversations
 import java.io.ByteArrayOutputStream
@@ -57,8 +58,12 @@ internal class SearchIndex(
     private val givenByModel: () -> Map<String, String> = { emptyMap() },
 ) {
 
-    /** What was known about a transcript file when its words were last taken. */
-    private data class Seen(val size: Long, val modified: Long, val offset: Long)
+    /**
+     * What was known about a transcript file when its words were last taken. [segment] tells a reverted
+     * thread's later file from the one before it (see CodexRollout): an offset into one says nothing about
+     * the other.
+     */
+    private data class Seen(val size: Long, val modified: Long, val offset: Long, val segment: String = "")
 
     private class Conversation(val id: String) {
         val messages = ArrayList<IndexedMessage>()
@@ -151,16 +156,19 @@ internal class SearchIndex(
 
             val size = file.length()
             val modified = file.lastModified()
+            val segment = CodexRollout.nameOf(file)?.segment.orEmpty()
             val conversation = conversations[id]
-            if (conversation != null && conversation.seen.size == size && conversation.seen.modified == modified) {
+            if (conversation != null && conversation.seen.size == size && conversation.seen.modified == modified && conversation.seen.segment == segment) {
                 // Nothing new in the transcript, but the copy on disk may still owe it a write.
                 if (conversation.stale && keep(conversation)) manifestDue = true
                 continue
             }
 
             val target = conversation ?: Conversation(id).also { conversations[id] = it }
-            // The file only ever grows; when it did not, something rewrote it and it is read afresh.
-            val appended = conversation != null && size >= conversation.seen.offset && conversation.seen.offset > 0
+            // The file only ever grows; when it did not, something rewrote it and it is read afresh. So is a
+            // thread a revert moved into a new file: the turns it took out are no longer its words.
+            val appended = conversation != null && conversation.seen.segment == segment &&
+                size >= conversation.seen.offset && conversation.seen.offset > 0
             if (!appended) {
                 target.messages.clear()
                 target.aiTitle = null
@@ -173,11 +181,16 @@ internal class SearchIndex(
             names[id]?.let { named(target, it, byModel) }
 
             val from = if (appended) target.seen.offset else 0L
-            val consumed = runCatching { read(file, from, target) }
+            val consumed = runCatching {
+                // A reverted thread's file begins where the one it was cut from leaves off: what it kept of
+                // that one is read first, whole - the offset this index goes on from is the newest file's.
+                if (from == 0L) readKeptPart(file, target)
+                read(file, from, target)
+            }
                 .onFailure { thisLogger().warn("Could not read the transcript $id for the search", it) }
                 .getOrDefault(from)
 
-            target.seen = Seen(size, modified, consumed)
+            target.seen = Seen(size, modified, consumed, segment)
             if (!appended) target.stale = true
             keep(target)
             changed = true
@@ -387,6 +400,20 @@ internal class SearchIndex(
         return consumed
     }
 
+    /**
+     * What a reverted thread's [file] kept of the files before it (see CodexRollout) - nothing for a thread's
+     * first file, which is nearly every one.
+     */
+    private fun readKeptPart(file: File, into: Conversation) {
+        if (CodexRollout.isRoot(file) && CodexRollout.baseOf(file) == null) return
+        val name = CodexRollout.nameOf(file) ?: return
+        val root = file.parentFile?.parentFile?.parentFile?.parentFile ?: return
+        val siblings = CodexRollout.filesOf(root, name.thread, fresh = true).associateBy { CodexRollout.nameOf(it)?.key }
+        val kept = CodexRollout.partsOf(file) { siblings[it] }.dropLast(1)
+        if (kept.isEmpty()) return
+        CodexRollout.useParts(kept) { lines -> lines.forEach { take(into, it) } }
+    }
+
     /** One conversation file line into the conversation: a message, or nothing. */
     private fun take(conversation: Conversation, line: String) {
         val message = TranscriptText.messageOf(conversation.id, line) ?: return
@@ -455,6 +482,7 @@ internal class SearchIndex(
                     size = entry["size"]?.jsonPrimitive?.longOrNull ?: 0,
                     modified = entry["modified"]?.jsonPrimitive?.longOrNull ?: 0,
                     offset = entry["offset"]?.jsonPrimitive?.longOrNull ?: 0,
+                    segment = entry["segment"]?.jsonPrimitive?.contentOrNull.orEmpty(),
                 ),
                 aiTitle = entry["aiTitle"]?.jsonPrimitive?.contentOrNull,
                 customTitle = entry["customTitle"]?.jsonPrimitive?.contentOrNull,
@@ -474,6 +502,7 @@ internal class SearchIndex(
                         put("size", conversation.kept.size)
                         put("modified", conversation.kept.modified)
                         put("offset", conversation.kept.offset)
+                        if (conversation.kept.segment.isNotEmpty()) put("segment", conversation.kept.segment)
                         conversation.aiTitle?.let { put("aiTitle", it) }
                         conversation.customTitle?.let { put("customTitle", it) }
                         if (conversation.firstText.isNotEmpty()) put("firstText", conversation.firstText)
@@ -547,7 +576,7 @@ internal class SearchIndex(
          * carry them, and only a rebuild reads those again - a conversation renamed by `/rename` in a
          * terminal would otherwise keep the model's name in the search for good.
          */
-        const val FORMAT = 2L
+        const val FORMAT = 3L
 
         const val MANIFEST_FILE = "manifest.json"
         const val CORPUS_DIR = "corpus"
@@ -581,9 +610,12 @@ internal class SearchIndex(
         fun transcriptsOf(workingDirectory: String?): List<File> {
             val hidden = ScenarioConversations(workingDirectory).all()
 
+            // One file per thread - the one a reverted thread goes on in (see CodexRollout).
             return CodexHistory.rolloutsOf(workingDirectory)
                 .filterNot { (CodexHistory.threadIdOf(it) ?: it.nameWithoutExtension) in hidden }
-                .distinctBy { CodexHistory.threadIdOf(it) ?: it.nameWithoutExtension }
+                .groupBy { CodexHistory.threadIdOf(it) ?: it.nameWithoutExtension }
+                .values
+                .mapNotNull { files -> CodexRollout.current(files) }
         }
 
         private const val TITLE_CHARS = 80

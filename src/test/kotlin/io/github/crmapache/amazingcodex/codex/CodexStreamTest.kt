@@ -231,10 +231,25 @@ class CodexStreamTest {
         stream.turnStarted(json("""{"id":"turn-1"}"""))
         stream.turnCompleted(json("""{"id":"turn-1","status":"failed","error":{"message":"You've hit your usage limit.","codexErrorInfo":"usageLimitExceeded"}}"""))
 
-        val (limit, result) = emitted()
+        val (limit, refusal, result) = emitted()
         assertEquals("rate_limit_event", limit.text("type"))
         assertEquals("rejected", limit["rate_limit_info"]!!.jsonObject.text("status"))
-        assertEquals("true", result.text("is_error"))
+        // Said as Claude Code's own placeholder answer, which is what a scenario run moves on (see
+        // AgentStream.isLimitRefusal) - and so the result is not a second error under it.
+        assertTrue(AgentStream.isLimitRefusal(refusal.toString()))
+        assertEquals("false", result.text("is_error"))
+    }
+
+    /** The refusal names no window; the account's own limit said which one was full a moment before. */
+    @Test
+    fun `a turn stopped by the usage limit carries the window the account said was full`() {
+        val told = CodexStream(emit = { lines += it }, model = { "gpt-5.5" }, threadId = { "thread-1" }, limitReached = { "five_hour" to 1_800_000_000L })
+        told.turnStarted(json("""{"id":"turn-1"}"""))
+        told.turnCompleted(json("""{"id":"turn-1","status":"failed","error":{"message":"limit","codexErrorInfo":"usageLimitExceeded"}}"""))
+
+        val info = emitted().first()["rate_limit_info"]!!.jsonObject
+        assertEquals("five_hour", info.text("rateLimitType"))
+        assertEquals("1800000000", info.text("resetsAt"))
     }
 
     /** Codex's own step list for the turn is the task strip, sent the way the older whole-list call was. */

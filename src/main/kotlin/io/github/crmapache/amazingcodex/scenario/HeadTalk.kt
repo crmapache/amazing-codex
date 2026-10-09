@@ -61,6 +61,11 @@ internal object HeadTalk {
      * Short on purpose in a second sense as well: a card is meant to read as an ordinary task in an
      * ordinary repository, and the more it is told about the machinery around it, the more of its answer
      * is about the machinery.
+     *
+     * The one piece of machinery it is told about is the one it cannot see: its helpers started in the
+     * background are waited for before its answer is read, and a command started there is not - a dev
+     * server never ends (see BackgroundWork). A card that ended its turn to wait for its tests would be
+     * judged on "waiting for the tests" and sent back for the rest.
      */
     const val CARD_BRIEFING =
         "This turn is one step of a scenario being run by the Amazing Codex panel of a JetBrains " +
@@ -68,7 +73,8 @@ internal object HeadTalk {
             "scenario: it gave you this task, it reads your answer, and it decides whether the step is " +
             "done - so finish by saying plainly what you did and what came of it, because that answer is " +
             "the whole of what it sees. If you need a decision the task does not cover, ask for it: the " +
-            "main thread answers, and it answers quickly."
+            "main thread answers, and it answers quickly. A command you run in the background is not " +
+            "waited for: if you need what it returns, wait for it before you end your turn."
 
     /** The first message of the run: what it is for, how the board works, and what to answer with. */
     fun opening(scenario: Scenario, projectPath: String, inputs: Map<String, String>, total: Int): String {
@@ -242,12 +248,26 @@ internal object HeadTalk {
      * More than one is said to the head in so many words: without it, a report followed by a note about a
      * hook's style pass reads as two halves of one answer, or as the note superseding the report.
      *
+     * [waited] is whether some of those endings came while helpers the card had started in the background
+     * were still at work (see ScenarioEngine.turnOver). Then the order of things is the other way round -
+     * "waiting for the reviewers" first and the report last - and the head is told which way to read them.
+     * [overdue] is a wait given up on while a helper's command was still running: then the last ending is
+     * likely "waiting" itself, and the head is told that a report is still missing rather than that it came.
+     *
      * [handsOver] is whether giving up on the card hands its work to the head (see TakeOver.wanted). Then
      * the head is offered two ways of saying no rather than one, and the difference is the point: a card
      * that could not do it is work the head can pick up, and a stop the briefing forbids getting past is
      * not - the head saying which is how a scenario's hard stops stay stops with the fence down.
      */
-    fun verdictRequest(card: Card, endings: List<String>, ok: Boolean, nudgesLeft: Int, handsOver: Boolean = false): String = buildString {
+    fun verdictRequest(
+        card: Card,
+        endings: List<String>,
+        ok: Boolean,
+        nudgesLeft: Int,
+        handsOver: Boolean = false,
+        waited: Boolean = false,
+        overdue: Boolean = false,
+    ): String = buildString {
         appendLine(
             if (ok) {
                 "The card's turn is over. This is what it said:"
@@ -257,7 +277,26 @@ internal object HeadTalk {
         )
         appendLine()
         val said = endings.filter { it.isNotBlank() }
-        if (said.size > 1) {
+        if (waited && overdue) {
+            appendLine(
+                "It ended a turn while helpers it had started in the background were still at work, and " +
+                    "their reports set it going again. The panel stopped waiting before all of them had " +
+                    "reported: a command one of them had started was still running after half an hour, so " +
+                    "its report has not come. What it said at every ending is here, in order, and the last " +
+                    "may be the card still waiting rather than its report. Any other ending before the last " +
+                    "is one a hook of the project sent it back to work from.",
+            )
+            appendLine()
+        } else if (waited) {
+            appendLine(
+                "It ended a turn while helpers it had started in the background were still at work. Their " +
+                    "reports set it going again, and the panel waited until every one of them had reported " +
+                    "before asking you, so what it said at every ending is here, in order. Any other ending " +
+                    "before the last is one a hook of the project sent it back to work from. Read them " +
+                    "together: the last is where it finally stopped, and it usually holds the report.",
+            )
+            appendLine()
+        } else if (said.size > 1) {
             appendLine(
                 "It meant to end its turn ${said.size} times. Each time but the last, a hook of the project " +
                     "sent it back to work, so what it said at every ending is here, in order. Read them " +
@@ -399,6 +438,14 @@ internal object HeadTalk {
     }
 
     /** What a head doing a card's work is told after a pause: the same words a card gets, and what to end with. */
+    /**
+     * What a card is told once the agents it spawned have all finished while it waited for them - see
+     * ScenarioEngine.helpersFinished. Codex hands a spawned agent's answer to nobody by itself.
+     */
+    const val HELPERS_FINISHED =
+        "The agents you spawned for this task have all finished. Collect their results (wait on them if you " +
+            "have not read what they returned) and finish the task: end your turn with your report."
+
     const val TAKE_OVER_CARRY_ON =
         "Carry on from where you stopped, and end with the object the message handing you this card asked for."
 
@@ -435,6 +482,112 @@ internal object HeadTalk {
         )
         appendLine()
         append("Answer with `{\"again\": true|false, \"reason\": \"...\"}`.")
+    }
+
+    // --- What the person writes to the head while the run goes ------------------------
+
+    /**
+     * Words the person wrote to the head, put to it as a turn of their own - the head is free: a card is at
+     * work, a question waits for the person, or the run is paused (see ScenarioEngine.deliverTold).
+     *
+     * A conversation rather than one more question with an object: the person asks what is going on, or says
+     * how the rest of the night should go, and the answer is read by them in the timeline as a reply. What
+     * they ask for stands for the rest of the run because the head is one conversation from the first card to
+     * the last - so it is told that in so many words, and told the one thing it cannot do for them: the shape
+     * of the run is not its to change, while pausing and stopping are the person's own buttons.
+     *
+     * [situation] is where the run stands, in a sentence. [toCard] is whether a card is there to pass words on
+     * to - working, standing on a question, or paused in the middle of its work - and only then is the head
+     * offered the way to do it.
+     */
+    fun toldRequest(said: List<String>, situation: String, toCard: Boolean): String = buildString {
+        appendLine("# The person running this scenario has written to you")
+        appendLine()
+        appendLine(situation)
+        appendLine()
+        appendLine(if (said.size > 1) "They wrote, in this order:" else "They wrote:")
+        appendLine()
+        appendTold(said)
+        appendLine()
+        appendLine(
+            "This is a conversation, not a question about a card: answer them in a few sentences, and they read " +
+                "your answer in the run's timeline as your reply. What they ask of you stands for the rest of the " +
+                "run - the slots you fill, the verdicts you give - until they take it back, so say plainly what " +
+                "you will do differently because of it. You can look at the project to answer them. What you " +
+                "cannot do is reach a card you have not been handed, or change the order of the run; if they ask " +
+                "for that, say so - pausing and stopping the run are their own buttons.",
+        )
+        appendLine()
+        if (toCard) {
+            appendLine(
+                "If part of it is for the card on the board, you can pass it on: its session reads your words " +
+                    "between two of its own steps, as coming from the main thread. Pass on only what the card " +
+                    "needs, in the words it needs them in.",
+            )
+            appendLine()
+            append("End with `{\"toCard\": \"...\"}` holding the words for the card, or `{}` when there is nothing to pass on.")
+        } else {
+            append("End with `{}`.")
+        }
+    }
+
+    /**
+     * Words the person wrote while the head was busy with a question of the run's, said before the next one.
+     *
+     * The head was not interrupted for them: its answer to a question of the run's is an object the run moves
+     * on, and a turn broken into by a conversation comes back without one. So they waited, and they go first in
+     * the next thing said to it - the head answers them in the same sentences that go with its object.
+     */
+    fun withTold(said: List<String>, question: String): String = buildString {
+        appendLine(
+            if (said.size > 1) {
+                "Before the message below: the person running this scenario wrote to you while you were busy, in this order."
+            } else {
+                "Before the message below: the person running this scenario wrote to you while you were busy."
+            },
+        )
+        appendLine()
+        appendTold(said)
+        appendLine()
+        appendLine(
+            "What they ask of you stands for the rest of the run, until they take it back. Answer them in the " +
+                "sentences that go with your answer below - those are what they read in the timeline - and then " +
+                "answer the message below exactly as it asks.",
+        )
+        appendLine()
+        appendLine("---")
+        appendLine()
+        append(question)
+    }
+
+    /**
+     * Words the person wrote while the head is doing a card's work itself (see ScenarioEngine.takeOver).
+     *
+     * Said into the turn that is going rather than kept for later: that turn can be an hour of work, and these
+     * are most often about that very work - "commit it as one", "leave the migration alone". The CLI reads a
+     * message written into a running turn between two of its steps.
+     */
+    fun toldMidWork(said: List<String>): String = buildString {
+        appendLine("The person running this scenario has written to you while you are finishing this card:")
+        appendLine()
+        appendTold(said)
+        appendLine()
+        append(
+            "Take it into the work, and carry on. When you are finished, end the way the message handing you the " +
+                "card asked for, and say in your sentences what you did about this.",
+        )
+    }
+
+    /** What a card is told when the head passes the person's words on to it. */
+    fun relayed(words: String): String =
+        "A word from the main thread, which the person running this scenario asked it to pass on to you:\n\n$words"
+
+    private fun StringBuilder.appendTold(said: List<String>) {
+        for (one in said) {
+            appendLine("---")
+            appendLine(one)
+        }
+        appendLine("---")
     }
 
     /** Said once when a turn came back without the object it was asked for. */

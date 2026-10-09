@@ -1,0 +1,226 @@
+/*
+ * The road of a going run (see Roadmap.tsx): a stop per card, links between them, the stage the run is in
+ * tinted behind its stops.
+ *
+ * A module of its own for the reason the state pill has one: the phone draws the same road, and the hub's
+ * stylesheet is a thousand lines of an editor no phone has.
+ *
+ * The sizes here are the numbers scenarios/roadmap.ts lays the road out with (ROAD) - a stop of 18, a link
+ * of 8, a fold of 32. Change one and the other, or the road folds too late and runs past the card's edge,
+ * or too early and hides stops it had room for. Nothing else here may take room on the row: the tint's
+ * round ends are drawn outside the boxes, so every gap stays the same.
+ *
+ * The look is the timeline's own (.stageNumber in scenarios.module.css): a ring with a console-font number
+ * in it, green when it is done, accent where the run is. On the present an arc runs round its ring while
+ * the run works or waits for a person - motion on the ring itself, nothing outside it. It used to glow and
+ * pulse instead, and the glow was asked to go: it read as a smudge around the stop rather than as the stop.
+ */
+
+@keyframes accRoadSpin {
+  to {
+    transform: rotate(1turn);
+  }
+}
+
+/*
+ * The tone of the present: working, waiting for a person, or paused by one. The band is the stage the run is
+ * in and has to read as one on a dark card at a glance: at 8% accent (6% sand) it was asked to be brighter.
+ */
+.toneGoing {
+  --road-tone: var(--acc-accent);
+  --road-light: var(--acc-accent-light);
+  --road-fill: var(--acc-accent-16);
+  --road-ring: var(--acc-accent-32);
+  --road-band: rgb(var(--acc-ch-moon) / 14%);
+}
+
+.toneAsks {
+  --road-tone: var(--acc-warn);
+  --road-light: var(--acc-warn-light);
+  --road-fill: var(--acc-warn-16);
+  --road-ring: var(--acc-warn-32);
+  --road-band: var(--acc-warn-12);
+}
+
+.tonePaused {
+  --road-tone: var(--acc-fg-ghost);
+  --road-light: var(--acc-fg-soft);
+  --road-fill: var(--acc-neutral-12);
+  --road-band: var(--acc-neutral-16);
+}
+
+/* Its own stacking context, so the tint's round ends sit behind the stops and still above the card. */
+.road {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  height: 26px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  isolation: isolate;
+}
+
+/* A stop's place on the road: as tall as the tint, so the tint is a background and not a second layer. */
+.cell {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: center;
+  height: 26px;
+}
+
+.stop {
+  flex: none;
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--acc-line-strong);
+  color: var(--acc-fg-faint);
+  font: 9.5px/1 var(--acc-mono);
+  letter-spacing: 0;
+}
+
+.done {
+  border-color: var(--acc-ok-32);
+  background: var(--acc-ok-10);
+  color: var(--acc-ok);
+}
+
+.failed {
+  border-color: var(--acc-bad-40);
+  background: var(--acc-bad-10);
+  color: var(--acc-bad);
+}
+
+/* A loop ended before it needed this one: there, but never a stop the run made. */
+.skipped {
+  border-style: dashed;
+  color: var(--acc-fg-ghost);
+  opacity: 0.7;
+}
+
+.ahead {
+  color: var(--acc-fg-faint);
+}
+
+/* Where the run is - after the state tones, so it wins over "ahead" on a stop nothing has begun yet. */
+.here {
+  position: relative;
+  border-color: var(--road-tone);
+  background: var(--road-fill);
+  color: var(--road-light);
+  opacity: 1;
+}
+
+/*
+ * Working, or waiting for a person: the ring dims and an arc with a fading tail runs round it, laid over the
+ * stop's own border - a conic gradient cut to a ring by a mask. A pause is the run standing still, and so is
+ * its stop: a plain ring, no arc.
+ */
+.toneGoing .here,
+.toneAsks .here {
+  border-color: var(--road-ring);
+}
+
+.toneGoing .here::after,
+.toneAsks .here::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: 50%;
+  background: conic-gradient(transparent 0turn 0.3turn, var(--road-tone) 1turn);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 1.75px), #000 calc(100% - 1.25px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 1.75px), #000 calc(100% - 1.25px));
+  animation: accRoadSpin 1.4s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toneGoing .here,
+  .toneAsks .here {
+    border-color: var(--road-tone);
+  }
+
+  .toneGoing .here::after,
+  .toneAsks .here::after {
+    display: none;
+  }
+}
+
+/* A link: one short hairline between two stops, the same everywhere, so the stops stand evenly. */
+.link {
+  flex: none;
+  width: 8px;
+  height: 26px;
+  background: linear-gradient(var(--acc-line-strong), var(--acc-line-strong)) center / 100% 1px no-repeat;
+}
+
+/* Behind the run: the stretch it has covered reads as covered. */
+.linkDone {
+  background-image: linear-gradient(var(--acc-ok-32), var(--acc-ok-32));
+}
+
+/* The tint of the stage the run is in, behind its stops and the links between them. */
+.banded {
+  background-color: var(--road-band);
+}
+
+/*
+ * The tint's two ends, rounded and reaching a little past the stop - drawn rather than padded, so that the
+ * gap between the end of a stage and the stop beyond it is the same gap as everywhere else on the road.
+ */
+.bandStart,
+.bandEnd {
+  background-color: transparent;
+}
+
+.bandStart::before,
+.bandEnd::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: -1;
+  background: var(--road-band);
+}
+
+.bandStart::before {
+  left: -4px;
+  border-radius: 13px 0 0 13px;
+}
+
+.bandEnd::before {
+  right: -4px;
+  border-radius: 0 13px 13px 0;
+}
+
+.bandStart.bandEnd::before {
+  border-radius: 13px;
+}
+
+/* Stops left out to make the road fit, as a count. */
+.fold {
+  flex: none;
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  min-width: 26px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 9px;
+  border: 1px dashed var(--acc-line-strong);
+  color: var(--acc-fg-ghost);
+  font: 9.5px/1 var(--acc-mono);
+  white-space: nowrap;
+}
+
+.foldDone {
+  border-color: var(--acc-ok-32);
+  color: var(--acc-ok);
+}

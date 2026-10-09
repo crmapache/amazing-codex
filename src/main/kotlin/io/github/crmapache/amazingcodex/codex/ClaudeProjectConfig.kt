@@ -54,7 +54,7 @@ internal object ClaudeProjectConfig {
 
     internal fun lacksContract(transcript: File?): Boolean {
         if (transcript?.isFile != true) return true
-        return runCatching { transcript.useLines { lines -> lines.none { MARKER in it } } }.getOrDefault(true)
+        return runCatching { CodexRollout.useLines(transcript) { lines -> lines.none { MARKER in it } } }.getOrDefault(true)
     }
 
     /**

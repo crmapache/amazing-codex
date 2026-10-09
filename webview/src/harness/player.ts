@@ -2,18 +2,61 @@ import type {
   CodexConfigSetting,
   PaintedTerm,
   QueuedMessage,
+  RewindCode,
   SearchHit,
   ShellMessage,
   VoiceHotkey,
   VoiceHotkeySlot,
   WebviewMessage,
 } from '../protocol'
+import { flushSync } from 'react-dom'
 import { answerScenarios } from './scenarioDesk'
 import { bootstrap, SESSION } from './events'
 import { SHOWCASE_HISTORY } from './scenarios/showcase'
 import type { Scenario, ScenarioStep } from './types'
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+/**
+ * The clock the panel reads while a frame is photographed.
+ *
+ * The panel measures work by the wall clock - the time under an answer runs from the person's message
+ * (see stintElapsed in feed/build.ts), a call's from its start to its result - and it reads the clock
+ * when it reduces an event, that is, when it renders. A jump plays a whole turn within a few milliseconds
+ * and React renders it once at the end, so every frame of the listing said "Worked 0.0s" beside calls
+ * of 0.0s each. In shot mode the player therefore renders every event as it delivers it (flushSync) and
+ * moves the clock on in between: a little for every event, the pause a `wait` step stands for, and up
+ * to the CLI's own figure for the turn at its result - so a frame reads as the minute of work it depicts.
+ * Live playback keeps the real clock (its pauses are real), and an ordinary jump keeps React's batching:
+ * a long scenario rendered event by event would take seconds to step through.
+ */
+const realNow = Date.now.bind(Date)
+let clockShift = 0
+let promptedAt = realNow()
+
+/** How long one event of a photographed turn seems to take: enough for a call to read as work, not as a blink. */
+const SHOT_STEP_MS = 1_300
+
+const advanceClock = (step: ScenarioStep): void => {
+  if (step.kind === 'wait') {
+    clockShift += step.ms
+    return
+  }
+  if (step.kind === 'user') {
+    promptedAt = Date.now()
+    return
+  }
+  if (step.kind !== 'agent') return
+
+  const event = step.event as { type?: string; duration_ms?: number }
+  // The pieces of a typed answer are skipped by a jump altogether (see dispatch), so they take no time.
+  if (event.type === 'stream_event') return
+  if (event.type === 'result' && typeof event.duration_ms === 'number') {
+    clockShift += Math.max(0, promptedAt + event.duration_ms - Date.now())
+    return
+  }
+  clockShift += SHOT_STEP_MS
+}
 
 /**
  * The number of the command the panel has just sent to the "shell".
@@ -877,6 +920,41 @@ const answerResume = (message: WebviewMessage): void => {
 }
 
 /**
+ * A fork just made: the IDE plays what it carries into its tab and puts the seam under it (see
+ * CodexSessionHub.replayFork). The harness has no transcripts to read, so it plays a short stand-in for
+ * the inherited end - enough to see the seam stand between it and the fork's own messages, its name open
+ * the original (answered like a pick from the history, see answerResume) and the mark above ask for more.
+ */
+const answerFork = (message: WebviewMessage): void => {
+  if (message.type !== 'newSession' || message.kind !== 'branch') return
+
+  const source = `harness-original-${message.parentId ?? 'main'}`
+  const uuid = (line: number): string => `f-${message.sessionId}-${line}`
+
+  const line = (event: unknown): void => {
+    window.__accReceive?.({ type: 'agent', sessionId: message.sessionId, event, replay: true } as never)
+  }
+
+  setTimeout(() => {
+    line({
+      type: 'user',
+      uuid: uuid(1),
+      message: { role: 'user', content: [{ type: 'text', text: 'Can the discount line move above the subtotal?' }] },
+    })
+    line({
+      type: 'assistant',
+      uuid: uuid(2),
+      message: {
+        content: [{ type: 'text', text: 'It can, but then the tax reads as part of the discount. I would leave it where it is.' }],
+      },
+    })
+    line({ type: 'fork_seam', source, title: 'the original chat', cut: Boolean(message.before) })
+
+    window.__accReceive?.({ type: 'replayFinished', sessionId: message.sessionId, cursor: uuid(1) } as never)
+  }, 200)
+}
+
+/**
  * The search, answered by the harness (see SearchDesk on the IDE's side for the real thing).
  *
  * Two corpora. The showcase's past conversations are given a few messages each, so "all chats" and the
@@ -1159,6 +1237,59 @@ const answerQueue = (message: WebviewMessage): void => {
   }
 }
 
+/**
+ * The rewind dialog, answered the way CodexSessionHub answers it: the code part's preview a moment after
+ * the dialog opens, and the rewind itself after a pause the CLI really takes - the cut going out to every
+ * window first, then the outcome to the asker.
+ *
+ * What the preview says can be steered from the console, so every state of the dialog can be looked at:
+ * `window.__accHarnessRewindCode = { state: 'off' }` (or 'none', 'notTracked', 'noCheckpoint',
+ * `{ state: 'unavailable', detail: '…' }`), and `window.__accHarnessRewindRefuse = 'moved'` to have the next
+ * rewind refused for that reason. Unset, there are files to put back and the rewind goes through.
+ */
+const answerRewind = (message: WebviewMessage): void => {
+  if (message.type === 'rewindPreview') {
+    const code: RewindCode = window.__accHarnessRewindCode ?? {
+      state: 'ready',
+      files: [
+        'apps/web/src/cart/discount.ts',
+        'apps/web/src/cart/CartSummary.tsx',
+        'apps/web/src/cart/discount.test.ts',
+        // The agent's memory is written with the same edit tools, so it comes back too - said from "~".
+        '~/.claude/projects/-Users-dev-work-shop/memory/discount_rules.md',
+      ],
+      count: 4,
+      insertions: 48,
+      deletions: 11,
+    }
+    const { sessionId, uuid } = message
+    window.setTimeout(() => window.__accReceive?.({ type: 'rewindPreview', sessionId, uuid, code }), 350)
+    return
+  }
+
+  if (message.type !== 'rewind') return
+
+  const { sessionId, uuid, conversation, files } = message
+  const refusal = window.__accHarnessRewindRefuse
+  window.setTimeout(() => {
+    if (refusal) {
+      window.__accHarnessRewindRefuse = undefined
+      window.__accReceive?.({ type: 'rewindOutcome', sessionId, uuid, ok: false, reason: refusal })
+      return
+    }
+    if (conversation) window.__accReceive?.({ type: 'rewound', sessionId, uuid })
+    window.__accReceive?.({
+      type: 'rewindOutcome',
+      sessionId,
+      uuid,
+      ok: true,
+      conversation,
+      prefill: '',
+      files: files ? 'restored' : 'skipped',
+    })
+  }, 700)
+}
+
 const listenToPanel = () => {
   // A scenario replayed from the top reads its history from the top too. The counter is a module's own,
   // so without this the mark stayed dead after the pages ran out once, for the rest of the browser tab.
@@ -1355,6 +1486,7 @@ const listenToPanel = () => {
     if (message) answerHistoryPage(message)
     if (message) answerAgentTranscript(message)
     if (message) answerResume(message)
+    if (message) answerFork(message)
     if (message) answerImprove(message)
     if (message) answerVoice(message)
     if (message) answerSearch(message)
@@ -1363,6 +1495,7 @@ const listenToPanel = () => {
     if (message) answerScenarios(message)
     if (message) answerQueue(message)
     if (message) answerSound(message)
+    if (message) answerRewind(message)
   }
 
   window.dispatchEvent(new Event('acc:ready'))
@@ -1463,6 +1596,20 @@ export interface PlayerProgress {
 export class ScenarioPlayer {
   private runId = 0
 
+  /** Shot mode: every event rendered as it arrives, on a clock that moves (see SHOT_STEP_MS). */
+  private photographed = false
+
+  photograph(): void {
+    this.photographed = true
+    Date.now = () => realNow() + clockShift
+  }
+
+  /** In shot mode a step reaches the panel and is rendered at once, so it is reduced at its own moment. */
+  private deliver(apply: () => void): void {
+    if (this.photographed) flushSync(apply)
+    else apply()
+  }
+
   cancel(): void {
     this.runId += 1
   }
@@ -1500,6 +1647,9 @@ export class ScenarioPlayer {
    */
   async jumpTo(scenario: Scenario, targetIndex: number): Promise<void> {
     const myRun = (this.runId += 1)
+    // The panel is rebuilt before every jump, so its clock may start over with it instead of drifting
+    // further ahead with each one.
+    clockShift = 0
     const previousBridge = window.__accReceive
     listenToPanel()
     await waitForFreshBridge(previousBridge)
@@ -1520,6 +1670,8 @@ export class ScenarioPlayer {
   }
 
   private async dispatch(step: ScenarioStep, realPacing: boolean): Promise<void> {
+    if (this.photographed && !realPacing) advanceClock(step)
+
     if (step.kind === 'wait') {
       if (realPacing) await sleep(step.ms)
       return
@@ -1530,7 +1682,7 @@ export class ScenarioPlayer {
     if (!realPacing && step.kind === 'agent' && step.event.type === 'stream_event') return
 
     if (step.kind === 'user') {
-      window.__accHarnessSend?.(step.text)
+      this.deliver(() => window.__accHarnessSend?.(step.text))
       return
     }
 
@@ -1609,7 +1761,7 @@ export class ScenarioPlayer {
       )
     }
 
-    window.__accReceive?.(message)
+    this.deliver(() => window.__accReceive?.(message))
   }
 
   /**

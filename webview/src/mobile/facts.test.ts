@@ -1,7 +1,7 @@
 import { en } from '../i18n/en'
 import { describe, expect, it } from 'vitest'
 import type { ScenarioRunSummary, ShellMessage } from '../protocol'
-import { applyFact, emptyFacts, factsFor, isFact, phoneCommands } from './facts'
+import { applyFact, customModelsOf, emptyFacts, factsFor, isFact, phoneCommands } from './facts'
 
 const window = (percent: number) => ({ percent, resets: '' })
 
@@ -198,6 +198,27 @@ describe('phoneCommands', () => {
     expect(phoneCommands(en, facts.commands, facts.hints).map((command) => command.id)).toContain('mcp__snakein__analyze')
   })
 
+  /** A mod's command is on no disk and missing from the first catalogue - the IDE says it apart. */
+  it('offers the commands a mod added, under the ones on disk', () => {
+    let facts = applyFact(emptyFacts(), {
+      type: 'commandHints',
+      hints: { deploy: { description: 'build, sign and publish', argumentHint: '' } },
+    } as ShellMessage)
+    facts = applyFact(facts, {
+      type: 'addedCommands',
+      hints: {
+        replay: { description: 'step through the edits', argumentHint: '' },
+        deploy: { description: 'from the mod', argumentHint: '' },
+      },
+    } as ShellMessage)
+
+    const commands = phoneCommands(en, facts.commands, facts.hints, facts.added)
+
+    expect(isFact({ type: 'addedCommands', hints: {} } as ShellMessage)).toBe(true)
+    expect(commands.find((command) => command.id === 'replay')?.hint).toBe('step through the edits')
+    expect(commands.find((command) => command.id === 'deploy')?.hint).toBe('build, sign and publish')
+  })
+
   it('keeps the built-in ones and adds whatever the project keeps on disk', () => {
     const facts = applyFact(emptyFacts(), {
       type: 'commandHints',
@@ -301,5 +322,29 @@ describe('applyFact, the gauges’ colour', () => {
   it('reads the switch of an older machine', () => {
     expect(applyFact(emptyFacts(), said({ on: true }), '').calmVivid).toBe(0)
     expect(applyFact(emptyFacts(), said({ on: false }), '').calmVivid).toBe(100)
+  })
+})
+
+describe('customModelsOf', () => {
+  const open = { 'a1:open': { ...emptyFacts(), customModels: ['glm-4.6'] } }
+
+  // The report: a new chat from the phone could not be started on a model added by hand. A project
+  // closed at the desk has no facts, and the list lived nowhere else.
+  it('offers the machine\'s list for a project that has no facts of its own', () => {
+    expect(customModelsOf(open, ['glm-4.6', 'kimi-k2'], 'a1', 'closed')).toEqual(['glm-4.6', 'kimi-k2'])
+  })
+
+  it('prefers the live fact of an open project to the inventory, which is only as fresh as the last knock', () => {
+    expect(customModelsOf(open, ['stale'], 'a1', 'open')).toEqual(['glm-4.6'])
+  })
+
+  it('takes an emptied list as an answer rather than falling through to an older one', () => {
+    const emptied = { 'a1:open': { ...emptyFacts(), customModels: [] } }
+
+    expect(customModelsOf(emptied, ['stale'], 'a1', 'open')).toEqual([])
+  })
+
+  it('never borrows another machine\'s list', () => {
+    expect(customModelsOf(open, undefined, 'a2', 'open')).toEqual([])
   })
 })

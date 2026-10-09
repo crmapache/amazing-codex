@@ -5,6 +5,8 @@ import com.intellij.openapi.project.Project
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.addJsonObject
@@ -154,7 +156,7 @@ internal class CodexConfigDesk(
         ) as? JsonObject ?: return null
 
         val requirements = (CodexCatalog.call("configRequirements/read") as? JsonObject)?.get("requirements") as? JsonObject
-        val features = CodexCatalog.call("experimentalFeature/list") as? JsonObject
+        val features = experimentalFeatures()
 
         // The panel's own per-turn settings go by what is read here (see CodexConfigDesk.workspaceWrite),
         // so a read for the screen refreshes them as well.
@@ -228,6 +230,10 @@ internal class CodexConfigDesk(
     }
 
     companion object {
+        /** How the experimental features are read - see [experimentalFeatures]. */
+        private const val FEATURES_PER_PAGE = 200
+        private const val MAX_FEATURE_PAGES = 10
+
         /** The screen's words for the ways it can fail - the panel says them in its own language. */
         private const val NO_CLI = "noCli"
 
@@ -296,4 +302,29 @@ internal class CodexConfigDesk(
         /** How long a read stands before a conversation's start reads again - see [warm]. */
         private const val FRESH_MS = 5 * 60 * 1000L
     }
+
+    /**
+     * Every experimental feature Codex offers, in one answer of the list's shape (`data`). Asked with params:
+     * Codex 0.160 refuses the request without them ("missing field `params`"), and the settings screen then
+     * showed no experimental switch at all. Read page by page, with a ceiling on the pages.
+     */
+    private fun experimentalFeatures(): JsonObject? {
+        val all = ArrayList<JsonElement>()
+        var cursor: String? = null
+        var pages = 0
+        while (pages++ < MAX_FEATURE_PAGES) {
+            val page = CodexCatalog.call(
+                "experimentalFeature/list",
+                buildJsonObject {
+                    put("limit", FEATURES_PER_PAGE)
+                    cursor?.let { put("cursor", it) }
+                },
+            ) as? JsonObject ?: break
+            all += (page["data"] as? JsonArray).orEmpty()
+            cursor = AppServer.text(page["nextCursor"]).ifEmpty { null } ?: break
+        }
+        if (all.isEmpty() && pages == 1) return null
+        return buildJsonObject { put("data", JsonArray(all)) }
+    }
+
 }

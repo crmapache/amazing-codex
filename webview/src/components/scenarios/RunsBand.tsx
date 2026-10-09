@@ -1,13 +1,15 @@
 import type { ScenarioRunSummary } from '../../protocol'
 import { formatTokens } from '../../feed/build'
 import { formatDuration } from '../../feed/tools'
-import { startedLabel } from '../../scenarios/moments'
+import { momentLabel } from '../../scenarios/moments'
+import { limitText } from '../../scenarios/moves'
 import { answerLabel, runMarks } from '../../scenarios/runs'
-import { runElapsed } from '../../scenarios/timeline'
+import { runWorked } from '../../scenarios/timeline'
 import { useTicking } from '../../hooks/useTicking'
 import { useLocale, useT } from '../../i18n'
+import { Roadmap } from './Roadmap'
 import { StatePill } from './StatePill'
-import { CrossIcon } from './icons'
+import { CrossIcon, StarIcon } from './icons'
 import { RUNS_PAGE } from './view'
 import s from './scenarios.module.css'
 
@@ -18,8 +20,10 @@ import s from './scenarios.module.css'
  * do with: one is acted on - answered, held, ended - and the other is compared with eleven others. They
  * used to wear the same clothes, which meant reading every row to find out which kind it was.
  *
- * The table's columns are the whole point of it. Cards, duration and cost read DOWN rather than across, so
- * a fortnight of nights compares at a glance instead of one line at a time.
+ * The table's columns are the whole point of it. When, for how long and for how much read DOWN rather than
+ * across, so a fortnight of nights compares at a glance instead of one line at a time. The count of cards
+ * gave way to the hour it ended: a run that finished is nearly always every card of it, and "5/5" down a
+ * column said the same thing twenty times, while when the night actually ended is the question asked of it.
  */
 export const RunsBand = ({
   going,
@@ -32,6 +36,7 @@ export const RunsBand = ({
   onPause,
   onResume,
   onStop,
+  onStar,
   onDelete,
 }: {
   going: ScenarioRunSummary[]
@@ -46,6 +51,8 @@ export const RunsBand = ({
   onPause: (runId: string) => void
   onResume: (runId: string) => void
   onStop: (run: ScenarioRunSummary) => void
+  /** The star on a past run, put on or taken off (see ScenarioRunSummary.starred). */
+  onStar: (run: ScenarioRunSummary, starred: boolean) => void
   onDelete: (run: ScenarioRunSummary) => void
 }) => {
   const t = useT()
@@ -102,10 +109,11 @@ export const RunsBand = ({
             <div className={`${s.tableRow} ${s.tableHead}`}>
               <span className={s.colRun}>{t.scenarios.table.run}</span>
               <span className={s.colStarted}>{t.scenarios.table.started}</span>
-              <span className={s.colCards}>{t.scenarios.table.cards}</span>
+              <span className={s.colFinished}>{t.scenarios.table.finished}</span>
               <span className={s.colTook}>{t.scenarios.table.took}</span>
               <span className={s.colCost}>{t.scenarios.table.cost}</span>
               <span className={s.colState}>{t.scenarios.table.state}</span>
+              <span className={s.colStar} />
               <span className={s.colDrop} />
             </div>
 
@@ -120,14 +128,30 @@ export const RunsBand = ({
                   <span className={s.tableName}>{run.scenarioName}</span>
                   {answerOf(run) ? <span className={s.tableMark}>{answerOf(run)}</span> : null}
                 </button>
-                <span className={s.colStarted}>{startedLabel(run.startedAt, locale, t.scenarios.when)}</span>
-                <span className={s.colCards}>{`${run.done}/${run.total}`}</span>
+                <span className={s.colStarted}>{momentLabel(run.startedAt, locale, t.scenarios.when)}</span>
+                <span className={s.colFinished}>
+                  {run.finishedAt > 0 ? momentLabel(run.finishedAt, locale, t.scenarios.when) : ''}
+                </span>
                 <span className={s.colTook}>
-                  {run.finishedAt > 0 ? formatDuration(runElapsed(run, run.finishedAt)) : ''}
+                  {run.finishedAt > 0 ? formatDuration(runWorked(run, run.finishedAt)) : ''}
                 </span>
                 <span className={s.colCost}>{run.cost > 0 ? `$${run.cost.toFixed(2)}` : ''}</span>
                 <span className={s.colState}>
                   <StatePill state={run.state} failure={run.failure} />
+                </span>
+                {/* A mark of the person's own - "looked at", or whatever they want to find the run by. It
+                    means nothing to the panel and orders nothing: a starred run stays where its date puts it. */}
+                <span className={s.colStar}>
+                  <button
+                    type="button"
+                    className={`${s.iconButton} ${run.starred ? s.iconStarred : ''}`}
+                    data-tooltip={run.starred ? t.scenarios.unstarRun : t.scenarios.starRun}
+                    aria-label={t.scenarios.starRun}
+                    aria-pressed={run.starred === true}
+                    onClick={() => onStar(run, !run.starred)}
+                  >
+                    <StarIcon filled={run.starred === true} />
+                  </button>
                 </span>
                 <span className={s.colDrop}>
                   <button
@@ -169,7 +193,14 @@ export const RunsBand = ({
 }
 
 /**
- * One run that is going: what it is doing, how far it has got, and what it has stopped to ask.
+ * One run that is going: which stage it is in, the road of its cards, what it has spent, and what it has
+ * stopped to ask.
+ *
+ * The road took the place of a bar and "2/5 cards" (see Roadmap): a row of stops says how far and what is
+ * left before a word is read. Over it, the name of the stage the run is in and nothing else - the stage is
+ * tinted on the road below; the card's own name is in the hint over its stop. Under it, the readings: how
+ * long it has genuinely worked (a pause or a question waiting for you does not tick it, see runWorked),
+ * tokens, money.
  *
  * The question is on the card, under a rule and in the warning tone, because it is the one thing here
  * that is waiting for a person. Answer or Pause, and Stop, sit where the reading ends.
@@ -239,43 +270,30 @@ const LiveRun = ({
         </span>
       </div>
 
-      {/* Where it is, in the scenario's own words: which stage of how many, and the card it is on. */}
-      {run.at ? (
-        <div className={s.runCardWhere}>
-          {run.stages ? <span>{t.scenarios.run.stageOf(run.stage ?? 0, run.stages)}</span> : null}
-          <span className={s.factDot}>·</span>
-          <span className={s.runCardStep}>{run.at}</span>
-          {run.passes && run.passes > 1 ? (
-            <>
-              <span className={s.factDot}>·</span>
-              <span>{t.scenarios.run.passOf(run.pass ?? 1, run.passes)}</span>
-            </>
-          ) : null}
-          {run.nudges ? (
-            <>
-              <span className={s.factDot}>·</span>
-              <span className={s.runCardNudge}>{t.scenarios.run.sentBack(run.nudges)}</span>
-            </>
-          ) : null}
-          {run.takingOver ? (
-            <>
-              <span className={s.factDot}>·</span>
-              <span className={s.runCardNudge}>{t.scenarios.run.takingOver}</span>
-            </>
-          ) : null}
+      {/* The stage it stands in, by name and nothing else. Always drawn, from the first frame of the run: the
+          name is there before any card begins (see RunSummary.stageTitle), and a line that appeared a few
+          seconds later pushed the whole card down under the eye. */}
+      <div className={s.runCardStage}>{run.stageTitle || run.at || '\u00a0'}</div>
+
+      {/* An IDE that sends no road (older than the road itself) gets the bar it had - the phone meets this for
+          real, its page comes from the relay and may be newer than the IDE behind it. */}
+      {run.roadmap && run.roadmap.length > 0 ? (
+        <div className={s.runCardRoad}>
+          <Roadmap stops={run.roadmap} state={run.state} />
         </div>
-      ) : null}
+      ) : (
+        <div className={s.runCardFacts}>
+          <span className={s.progress}>
+            <span className={`${s.progressFill} ${s.progressDone}`} style={{ width: `${share}%` }} />
+          </span>
+          <span className={s.runValue}>{t.scenarios.run.cards(run.done, run.total)}</span>
+        </div>
+      )}
 
       <div className={s.runCardFacts}>
-        <span className={s.progress}>
-          <span className={`${s.progressFill} ${s.progressDone}`} style={{ width: `${share}%` }} />
-        </span>
-        <span className={s.runValue}>{t.scenarios.run.cards(run.done, run.total)}</span>
         <span className={s.runSegment}>
-          <span className={s.runKey}>
-            {run.state === 'paused' ? t.scenarios.run.openFor : t.scenarios.run.running}
-          </span>
-          <span className={s.runValue}>{formatDuration(runElapsed(run, now))}</span>
+          <span className={s.runKey}>{t.scenarios.run.active}</span>
+          <span className={s.runValue}>{formatDuration(runWorked(run, now))}</span>
         </span>
         {run.tokens ? (
           <span className={s.runSegment}>
@@ -299,6 +317,14 @@ const LiveRun = ({
           <span className={s.runCardAskLabel}>{t.scenarios.run.asking}</span>
           <span className={s.runCardAskText}>{run.asking}</span>
         </button>
+      ) : null}
+
+      {/* Paused by a limit no account had room past, not by a person: whose, and when it goes on by itself. */}
+      {run.limit ? (
+        <div className={s.limitWait}>
+          <span className={s.limitWaitLabel}>{t.scenarios.run.limitLabel}</span>
+          <span className={s.limitWaitText}>{limitText(t, run.limit)}</span>
+        </div>
       ) : null}
     </div>
   )

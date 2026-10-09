@@ -806,4 +806,28 @@ internal object CodexDialect {
     internal fun JsonObjectBuilder.putAll(values: JsonObject) = values.forEach { (key, value) -> put(key, value) }
 
     fun string(element: JsonElement?): String? = (element as? JsonPrimitive)?.contentOrNull
+
+    /**
+     * A spawned agent starting its work, in the shape of Claude Code's background task (see
+     * CodexSession.onBackground): an agent that reports back, under the spawn's card.
+     */
+    fun taskStarted(taskId: String, toolUseId: String, description: String): String = buildJsonObject {
+        put("type", "system")
+        put("subtype", "task_started")
+        put("task_id", taskId)
+        put("task_type", "local_agent")
+        if (toolUseId.isNotEmpty()) put("tool_use_id", toolUseId)
+        if (description.isNotEmpty()) put("description", description)
+    }.toString()
+
+    /** The same agent's work over - [status] `completed`, `failed` or `stopped`, [summary] its last words. */
+    fun taskNotification(taskId: String, toolUseId: String, status: String, summary: String): String = buildJsonObject {
+        put("type", "system")
+        put("subtype", "task_notification")
+        put("task_id", taskId)
+        if (toolUseId.isNotEmpty()) put("tool_use_id", toolUseId)
+        put("status", status)
+        if (summary.isNotEmpty()) put("summary", summary)
+    }.toString()
+
 }

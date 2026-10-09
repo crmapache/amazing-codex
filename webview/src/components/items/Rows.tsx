@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { LinkedText } from './LinkedText'
 import { modelLabel } from '../../catalog'
 import { compactProgress } from '../../feed/compact'
@@ -15,6 +15,7 @@ import type {
   ErrorItem,
   LimitItem,
   MetaItem,
+  ModLogItem,
   ModelStuckItem,
   ModelSwitchItem,
   OutrankedItem,
@@ -23,6 +24,8 @@ import type {
 } from '../../feed/types'
 import s from '../feed.module.css'
 import { Caret } from './Caret'
+import { FORK_WHOLE, forkCodeOf } from '../../feed/rewind'
+import { refusalWords } from '../RewindDialog'
 
 /**
  * The thoughts of one piece of a turn go into one card, with the last of them showing outside.
@@ -73,11 +76,40 @@ export const ThinkRow = ({ item, open, onToggle }: { item: ThinkItem; open: bool
  * one that names a genuine gap rather than a moment in the conversation (FORK, CLEAR). A tap fetches the
  * next page of what came before it; the row stays a plain mark until there is something to fetch with.
  */
-export const CheckpointRow = ({ item, onLoadEarlier }: { item: CheckpointItem; onLoadEarlier?: () => void }) => {
+export const CheckpointRow = ({
+  item,
+  onLoadEarlier,
+  onOpenConversation,
+}: {
+  item: CheckpointItem
+  onLoadEarlier?: () => void
+  /** Opens a conversation by its id - what the original's name in a fork's seam does (see ForkSeamEvent). */
+  onOpenConversation?: (conversationId: string, title: string) => void
+}) => {
   const t = useT()
   // A mark the panel worded itself says it in today's language; one carrying the conversation's own
-  // words (a fork's name, a compaction's summary) says them as they are.
-  const target = item.targetKey ? t.feed.checkpoint[item.targetKey] : item.target
+  // words (a compaction's summary) says them as they are. A fork's mark is both: the panel's sentence
+  // around the original's title, which is the conversation's (see CheckpointKey) - and the title in it is
+  // a way back to the original, wherever the sentence of the language puts it.
+  const key = item.targetKey
+  const source = item.source
+  const target: ReactNode =
+    key === 'forked' || key === 'forkedAt'
+      ? source && onOpenConversation
+        ? aroundTitle(t.feed.checkpoint[key], (
+            <button
+              type="button"
+              className={s.checkpointLink}
+              data-tooltip={t.feed.checkpoint.openSource}
+              onClick={() => onOpenConversation(source, item.target)}
+            >
+              {item.target}
+            </button>
+          ))
+        : t.feed.checkpoint[key](item.target)
+      : key
+        ? t.feed.checkpoint[key]
+        : item.target
 
   return onLoadEarlier ? (
     // The row sits inside the button rather than being it: a fingertip's worth of height belongs to the
@@ -97,6 +129,24 @@ export const CheckpointRow = ({ item, onLoadEarlier }: { item: CheckpointItem; o
     </div>
   )
 }
+
+/**
+ * A sentence worded around a title, with the title replaced by [title] - wherever the language puts it. The
+ * dictionary's function is asked with a mark no title contains, and the sentence is cut at it.
+ */
+const aroundTitle = (sentence: (title: string) => string, title: ReactNode): ReactNode => {
+  const [before, ...after] = sentence(TITLE_MARK).split(TITLE_MARK)
+  return (
+    <>
+      {before}
+      {title}
+      {after.join('')}
+    </>
+  )
+}
+
+/** Stands in for a title while a sentence is cut around it - see [aroundTitle]. */
+const TITLE_MARK = '\u0000'
 
 /** How often the compaction bar grows: more often serves nothing, the curve is gentle as it is. */
 const COMPACT_TICK_MS = 500
@@ -396,6 +446,17 @@ export const LimitRow = ({ item }: { item: LimitItem }) => {
   )
 }
 
+/**
+ * A line a mod put into the transcript - dim, under the mod's name, the way the terminal draws it
+ * ("● my-mod: build finished"). The model never reads it, and the feed keeps it just as quiet.
+ */
+export const ModLogRow = ({ item }: { item: ModLogItem }) => (
+  <div className={s.modLog}>
+    <span className={s.modLogName}>{item.plugin}</span>
+    <span className={s.modLogText}>{item.text}</span>
+  </div>
+)
+
 /** The process died on its own - an unambiguous mark rather than a silent "idle". */
 export const CrashRow = ({ item }: { item: CrashItem }) => {
   const t = useT()
@@ -491,7 +552,8 @@ export const ErrorRow = ({
             https://status.claude.com" asks one to go and look. So it stays a link, as in the agent's
             answer (see LinkedText). */}
         <span className={s.errorText}>
-          <LinkedText text={modelAtCapacity ? t.models.atCapacity : item.message} onOpenLink={onOpenLink} />
+          {/* The two refusals the IDE says as codes - the panel words them (see FORK_WHOLE, FORK_CODE). */}
+          <LinkedText text={modelAtCapacity ? t.models.atCapacity : errorWords(t, item.message)} onOpenLink={onOpenLink} />
         </span>
 
         {modelAtCapacity && onChooseModel ? (
@@ -545,4 +607,11 @@ export const ErrorRow = ({
       </button>
     </div>
   )
+}
+
+/** An error row's text: the IDE's own words, or the panel's for the codes it says instead (see feed/rewind.ts). */
+const errorWords = (t: ReturnType<typeof useT>, message: string): string => {
+  if (message === FORK_WHOLE) return t.feed.forkWhole
+  const code = forkCodeOf(message)
+  return code ? t.feed.forkCode(refusalWords(t, code)) : message
 }

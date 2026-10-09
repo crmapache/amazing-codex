@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { AgentStreamView } from '../../components/AgentStreamView'
 import { Feed } from '../../components/Feed'
 import { WorkflowAgentView } from '../../components/items/WorkflowAgentView'
@@ -20,6 +20,7 @@ import { Back } from './Back'
 import { Magnifier, SearchCapsule } from '../../components/SearchCapsule'
 import { Composer, type OutgoingPrompt } from './Composer'
 import { SideQuestionCard } from '../../components/SideQuestion'
+import { ModDock } from '../../components/ModDock'
 import type { SideExchange, SideThread } from '../../feed/side'
 import { dotClass, groupColor } from './TabsSheet'
 import type { PhoneDictation } from '../useDictation'
@@ -97,6 +98,8 @@ interface ThreadProps {
    * while an answer is still on its way (see useEarlierPages, which owns both).
    */
   onLoadEarlier?: () => void
+  /** Opens the original of a fork, by its name in the fork's seam - see FeedProps.onOpenConversation. */
+  onOpenConversation?: (conversationId: string, title: string) => void
   /** How many answers about earlier pages have arrived - see PanelState.earlierPages. */
   earlierPages: number
   onDecide: () => void
@@ -111,6 +114,13 @@ interface ThreadProps {
   onRun: () => void
   /** One message's own actions: quote, fork, copy, pin. */
   onMessage: (item: FeedItem) => void
+  /**
+   * Text to put into the field from outside this screen - a message a rewind took out of the conversation,
+   * to be said again (see RewindSheet). A new [nonce] is a new request, as with the field's own fill.
+   */
+  refill?: { text: string; nonce: number }
+  /** The refill has gone into the field - it is not to come back the next time this screen mounts. */
+  onRefilled?: () => void
   /** Which messages are pinned over this conversation, and the button that changes that. */
   pins: readonly string[]
   onPin: (id: string) => void
@@ -176,6 +186,7 @@ export const Thread = ({
   onStop,
   onStopTask,
   onLoadEarlier,
+  onOpenConversation,
   earlierPages,
   onDecide,
   onBack,
@@ -185,6 +196,8 @@ export const Thread = ({
   onPickTab,
   onRun,
   onMessage,
+  refill,
+  onRefilled,
   pins,
   onPin,
   onSearch,
@@ -207,6 +220,15 @@ export const Thread = ({
 
   /** A side question taken into the chat: put into the field, where the agent has its tools (see Composer.fill). */
   const [fill, setFill] = useState<{ text: string; nonce: number } | undefined>(undefined)
+
+  // A message a rewind gave back, into the same field by the same road - see [refill].
+  useEffect(() => {
+    if (!refill) return
+    setFill(refill)
+    onRefilled?.()
+    // Keyed on the refill alone: the handler is a fresh closure every render and changes nothing here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refill])
 
   /**
    * What this conversation is waiting to say, held by the IDE and fired by it when the turn ends.
@@ -387,6 +409,7 @@ export const Thread = ({
             onPin={onPin}
             earlierPages={earlierPages}
             onLoadEarlier={onLoadEarlier}
+            onOpenConversation={onOpenConversation}
             focus={focus}
             onFocused={onFocused}
             paint={paint}
@@ -412,6 +435,9 @@ export const Thread = ({
           field and a phone does not, and the same screen carries the subagents and the background
           commands - which is what somebody away from the desk is actually asking about.
         */}
+        {/* What the conversation's mods say, as the desk shows it over its field (see ModDock). */}
+        <ModDock status={feed.modStatus} panes={feed.modPanes} toast={feed.modToast} />
+
         {todo && todo.todos.length > 0 && (
           <button type="button" className={m.taskRow} onClick={onTasks}>
             <span className={m.taskRowLabel}>{t.mobile.tasks.label}</span>

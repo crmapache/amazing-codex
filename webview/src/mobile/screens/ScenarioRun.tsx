@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { formatTokens } from '../../feed/build'
 import { formatDuration } from '../../feed/tools'
 import { useTicking } from '../../hooks/useTicking'
@@ -6,11 +6,19 @@ import { useLocale, useT } from '../../i18n'
 import type { ScenarioRun as Run, ScenarioRunStep } from '../../protocol'
 import { Chevron } from '../../components/Chevron'
 import { Glance } from '../../components/items/Glance'
+import { Roadmap } from '../../components/scenarios/Roadmap'
 import { StatePill } from '../../components/scenarios/StatePill'
-import { cutCardOf, finished, progressOf, resumable, runElapsed, timelineOf } from '../../scenarios/timeline'
+import { useRunPlace } from '../../components/scenarios/useRunPlace'
+import { roadOf } from '../../scenarios/roadmap'
+import { cutCardOf, finished, resumable, runWorked, stepWorked, timelineOf } from '../../scenarios/timeline'
 import { dayAndHour } from '../../scenarios/moments'
+import { limitText, moveText } from '../../scenarios/moves'
 import { outcomeText } from '../scenarios'
 import { Back } from './Back'
+import { Composer, type OutgoingPrompt } from './Composer'
+import type { ProjectFacts } from '../facts'
+import type { PhotoRoad } from '../images'
+import type { PhoneDictation } from '../useDictation'
 import m from '../mobile.module.css'
 
 interface ScenarioRunProps {
@@ -28,6 +36,15 @@ interface ScenarioRunProps {
   onAnswer: (allow: boolean, text: string) => void
   /** One step's own conversation, on a screen of its own (see ScenarioStep). */
   onOpenStep: (step: ScenarioRunStep) => void
+  /**
+   * What the field for the main thread needs - the same composer a chat has, off a conversation (see
+   * forConversation) - or null when the machine does not take such words (see CAP_TELL): the page comes from
+   * the relay and may be newer than the plugin behind it, which would refuse the message as one it has never
+   * heard of.
+   */
+  tell: { facts: ProjectFacts; photos: PhotoRoad; connected: boolean; voice: PhoneDictation } | null
+  /** Words for the main thread of the run while it goes, photos included - see `scenarioTell`. */
+  onTell: (prompt: OutgoingPrompt) => void
   onBack: () => void
 }
 
@@ -62,6 +79,8 @@ export const ScenarioRun = ({
   onOpenChat,
   onAnswer,
   onOpenStep,
+  tell,
+  onTell,
   onBack,
 }: ScenarioRunProps) => {
   const t = useT()
@@ -77,6 +96,15 @@ export const ScenarioRun = ({
   const now = useTicking(run !== null && !finished(run.state))
 
   const rows = useMemo(() => (run ? timelineOf(run) : []), [run])
+
+  // Opened on what is happening, come back to where it was left after a step's screen (see useRunPlace). A
+  // question stands at the top, over its answers in the footer; how a run ended stands at the foot here.
+  const list = useRef<HTMLDivElement>(null)
+  const onScroll = useRunPlace(
+    list,
+    run?.id ?? '',
+    run?.question ? 'top' : run && finished(run.state) ? 'foot' : 'present',
+  )
 
   if (!run) {
     return (
@@ -98,9 +126,7 @@ export const ScenarioRun = ({
   }
 
   const over = finished(run.state)
-  const progress = progressOf(run)
-  const share = progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0
-  const elapsed = formatDuration(runElapsed(run, now))
+  const elapsed = formatDuration(runWorked(run, now))
   const question = run.question
 
   return (
@@ -144,17 +170,12 @@ export const ScenarioRun = ({
         <div className={m.runStrip}>
           <StatePill state={run.state} failure={run.failure} />
 
-          <span className={m.runFact}>{t.scenarios.run.cards(progress.done, progress.total)}</span>
-
           {/*
-            Three words for one number, because the number means three things. A finished run took that
-            long; a going one has been going that long; a paused one has merely been open that long -
-            nothing is being spent, and "running for" over a run standing still is a small lie.
+            How long it has genuinely worked (see runWorked) - a pause and a question waiting for a person
+            are not in it, so one word serves a going, a paused and a waiting run. A finished one took that.
           */}
           <span className={m.runFact}>
-            <span className={m.runFactKey}>
-              {over ? t.scenarios.run.took : run.state === 'paused' ? t.scenarios.run.openFor : t.scenarios.run.runningShort}
-            </span>
+            <span className={m.runFactKey}>{over ? t.scenarios.run.took : t.scenarios.run.active}</span>
             {elapsed}
           </span>
 
@@ -162,24 +183,25 @@ export const ScenarioRun = ({
           {run.cost > 0 && <span className={m.runFact}>{`$${run.cost.toFixed(2)}`}</span>}
         </div>
 
-        <div className={m.runTrack}>
-          <span
-            className={[
-              m.runFill,
-              run.state === 'done' ? m.runFillDone : '',
-              run.state === 'failed' ? m.runFillFailed : '',
-            ]
-              .filter(Boolean)
-              .join(' ')}
-            style={{ width: `${share}%` }}
-          />
+        {/* The road of its cards, where a bar used to be - the same one the run's card draws (see Roadmap). */}
+        <div className={m.runHeadRoad}>
+          <Roadmap stops={roadOf(run)} state={run.state} />
         </div>
       </header>
 
-      <div className={m.pageList}>
+      <div className={m.pageList} ref={list} onScroll={onScroll}>
         {/* A refusal of something pressed in the header - holding the run or ending it - stands where the
             header is. One of a finished run's own doors is answered under those doors, below. */}
         {problem && !over ? <p className={m.noteBad}>{outcomeText(t, problem)}</p> : null}
+
+        {/* Paused by a limit no account had room past, not by a person: whose, and when it goes on by itself
+            (see ScenarioRun.limit). Resume in the header tries now. */}
+        {!over && run.limit ? (
+          <div className={m.limitWait}>
+            <span className={m.limitWaitLabel}>{t.scenarios.run.limitLabel}</span>
+            <span>{limitText(t, run.limit)}</span>
+          </div>
+        ) : null}
 
         {/*
           What is being asked, up here where reading happens rather than in the footer with the answers.
@@ -210,7 +232,12 @@ export const ScenarioRun = ({
           {rows.map((row) => {
             if (row.kind === 'stage') {
               return (
-                <div key={row.key} className={`${m.stageRow} ${row.standing === 'here' ? m.stageHere : ''}`}>
+                <div
+                  key={row.key}
+                  className={`${m.stageRow} ${row.standing === 'here' ? m.stageHere : ''}`}
+                  data-row={row.key}
+                  data-ahead={row.standing === 'ahead' || undefined}
+                >
                   <span className={m.stageRowTitle}>{row.title || t.scenarios.stage}</span>
                   <span className={m.stageRowVerdict}>
                     {row.standing === 'done'
@@ -224,10 +251,39 @@ export const ScenarioRun = ({
             }
 
             if (row.kind === 'note') {
+              // The person's own words as well as the main thread's - the same two voices the desk draws.
+              const person = row.note.who === 'person'
+              // And the panel's own word: it moved the run to another account, or put it to wait for a limit.
+              const move = row.note.who === 'panel' ? row.note.move : undefined
+              if (move) {
+                return (
+                  <div
+                    key={row.key}
+                    className={`${m.note} ${m.notePanel} ${move.reason === 'limit' ? m.notePanelLimit : ''}`}
+                    data-row={row.key}
+                  >
+                    <span className={m.noteWho}>{t.scenarios.run.panelSaid}</span>
+                    <span className={m.noteText}>{moveText(t, move)}</span>
+                  </div>
+                )
+              }
               return (
-                <div key={row.key} className={m.note}>
-                  <span className={m.noteWho}>{t.scenarios.run.headSaid}</span>
-                  <Glance text={row.note.text} className={m.noteText} />
+                <div key={row.key} className={`${m.note} ${person ? m.notePerson : ''}`} data-row={row.key}>
+                  <span className={m.noteWho}>{person ? t.scenarios.run.youSaid : t.scenarios.run.headSaid}</span>
+                  {person ? (
+                    <span className={m.notePersonText}>{row.note.text}</span>
+                  ) : row.note.text ? (
+                    <Glance text={row.note.text} className={m.noteText} />
+                  ) : null}
+                  {person && !over && !row.note.deliveredAt ? (
+                    <span className={m.noteWaiting}>{t.scenarios.run.tellWaiting}</span>
+                  ) : null}
+                  {row.note.relayed ? (
+                    <span className={m.noteRelayed}>
+                      <span className={m.noteRelayedLabel}>{t.scenarios.run.passedOn}</span>
+                      <Glance text={row.note.relayed} className={m.noteText} />
+                    </span>
+                  ) : null}
                 </div>
               )
             }
@@ -235,10 +291,11 @@ export const ScenarioRun = ({
             return (
               <StepRow
                 key={row.key}
+                anchor={row.key}
                 step={row.step}
                 passes={row.passes}
                 untilDone={row.untilDone}
-                now={now}
+                worked={stepWorked(row.step, now, run)}
                 onOpen={() => onOpenStep(row.step)}
               />
             )
@@ -285,6 +342,48 @@ export const ScenarioRun = ({
           </div>
         ) : null}
       </div>
+
+      {/*
+        Words for the main thread, at the foot where the thumb is - the chat's own composer, off a conversation:
+        the words, photos, an "@" for a file, dictation. While the run goes and nothing else holds the foot: a
+        question standing for the person takes it, and answering it comes first.
+      */}
+      {!over && !question && tell && (
+        <footer className={m.composer}>
+          {run.answering ? (
+            <span className={m.tellStatus}>
+              <span className={m.tellDot} />
+              {t.scenarios.run.answering}
+            </span>
+          ) : null}
+          <Composer
+            facts={tell.facts}
+            photos={tell.photos}
+            context={NO_CONTEXT}
+            run={NO_RUN}
+            running={false}
+            since={0}
+            queue={NOTHING_QUEUED}
+            queueOpen={false}
+            onQueueOpen={ignore}
+            onUnqueue={ignore}
+            connected={tell.connected}
+            imageBase={picturesShown(run)}
+            quotes={NO_QUOTES}
+            onDropQuote={ignore}
+            onSend={onTell}
+            onQueue={onTell}
+            unsent={NOTHING_UNSENT}
+            onRetry={ignore}
+            onDiscard={ignore}
+            onStop={ignore}
+            onRun={ignore}
+            voice={tell.voice}
+            forConversation={false}
+            placeholder={t.scenarios.run.tellPlaceholder}
+          />
+        </footer>
+      )}
 
       {question && (
         <footer className={m.decisionFooter}>
@@ -380,24 +479,27 @@ export const ScenarioRun = ({
  * The same rule the live run's card on the list follows - a middle that does nothing reads as broken.
  */
 const StepRow = ({
+  anchor,
   step,
   passes,
   untilDone,
-  now,
+  worked,
   onOpen,
 }: {
+  /** Its key in the timeline, for holding the reading place by (see useRunPlace). */
+  anchor: string
   step: ScenarioRunStep
   /** How many passes its stage was given. One means the row has no loop to place itself in. */
   passes: number
   untilDone: boolean
-  now: number
+  /** How long it has genuinely worked so far (see stepWorked) - it stands still while the run does. */
+  worked: number
   onOpen: () => void
 }) => {
   const t = useT()
   const going = step.state === 'running' || step.state === 'asking' || step.state === 'judging'
   const ahead = step.state === 'waiting' || step.state === 'skipped'
-  const elapsed =
-    step.startedAt > 0 ? formatDuration((step.finishedAt > 0 ? step.finishedAt : now) - step.startedAt) : ''
+  const elapsed = step.startedAt > 0 ? formatDuration(worked) : ''
 
   /*
    * One line, and which line depends on what there is: what the card finished with once its turn is over,
@@ -475,10 +577,32 @@ const StepRow = ({
   )
 
   return opens ? (
-    <button type="button" className={className} onClick={onOpen}>
+    <button type="button" className={className} onClick={onOpen} data-row={anchor} data-ahead={ahead || undefined}>
       {body}
     </button>
   ) : (
-    <div className={className}>{body}</div>
+    <div className={className} data-row={anchor} data-ahead={ahead || undefined}>
+      {body}
+    </div>
   )
 }
+
+/** What the composer is given on a run's screen for what only a conversation has (see forConversation). */
+const NO_CONTEXT = { percent: 0, used: 0, limit: 0 }
+const NO_RUN = { model: '', effort: '', mode: '' }
+const NOTHING_QUEUED: [] = []
+const NO_QUOTES: string[] = []
+const NOTHING_UNSENT: [] = []
+const ignore = () => undefined
+
+/**
+ * How many pictures the person has already shown the main thread - the new ones are numbered on from here, so
+ * "Image #3" in a later message is not the "Image #1" of an earlier one. Read off the words, which name every
+ * picture they carried: the phone gets a note's text and not its chips (see RemoteFeed.runBody).
+ */
+const picturesShown = (run: Run): number =>
+  run.notes.reduce((most, note) => {
+    if (note.who !== 'person') return most
+    const numbers = [...note.text.matchAll(/\[Image #(\d+)\]/g)].map((match) => Number(match[1]))
+    return Math.max(most, ...numbers)
+  }, 0)

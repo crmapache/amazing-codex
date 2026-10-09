@@ -577,6 +577,8 @@ export const en = {
     delete: 'Delete',
     deleteTitle: 'Delete this scenario?',
     deleteRun: 'Delete this run',
+    starRun: 'Star this run',
+    unstarRun: 'Remove the star',
     deleteRunTitle: 'Delete this run?',
     /** The two bands of the runs tab: what is going, and what came of it. */
     running: 'RUNNING NOW',
@@ -610,7 +612,7 @@ export const en = {
     table: {
       run: 'RUN',
       started: 'STARTED',
-      cards: 'CARDS',
+      finished: 'FINISHED',
       took: 'TOOK',
       cost: 'COST',
       state: 'STATE',
@@ -678,6 +680,8 @@ export const en = {
       scenarioMissingInput: 'Something it asks for was left empty.',
       noCodex: 'Codex was not found on this machine.',
       runGone: 'That run is no longer there.',
+      /** Words for the main thread of a run that ended a moment before they arrived. */
+      runOver: 'That run has finished, and its main thread no longer reads messages - open it as a chat to carry on.',
       runNotResumable: 'This run cannot be picked up again: its main thread never came up.',
       /** Said out loud, like the hours': a row drawn and then gone reads as the panel forgetting it. */
       queueNotWritten: 'The queue could not be written to disk.',
@@ -719,15 +723,18 @@ export const en = {
         chatHint: 'Opens the main thread’s conversation in a tab of its own. It remembers the whole run, so you can go on from there.',
       },
       cards: (done: number, total: number): string => `${done}/${total} cards`,
-      running: 'running for',
-      /** The same, short enough for a card in a list of them. */
-      runningShort: 'for',
-      openFor: 'open for',
+      /**
+       * How long it has genuinely worked - pauses, questions waiting for you and an IDE that went away are not
+       * in it (see runWorked). The same word whether it is going, paused or standing on a question.
+       */
+      active: 'active',
+      /** The road of cards on the card of a going run, for whoever cannot see it (see Roadmap). */
+      road: 'Cards in order',
+      /** A stretch of the road folded to make it fit, from which card to which. */
+      roadFolded: (from: number, to: number): string => `cards ${from}-${to}`,
       took: 'took',
       cost: 'cost',
       tokens: 'tokens',
-      /** Where the run is, on the card in the list: "stage 2 of 3 · Write the tests". */
-      stageOf: (at: number, total: number): string => `stage ${at} of ${total}`,
       /** The heading of a pass of a stage that runs a set number of times, and of one that may stop early. */
       passOf: (pass: number, passes: number): string => `pass ${pass} of ${passes}`,
       passOfUpTo: (pass: number, passes: number): string => `pass ${pass} of up to ${passes}`,
@@ -736,8 +743,6 @@ export const en = {
       sentBack: (n: number): string => (n === 1 ? 'sent back once' : `sent back ${n} times`),
       /** A card the main thread finished itself, and why its own session could not. */
       takenOver: (why: string): string => `The main thread took it over: ${why}`,
-      /** On the card of a live run, while that is happening. */
-      takingOver: 'the main thread is finishing it',
       allow: 'Allow',
       deny: 'Refuse',
       send: 'Send',
@@ -753,6 +758,38 @@ export const en = {
       notYet: 'not yet',
       /** The way into a step's own conversation. */
       log: 'Log',
+      /** Above what the person wrote to the main thread, in the timeline. */
+      youSaid: 'YOU',
+      tellPlaceholder: 'Write to the main thread…',
+      /** Under the person's words while the main thread is busy judging a card. */
+      tellWaiting: 'waits until the main thread is free',
+      answering: 'The main thread is writing a reply…',
+      /** Over what the main thread passed on to the card at work. */
+      passedOn: 'Passed on to the card',
+      /** Over what the panel itself did to keep the run going: moved it to another account, or put it to wait for a limit. */
+      panelSaid: 'PANEL',
+      /** The run followed the account the person chose (see ScenarioRunMove). `to` is the account's name. */
+      movedByChoice: (to: string): string =>
+        `Moved the run to ${to} - the account you chose.`,
+      /** The account's limit refused the run and it went on on another one. `window` is the window's name and may be empty. */
+      limitMoved: (from: string, window: string, to: string): string =>
+        `${window ? `The ${window} limit` : 'The usage limit'} of ${from} ran out. Moved the run to ${to}.`,
+      /** No account had room: the run waits. `clock` is when it looks again, and may be empty. */
+      limitWait: (from: string, window: string, clock: string): string =>
+        `${window ? `The ${window} limit` : 'The usage limit'} of ${from} ran out, and no other account has room. The run waits${clock ? ` and goes on by itself at ${clock}` : ''}.`,
+      /** Over the line on a run's card and screen while it waits out a limit. */
+      limitLabel: 'LIMIT',
+      limitResting: (account: string, window: string, clock: string): string =>
+        `${window ? `The ${window} limit` : 'The usage limit'} of ${account} ran out - the run goes on by itself at ${clock}`,
+      /** An account the run had moved to by itself failed before a turn went through, and the run went on on another. */
+      unfitMoved: (from: string, to: string): string =>
+        `${from} could not take the run. Moved the run to ${to}.`,
+      /** The same, and no account had room: the run waits. `clock` may be empty. */
+      unfitWait: (from: string, clock: string): string =>
+        `${from} could not take the run, and no other account has room. The run waits${clock ? ` and goes on by itself at ${clock}` : ''}.`,
+      /** The line on a run waiting because the account it had moved to could not take it and no other had room. */
+      unfitResting: (account: string, clock: string): string =>
+        `${account} could not take the run, and no other account has room - the run goes on by itself at ${clock}`,
     },
     help: {
       button: 'What scenarios are',
@@ -1113,6 +1150,10 @@ export const en = {
     closeRun: 'Close this run',
     conversations: 'Conversations',
     newSession: 'New session',
+    /** The button beside "+": a fork of the conversation on screen, whole - see App.fork. */
+    fork: 'Fork this conversation: a new tab that carries on from here, while this one stays as it is',
+    /** The same button on a tab nobody has written into yet - there is no conversation to carry. */
+    forkEmpty: 'Nothing to fork yet: this tab has no conversation',
     /** The field a double click on a conversation's tab opens in place of its name. */
     renameTab: 'Rename conversation',
     menu: 'Menu',
@@ -1253,6 +1294,17 @@ export const en = {
           ? 'Back into the input field - but the pasted image cannot come with it, attach it again'
           : `Back into the input field - but the ${n} pasted images cannot come with it, attach them again`,
     },
+    /** The third button in the head of a message of one's own - it opens the rewind dialog (see RewindDialog). */
+    rewind: {
+      label: 'Rewind to here',
+      hint: 'Rewind to here: this message and everything after it leave the conversation',
+      /** On a message written while a turn was running: there is no clean point before it to go back to. */
+      steering: 'Written while Codex was working - rewind to the message that started that turn',
+    },
+    /** A fork asked to stop at a message came up with all of the parent instead - see CodexSession.forkPoint. */
+    forkWhole: "This fork couldn't be cut at the chosen message, so it carries the whole conversation.",
+    /** The code a fork was to take along, not put back - see FORK_CODE in feed/rewind.ts. */
+    forkCode: (why: string): string => `The fork is open, but the code here could not be put back: ${why}`,
     /**
      * The pin button in the corner of a message, and the strip it puts the message into (see
      * feed/pins.ts). `crowded` stands in for `add` on a button gone dead because three are pinned
@@ -1363,6 +1415,17 @@ export const en = {
        * CodexSessionHub.CatchUp).
        */
       notOnPhone: 'earlier messages are not shown on the phone',
+      /** Where a conversation was cut back to - the messages that stood below it are gone from it. */
+      rewound: 'rewound to here · what came after is no longer part of the conversation',
+      /**
+       * Where a fork's own part begins - above it what it inherited, below it what was said in it alone: the
+       * original's title, and that nothing below reaches it.
+       */
+      forked: (title: string): string => `new branch from ${title} · what follows stays in this branch`,
+      /** The same for a fork made at a chosen point: it carries the original only up to there. */
+      forkedAt: (title: string): string => `new branch from ${title} at the chosen point · what follows stays in this branch`,
+      /** The hint over the original's name in a fork's mark - the name opens that conversation. */
+      openSource: 'Open the original conversation',
     },
 
     compact: {
@@ -1488,6 +1551,19 @@ export const en = {
       withdrawn: 'The agent stopped waiting for a decision',
     },
 
+    /**
+     * A mod speaking (Claude Code 2.1.287 and later; see feed/mods.ts). The mod's own words are shown as it
+     * wrote them - only what the panel says about them is here.
+     */
+    mods: {
+      /** The label of a question a mod asked through the CLI - "CLAUDE ASKS" stands on the model's own. */
+      asks: 'A MOD ASKS',
+      /** The label of the card over the field that holds a mod's toast, status lines and open windows. */
+      label: 'MODS',
+      /** A pane a mod holds open, which the panel cannot draw; [name] is its title and the mod's name. */
+      pane: (name: string): string =>
+        `${name} opened its own window. The panel can't show mod windows yet: if the turn is standing still, that window is holding it, and Stop cancels it.`,
+    },
     ask: {
       label: 'CODEX ASKS',
       blocks: (n: number): string => `${n} ${n === 1 ? 'question' : 'questions'} · blocks the run`,
@@ -1543,6 +1619,52 @@ export const en = {
       editing: (key: string, button: string): string => `Being edited in the field · ${key} or ${button} puts it back here`,
     },
     selection: { quote: 'Quote', fork: 'Fork from here' },
+    /** The dialog behind the rewind button on a message of one's own - see RewindDialog. */
+    rewind: {
+      title: 'Rewind to this message',
+      lead: 'This message and everything after it leave the conversation. Its text comes back into the field.',
+      /** What to put back - the three the terminal's /rewind offers. */
+      what: 'Rewind',
+      conversation: 'Conversation',
+      code: 'Code',
+      both: 'Both',
+      codeLead: 'The code goes back to how it was before this message.',
+      checking: 'Checking what Codex changed since…',
+      files: (count: number): string => `${count} ${count === 1 ? 'file' : 'files'} changed since`,
+      more: (n: number): string => `and ${n} more`,
+      none: 'Codex changed no files since this message.',
+      off: 'Code is not kept for this conversation.',
+      notTracked: 'Code is not kept for this conversation yet.',
+      noCheckpoint: 'Nothing about the code was kept when this message was sent.',
+      unavailable: (detail: string): string => `Codex can't restore the code here: ${detail}`,
+      changed: (files: string): string => `The code can't be restored: something else changed these files after Codex's edits - ${files}.`,
+      queued: (n: number): string =>
+        n === 1 ? 'The queued message is dropped too.' : `The ${n} queued messages are dropped too.`,
+      running: 'The turn that is running stops.',
+      /** Code alone while a turn runs: the agent would go on changing the very files being put back. */
+      codeWhileRunning: 'Codex is still working - stop the turn before restoring code alone.',
+      forkWhileRunning: "While Codex works here, the code can't be put back alongside a fork - choose Conversation to fork without it, or stop the turn first.",
+      cancel: 'Cancel',
+      go: 'Rewind',
+      goCode: 'Restore code',
+      fork: 'In a new tab',
+      forkHint: 'Leave this tab as it is and open a fork without this message and what came after',
+      working: 'Rewinding…',
+      /** Why it did not happen - Rewind.Refusal. */
+      refused: {
+        busy: 'Codex is busy with something that cannot be stopped from here. Try again in a moment.',
+        gone: 'Codex no longer holds this message in the conversation, so it cannot be rewound to.',
+        moved: 'The conversation moved on while this was open - a message arrived that this window has not shown yet. Look again and retry.',
+        midCall: "This message was written while a turn was running, so the conversation can't be cut right before it.",
+        notSaved: "Codex couldn't record the rewind, so it didn't make it.",
+        unsupported: 'This version of Codex cannot rewind - it takes Codex 0.160 or later. Update Codex and try again.',
+        noProcess: "Codex couldn't be started for this conversation.",
+        ended: 'Codex stopped while the rewind was under way, so it is not known whether the cut was made. To see what the conversation holds now, open it again from the history.',
+        other: (detail: string): string => `Codex refused: ${detail}`,
+      },
+      /** The conversation went back, the code part did not - said in the feed, where the person is looking. */
+      filesFailed: (detail: string): string => `The conversation was rewound, but the code could not be restored: ${detail}`,
+    },
     streams: {
       main: 'main',
       background: 'bg',
@@ -1572,7 +1694,7 @@ export const en = {
     /** Nothing added yet: what the feature buys, and one thing to press. */
     empty: { title: 'Work and personal, side by side', body: 'Switch between Codex accounts without signing out. Config, MCP servers, skills and history stay shared.' },
     intro:
-      'Everything runs on the account chosen here - every open chat moves onto it, and one in the middle of a turn is stopped so it can move.',
+      'Everything runs on the account chosen here - every open chat and every running scenario moves onto it, and one in the middle of a turn is stopped so it can move.',
     /** An account whose sign-in has not landed, so nobody knows its address yet. */
     unnamed: 'Signing in…',
     /**
@@ -1894,6 +2016,7 @@ export const en = {
       questionOf: (n: number, total: number): string => `Question ${n} of ${total}`,
       nothingWaiting: 'Nothing is waiting for you here any more.',
       openConversation: 'Open the conversation',
+      nextQuestion: 'Next question',
       allowOnce: 'Allow once',
       deny: 'Deny',
     },
@@ -2023,6 +2146,8 @@ export const en = {
       quote: 'Quote into my next message',
       fork: 'Fork from here',
       forkHint: 'A new conversation with everything up to this point.',
+      rewind: 'Rewind to here',
+      rewindHint: 'This message and everything after it leave the conversation.',
       copy: 'Copy',
       pin: 'Pin over the feed',
       unpin: 'Unpin',
