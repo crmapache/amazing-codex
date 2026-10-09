@@ -5,6 +5,39 @@ Marketplace and the IDE's update dialog show, so every release lists only its ow
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-09
+
+- Added: rewind a conversation to one of your own messages, from the panel or a paired phone. "Rewind to here" removes that message and everything after it from Codex's memory and puts its text back in the input field. Choose the conversation, the code or both, or open the earlier point in a new tab and leave this one alone. Codex keeps no copies of files, so the code is put back by undoing the edits Codex itself made since that message: the dialog first shows which files and how many lines, and a file that something else changed since is named instead of being overwritten. A turn that is still running stops, queued messages from the discarded part are dropped, and the panel, the phone, the history and the search all show the same shortened conversation.
+- Added: every conversation tab has its own fork button, so a complete copy opens without typing a command or selecting text.
+- Added: a fork shows what it carries. The earlier conversation appears in the new tab with a "new branch from" marker under it, and the original's name in the marker opens it. Before, the new tab opened empty although Codex remembered everything. The same shows after an IDE restart, in a fork opened from the history and on the phone.
+- Fixed: "Fork from here" copied the whole conversation, including the later turns it promised to leave behind. A fork now starts at the chosen point, and a fork of the whole conversation ends where it stood when you pressed the button, even if the original goes on working.
+- Fixed: a conversation rewound in Codex's own terminal appeared in the history once for every rewind, and opened with the turns that had been rewound away. The history and the search now read a conversation the way Codex resumes it.
+- Fixed: with two conversations waiting for a permission at once, Allow pressed on one card could answer the other conversation's request instead, at the desk and on the phone alike. Each conversation numbered its requests from the start, so the first request of every new conversation had the same name; requests are now named apart across the whole IDE.
+- Fixed: writing a message while Codex waited on a question, a plan or a permission left the conversation stuck at "Waiting for you". A message written over a card is now Codex's answer to it: the card closes, Codex reads the message in the same step, and a command that was waiting for permission does not run.
+- Fixed: on a paired phone, a question from Codex could only be answered with one of its options. You can now write your own answer, tick several options when the question allows it, or close the question and answer in the conversation, as at the desk.
+- Fixed: a new conversation could not be started from the phone on a model added by hand, and a chat started from the phone showed its model, effort and mode only after the first message. The phone now offers the models added on that computer for every project, and a new conversation shows what it was started with from the first second.
+- Fixed: the permission mode on the phone kept showing the old mode after it was changed at the desk.
+- Fixed: text copied on an iPhone and pasted into Gmail could turn into a link full of "%20". Every copy button now puts plain text on the clipboard.
+- Fixed: after reloading the panel, or opening a conversation on the phone, a long answer came back cut to its first eight thousand characters. Only what the tools returned is shortened now; everything you and Codex wrote comes back whole. On the phone, a message too large to send in one piece now says so and points to the IDE for the full text.
+- Fixed: a permission request with a long command could grow taller than the panel and push its buttons off the screen. The command now scrolls inside the card.
+- Fixed: with many conversations open, the open tab was hard to tell from the others. It now lights up in the colour of its group, on the dark and the light theme alike.
+- Added: right-click a file or a folder in the project tree, or a changed file in the Commit tool window, and "Send to Amazing Codex GUI" puts it into the input field with its full path. Several selected files go in at once.
+- Changed: removing an attachment from the input field takes the space after it along, so an emptied field shows its hint again.
+- Added: the card of a running scenario shows its stage and a row of numbered circles, one per card of every pass, with the current one marked. The same road replaces the progress bar on the run's screen and on the phone.
+- Fixed: the time of a scenario run included pauses, questions waiting for you and the hours an IDE stayed closed. The run's, each card's and each stage's time now count only the time the run actually worked.
+- Changed: the table of past scenario runs shows when each run finished, and on a narrow panel each row takes two lines instead of squeezing the name away.
+- Added: you can write to the main thread of a running scenario from a field at the bottom of the run's tab, on the phone too. Your words and the answer appear in the timeline under the card the run is on.
+- Added: a star on a past scenario run, to mark it for yourself. The star is stored with the run, so a second window and the phone see it too.
+- Changed: opening a scenario run starts where the run is, the card it is on and what the main thread last said to it, and keeps up with the run until you scroll away. The stage a run is in is shaded more brightly.
+- Fixed: a scenario card that handed work to Codex's sub-agents was judged the moment it had started them. The run now waits until every such helper is done, and then asks the card for its report, since Codex does not hand a sub-agent's answer back by itself. Pausing a run stops the card's helpers too.
+- Fixed: a scenario run kept working on the account it was started on after you chose another one. A run now follows your choice the way open chats do, and carries on where it stood.
+- Fixed: when an account's usage limit refused a scenario run, the card was judged on the refusal and the run ended without a verdict while your other accounts had room. Now the run pauses and goes on on another account with room, or waits and carries on by itself when the first limit resets. An account the run moved to by itself that cannot take it is set aside for an hour.
+- Fixed: going back in the side menu always started the screen from the top; each screen now comes back where you left it.
+- Fixed: the Codex settings screen showed no experimental switches with Codex 0.160, which refused the panel's request for them. They are listed again.
+- Fixed: on a Mac, pairing a second phone or tablet silently unpaired the first one. It stayed in the list of paired devices but could no longer connect, and pairing it again unpaired the other. Each device now keeps its own key. A device unpaired this way is told on its screen to pair again.
+- Fixed: a phone paired within five minutes of starting the IDE could be forgotten if the IDE was then closed abnormally. It kept connecting and showing conversations, but its history, past scenario runs and search results never loaded, and it was missing from the list of paired devices, so it could not be revoked. Pairings and revocations are now saved immediately, and a device that is not on the list is told to pair again instead of being let in.
+- Remote access: reload the phone client after updating the plugin to load this release's client.
+
 ## [0.2.6] - 2026-10-06
 
 - Fixed: an installed plugin could appear ready while its bundled apps still needed sign-in, with no way to connect them. Plugin cards now show each app's account access and tool availability, with a Connect button that opens the address supplied by Codex. Sign-in stays marked as unconfirmed when Codex cannot verify it.
@@ -101,7 +134,8 @@ Marketplace and the IDE's update dialog show, so every release lists only its ow
 - Added: search, prompt improvement, conversation titles and scenario writing run as short-lived,
   read-only Codex threads that leave nothing in the history.
 
-[Unreleased]: https://github.com/crmapache/amazing-codex/compare/0.2.6...HEAD
+[Unreleased]: https://github.com/crmapache/amazing-codex/compare/0.3.0...HEAD
+[0.3.0]: https://github.com/crmapache/amazing-codex/compare/0.2.6...0.3.0
 [0.2.6]: https://github.com/crmapache/amazing-codex/compare/0.2.5...0.2.6
 [0.2.5]: https://github.com/crmapache/amazing-codex/compare/0.2.4...0.2.5
 [0.2.4]: https://github.com/crmapache/amazing-codex/compare/0.2.3...0.2.4
