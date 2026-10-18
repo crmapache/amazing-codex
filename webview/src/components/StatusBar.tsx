@@ -2,6 +2,7 @@ import {
   EFFORT_SAMPLE,
   contextLimits,
   contextShortLabel,
+  contextWindowOf,
   formatContextWindow,
   effortShortLabel,
   modeLabel,
@@ -30,6 +31,7 @@ import { useSelectorsFit } from '../hooks/useSelectorsFit'
 import type { ShownIndicators } from '../indicators'
 import type { ExtraUsage, ModelInfo, ModelUsageWindow, UsageWindow } from '../protocol'
 import { Chevron } from './Chevron'
+import { FAST_MARK, fastReasonText, type FastModeShown } from '../feed/fastMode'
 import { FeedbackButton } from './Feedback'
 import s from './shell.module.css'
 import { ThanksButton } from './Thanks'
@@ -380,6 +382,8 @@ interface StatusBarProps {
   switchedFrom?: string
   /** The model picked here that never came into force, while that holds - see Selectors. */
   stuckPick?: string
+  /** Fast mode for this conversation - see Selectors. */
+  fast?: FastModeShown
   effort: string
   contextMode: 'standard' | 'long'
   contextMax?: number
@@ -419,6 +423,7 @@ export const StatusBar = ({
   model,
   switchedFrom,
   stuckPick,
+  fast,
   effort,
   contextMode,
   contextMax,
@@ -433,7 +438,7 @@ export const StatusBar = ({
   const room = useRef<HTMLDivElement>(null)
   const ruler = useRef<HTMLDivElement>(null)
   const fit = useSelectorsFit(room, ruler)
-  const selectors = { model, switchedFrom, stuckPick, effort, contextMode, contextMax, mode, models, onOpen }
+  const selectors = { model, switchedFrom, stuckPick, fast, effort, contextMode, contextMax, mode, models, onOpen }
 
   const status = useRef<HTMLDivElement>(null)
   const end = useRef<HTMLDivElement>(null)
@@ -590,6 +595,8 @@ interface SelectorProps {
    * in the button for a screen reader: "Opus 5" on its own does not say what it is the value of.
    */
   terse?: boolean
+  /** A mark after the value - fast mode on MODEL (see FastMark). */
+  mark?: ReactNode
   onOpen: (anchor: Anchor) => void
 }
 
@@ -601,7 +608,7 @@ interface SelectorProps {
  * whose form is eight of these. A native `select` is not an option there and not merely for the look: in
  * the IDE's offscreen browser its list does not open at all.
  */
-export const Selector = ({ label, value, sample, hint, className = '', terse = false, onOpen }: SelectorProps) => (
+export const Selector = ({ label, value, sample, hint, className = '', terse = false, mark, onOpen }: SelectorProps) => (
   <button
     type="button"
     className={`${s.selector} ${terse ? s.selectorTerse : ''} ${className}`}
@@ -625,9 +632,41 @@ export const Selector = ({ label, value, sample, hint, className = '', terse = f
       </span>
       <span className={s.selectorText}>{value}</span>
     </span>
+    {mark}
     <Chevron className={s.selectorCaret} />
   </button>
 )
+
+/**
+ * Fast mode on the MODEL button whenever it is not off: lit when the conversation runs on the fast tier - asked
+ * for here or set in Codex's own config, the same limits are spent either way - dim while an ask waits for the
+ * next turn, the warning colour when Codex ran without it. Off draws nothing - the button then looks exactly as
+ * it did before fast mode existed.
+ */
+const FastMark = ({ fast }: { fast: FastModeShown }) => {
+  if (fast.kind === 'off') return null
+  const tone = fast.kind === 'on' ? s.selectorFastOn : fast.kind === 'unavailable' ? s.selectorFastWarn : ''
+
+  return (
+    <span className={`${s.selectorFast} ${tone}`} aria-hidden="true">
+      {FAST_MARK}
+    </span>
+  )
+}
+
+/** The line fast mode adds to the MODEL button's tooltip - nothing while it is off. */
+const fastHint = (t: Dict, fast: FastModeShown | undefined): string => {
+  switch (fast?.kind) {
+    case 'on':
+      return `\n${fast.fromSettings ? t.fast.chipFromSettings : t.fast.chipOn}`
+    case 'waiting':
+      return `\n${t.fast.chipWaiting}`
+    case 'unavailable':
+      return `\n${t.fast.chipUnavailable(fastReasonText(t, fast.reason))}`
+    default:
+      return ''
+  }
+}
 
 interface SelectorsProps {
   model?: string
@@ -645,6 +684,8 @@ interface SelectorsProps {
    * not go - and a chip that stayed silent about either would be a chip nobody can trust.
    */
   stuckPick?: string
+  /** Fast mode for this conversation - the mark on MODEL and a line in its tooltip (see FastMark). */
+  fast?: FastModeShown
   effort: string
   contextMode: 'standard' | 'long'
   contextMax?: number
@@ -667,6 +708,7 @@ export const Selectors = ({
   model,
   switchedFrom,
   stuckPick,
+  fast,
   effort,
   contextMode,
   contextMax,
@@ -679,7 +721,8 @@ export const Selectors = ({
   const t = useT()
   const grow = auto ? s.selectorAuto : ''
   const limits = contextLimits(models, model ?? '')
-  const contextSize = contextMax || (contextMode === 'long' ? limits?.long : limits?.standard)
+  // The choice's window, as the label says it (see contextShortLabel) - Codex's count only where the catalogue is silent.
+  const contextSize = contextWindowOf(models, model ?? '', contextMode) || contextMax
   const contextName = contextMode === 'long' ? t.selectors.context.long : t.selectors.context.standard
 
   return (
@@ -690,12 +733,13 @@ export const Selectors = ({
         value={modelLabel(model)}
         sample={modelSample(models)}
         hint={
-          stuckPick
+          (stuckPick
             ? t.status.modelHintStuck(modelLabel(model), modelLabel(stuckPick))
             : switchedFrom
               ? t.status.modelHintSwitched(modelLabel(model), modelLabel(switchedFrom))
-              : t.status.modelHint(modelLabel(model))
+              : t.status.modelHint(modelLabel(model))) + fastHint(t, fast)
         }
+        mark={fast ? <FastMark fast={fast} /> : undefined}
         className={`${grow} ${switchedFrom || stuckPick ? s.selectorSwitched ?? '' : ''}`}
         onOpen={(anchor) => onOpen('model', anchor)}
       />

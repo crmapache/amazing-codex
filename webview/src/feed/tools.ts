@@ -236,6 +236,16 @@ export const metaFor = (name: string, input: unknown, result: string, isError: b
       const { added, removed } = countUnified(unified)
       return { kind: 'diff', added, removed }
     }
+    // Without Codex's diff: the lines the diff under the head shows, rather than every line of both texts.
+    // The old and the new text share their first and last lines as a rule, and counted whole they read
+    // "+2 -1" over a diff of one added line - right beside the turn's list of changes, which says "+1 -0"
+    // (see feed/changes.ts).
+    const lines = hunksFor('meta', name, input, result).flatMap((hunk) => hunk.lines)
+    if (lines.length > 0) {
+      const added = lines.filter((line) => line.kind === 'add').length
+      const removed = lines.filter((line) => line.kind === 'del').length
+      return { kind: 'diff', added, removed }
+    }
     const before = countLines(str(data.old_string))
     const after = countLines(str(data.new_string))
     return { kind: 'diff', added: Math.max(after - before, 0) + Math.min(before, after), removed: before }
@@ -381,7 +391,13 @@ export const hunksFor = (
 
 const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/
 
-type UnifiedLine = { kind: 'hunk'; start: number } | { kind: 'add' | 'del' | 'ctx'; text: string }
+type UnifiedLine =
+  | { kind: 'hunk'; start: number; oldStart: number; oldCount: number; newCount: number }
+  | { kind: 'add' | 'del' | 'ctx'; text: string }
+  /** `\ No newline at end of file` right after a line of a hunk: a note about that line, not a line. */
+  | { kind: 'note'; text: string }
+  /** The hunk before this was cut short: its header promised more lines than came (see unifiedPatch). */
+  | { kind: 'short' }
 
 /**
  * The lines of a unified diff that belong to its hunks.
@@ -392,20 +408,38 @@ type UnifiedLine = { kind: 'hunk'; start: number } | { kind: 'add' | 'del' | 'ct
  * many lines it holds, and what stands outside every hunk - a file header, a "\ No newline" note, the
  * diff's own trailing newline - is told apart by where it stands. The same reading lives on the IDE's side
  * (UnifiedDiff.kt), where the statistics count the same lines.
+ *
+ * The note is kept, marked as such, only where it stands right after a line of a hunk: the card and the counts
+ * pass it by, and the turn's list of changes needs it to put a file's last line back as it ended (see
+ * unifiedPatch).
  */
 const unifiedLines = (diff: string): UnifiedLine[] => {
   const out: UnifiedLine[] = []
   let oldLeft = 0
   let newLeft = 0
+  // The last thing read was a line of a hunk - what a "\ No newline" note can belong to.
+  let afterLine = false
+
+  const closeHunk = () => {
+    if (oldLeft > 0 || newLeft > 0) out.push({ kind: 'short' })
+  }
 
   for (const raw of diff.split('\n')) {
     const header = HUNK_HEADER.exec(raw)
     if (header) {
+      closeHunk()
       oldLeft = header[2] === undefined ? 1 : Number(header[2])
       newLeft = header[4] === undefined ? 1 : Number(header[4])
-      out.push({ kind: 'hunk', start: Number(header[3]) })
+      out.push({ kind: 'hunk', start: Number(header[3]), oldStart: Number(header[1]), oldCount: oldLeft, newCount: newLeft })
+      afterLine = false
       continue
     }
+    if (raw.startsWith('\\') && afterLine) {
+      out.push({ kind: 'note', text: raw })
+      afterLine = false
+      continue
+    }
+    afterLine = false
     if (oldLeft <= 0 && newLeft <= 0) continue
 
     if (raw.startsWith('+')) {
@@ -418,9 +452,49 @@ const unifiedLines = (diff: string): UnifiedLine[] => {
       out.push({ kind: 'ctx', text: raw.slice(1) })
       oldLeft -= 1
       newLeft -= 1
+    } else {
+      continue
     }
+    afterLine = true
   }
+  closeHunk()
   return out
+}
+
+/** One hunk as the IDE undoes and redoes it (see ChangeRevert): starts 1-based, its lines marked as in the diff. */
+export type PatchHunk = { oldStart: number; newStart: number; lines: string[] }
+
+/**
+ * A unified diff as the hunks the IDE puts back and brings forward (see ChangeRevert) - read by the same reading as
+ * the card's ([unifiedLines]), so the list and the card never disagree about a line. The `\ No newline at end of
+ * file` notes stay where they stood: without them a revert could not give a file back the last line it ended with.
+ *
+ * A start of an empty side is said in a diff as the line before it (`@@ -0,0 +1,2 @@`); here it is the line the
+ * side would begin at, the way the CLI's own hunks say it (see CodeRewind.hunksOf in the plugin for the same).
+ *
+ * No hunks for a diff with none - a file moved and left as it was. Null when the diff is no whole patch, a hunk cut
+ * short (the phone's frame and the journal shorten long strings, see JournalTrim): half a patch undone would be a
+ * file nobody wrote.
+ */
+export const unifiedPatch = (diff: string): PatchHunk[] | null => {
+  const hunks: PatchHunk[] = []
+  let current: PatchHunk | null = null
+  for (const line of unifiedLines(diff)) {
+    if (line.kind === 'short') return null
+    if (line.kind === 'hunk') {
+      current = {
+        oldStart: line.oldCount === 0 ? line.oldStart + 1 : line.oldStart,
+        newStart: line.newCount === 0 ? line.start + 1 : line.start,
+        lines: [],
+      }
+      hunks.push(current)
+      continue
+    }
+    if (!current) continue
+    if (line.kind === 'note') current.lines.push(line.text)
+    else current.lines.push(`${line.kind === 'add' ? '+' : line.kind === 'del' ? '-' : ' '}${line.text}`)
+  }
+  return hunks
 }
 
 /** How many lines a unified diff adds and removes - the `+` and `-` lines of its hunks. */
@@ -467,7 +541,7 @@ export const unifiedHunks = (id: string, diff: string): Hunk[] => {
     } else if (line.kind === 'del') {
       current.lines.push({ n: null, sign: '-', kind: 'del', text: line.text })
       removed += 1
-    } else {
+    } else if (line.kind === 'ctx') {
       current.lines.push({ n, sign: ' ', kind: 'ctx', text: line.text })
       n += 1
     }

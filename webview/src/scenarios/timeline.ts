@@ -1,6 +1,6 @@
 import type { UserToken } from '../feed/types'
 import type { ScenarioRun, ScenarioRunNote, ScenarioRunStep } from '../protocol'
-import { passesOf } from './rules'
+import { listKey, passesOf } from './rules'
 
 /**
  * A run read top to bottom: the stages in order, every pass of a loop written out as its own block, and
@@ -33,6 +33,11 @@ export type TimelineRow =
       total: number
       passes: number
       untilDone: boolean
+      /**
+       * For a stage that runs once per item of a list: how long its list is, and null until the main thread
+       * has given it. Absent for every other stage.
+       */
+      items?: number | null
       standing: StageStanding
       /** How long the whole stage took, once every go at it is over. Zero while it is not. */
       took: number
@@ -45,6 +50,11 @@ export type TimelineRow =
       /** How many passes its stage was given, and whether that number is a ceiling. One means no loop. */
       passes: number
       untilDone: boolean
+      /**
+       * Whether its stage runs once per item of a list - its row is placed by its item rather than by a pass
+       * (see ScenarioRunStep.item), and before the list is given it is the place the list is asked for.
+       */
+      perItem: boolean
     }
   | { kind: 'note'; key: string; note: ScenarioRunNote }
 
@@ -70,23 +80,33 @@ export const timelineOf = (run: ScenarioRun): TimelineRow[] => {
 
   run.steps.forEach((step, index) => {
     const stage = stages.get(step.stageId)
+    const perItem = Boolean(stage?.each)
+    // A stage over a list is placed by its items, not by a count: its passes are as many as its list.
+    const passes = stage && !perItem ? passesOf(stage) : 1
 
-    if (many && step.stageId !== stageId) {
+    if (step.stageId !== stageId) {
       stageId = step.stageId
       const of = run.steps.filter((one) => one.stageId === step.stageId)
 
-      rows.push({
-        kind: 'stage',
-        key: `stage:${step.stageId}`,
-        stageId: step.stageId,
-        title: stage?.title ?? '',
-        index: run.snapshot.stages.findIndex((one) => one.id === step.stageId) + 1,
-        total: run.snapshot.stages.length,
-        passes: stage ? passesOf(stage) : 1,
-        untilDone: stage?.untilDone ?? false,
-        standing: standingOf(of),
-        took: tookBy(of),
-      })
+      if (many) {
+        rows.push({
+          kind: 'stage',
+          key: `stage:${step.stageId}`,
+          stageId: step.stageId,
+          title: stage?.title ?? '',
+          index: run.snapshot.stages.findIndex((one) => one.id === step.stageId) + 1,
+          total: run.snapshot.stages.length,
+          passes,
+          untilDone: !perItem && (stage?.untilDone ?? false),
+          ...(perItem ? { items: itemsOf(of) } : {}),
+          standing: standingOf(of),
+          took: tookBy(of),
+        })
+      }
+
+      // What the main thread said about the stage's list is about the whole stage, so it opens it rather
+      // than standing under its first item (see ScenarioRules.listKey).
+      for (const note of notesFor(run.notes, listKey(step.stageId))) rows.push({ kind: 'note', key: noteKey(note), note })
     }
 
     rows.push({
@@ -94,8 +114,9 @@ export const timelineOf = (run: ScenarioRun): TimelineRow[] => {
       key: step.key,
       step,
       index,
-      passes: stage ? passesOf(stage) : 1,
-      untilDone: stage?.untilDone ?? false,
+      passes,
+      untilDone: !perItem && (stage?.untilDone ?? false),
+      perItem,
     })
     for (const note of notesFor(run.notes, step.key)) rows.push({ kind: 'note', key: noteKey(note), note })
   })
@@ -131,6 +152,15 @@ export const toldTokens = (note: ScenarioRunNote): UserToken[] => {
 const noteKey = (note: ScenarioRunNote): string => `note:${note.who ?? ''}:${note.stepKey}:${note.at}`
 
 /**
+ * How long a stage's list is, read off its passes: null while the main thread has not given it - the stage's
+ * one pass is then still the place it is asked for - and 0 for a list that came back empty.
+ */
+const itemsOf = (steps: ScenarioRunStep[]): number | null => {
+  const item = steps.find((step) => step.item)?.item
+  return item ? item.count : null
+}
+
+/**
  * Where a stage stands, from its own steps and nothing else.
  *
  * "Here now" wins over everything: a stage with a card working in it is where the run is, whatever the
@@ -139,6 +169,9 @@ const noteKey = (note: ScenarioRunNote): string => `note:${note.who ?? ''}:${not
  * chapter.
  */
 const standingOf = (steps: ScenarioRunStep[]): StageStanding => {
+  // A stage whose list came back empty had nothing to do and is behind the run - not a stage it never reached.
+  if (steps.length > 0 && steps.every((step) => step.item?.count === 0)) return 'done'
+
   if (steps.some((step) => step.state === 'running' || step.state === 'asking' || step.state === 'judging')) {
     return 'here'
   }

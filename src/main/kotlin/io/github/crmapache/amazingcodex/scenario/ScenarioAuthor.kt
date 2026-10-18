@@ -210,6 +210,7 @@ The fields, and who reads them:
 - onGiveUp: what happens to a card its own session could not finish. "stop" ends the run on it. "head" hands its work to the main thread, which finishes it itself with the cards' trust before the run moves on, and the run stops only if the main thread cannot finish it either. Answer "head" only when the description asks for a run that finishes on its own rather than stopping; "stop" otherwise. With "head", say in the briefing which stops are not the main thread's to get past - it reads the briefing to tell them apart.
 - inputs: what the person is asked before the run starts - a ticket, a branch, a folder. Each has a name of letters, digits, - and _ only, a label for the little form, and required. A card's prompt writes it as {{name}}. Ask only for what genuinely changes from one run to the next, and often that is nothing at all: an empty list is a good answer. An optional input left empty arrives as an empty string, so write the sentence around it to read well either way ("extra wishes, if any: {{notes}}").
 - stages: each has a title, repeat (how many passes, 1 to 10) and untilDone. untilDone true makes repeat a ceiling instead of a count and lets the main thread end the loop as soon as there is nothing left to do - which is what review, fix, review again actually is.
+- each: for a stage that does the same work once for every item of a list whose length is known only when the stage begins - the cards of an epic, the findings of a review, the packages of a monorepo - give the stage "each": {"name": "...", "description": "..."} instead of repeat and untilDone. As the stage begins, the main thread is asked for the list once, and the stage runs exactly one pass per item; the item's value is written into the stage's prompts as [[name]], with no slot declared for it. The description says what the list is and what one value of it looks like ("the open findings in REVIEW.md, one per finding; the value is the finding's number"). This, not repeat with a slot for "the next item", is how work over a list is written: a ceiling of passes runs out before the list does, or spends passes going back to an item.
 - cards: each has a title for the person's eye, a prompt, slots, dod and after.
   - prompt is the only thing an agent is ever told. Write it as an instruction to somebody competent who cannot see this form, cannot see the other cards and does not know what happened before. Say what to do and what to leave alone. Two or three sentences beat one line. It already runs in the project folder: say "the current repository", never this machine's path - a scenario is kept and run again on other projects and other machines. Name only commands this project really has, or send the card to the project's own instructions for them. Never commit, push or open a pull request unless the description asks for it in so many words.
   - slots are what the main thread fills in before the card starts, written in the prompt as [[name]]. Each has a name (same rules as an input's) and a description saying what the main thread is to put there. Every [[name]] in a prompt must have a slot, and every slot must appear in its prompt. A slot is always filled with something - there is no such thing as an empty one, and a card that waits for a slot to be empty on the first pass of a loop stops the run instead. So do not write slots like "the result of the previous pass, empty the first time round"; if the value may not exist yet, say in the slot's description what the main thread is to write in that case. Slots are for what only the run knows - a decision the main thread took, a number it saw, a summary of the passes so far. Never for what lies on disk: a card can read a file, and a slot repeating one is a place for the main thread to misremember it. Fewer slots make a better scenario.
@@ -225,7 +226,7 @@ Where a card stops. A skill that stops for approval ends the card's turn there, 
 
 One session, one card. What has to share a conversation is one card: a review and the saving of its findings, when the save reads them out of the conversation. What must not share one is two cards: the reviewer and the fixer, the writer and the checker.
 
-Loops. A stage with untilDone runs again only while the main thread says so, and it decides from the last card's final message and its after line. Write the rule there: another pass when there is work left that a pass would do, none when there is not.
+Loops. A stage with untilDone runs again only while the main thread says so, and it decides from the last card's final message and its after line. Write the rule there: another pass when there is work left that a pass would do, none when there is not. A stage with each needs no such rule: the list is its length.
 
 Look at the project before you write: its instructions (AGENTS.md, README), the commands it really has, what its tests are called, how it is laid out. A card that names a command this repository does not have fails at two in the morning.
 
@@ -365,28 +366,43 @@ Two or three stages and a handful of cards is a scenario somebody will actually 
     }
 
     private fun stageOf(element: JsonObject, inputNames: Set<String>): Stage? {
-        val cards = element.array("cards").take(MAX_CARDS).mapNotNull { cardOf(it, inputNames) }
+        val each = eachOf(element)
+        val cards = element.array("cards").take(MAX_CARDS).mapNotNull { cardOf(it, inputNames, each?.name) }
         if (cards.isEmpty()) return null
 
         return Stage(
             id = ScenarioStore.newId(),
             title = element.string("title")?.trim()?.take(MAX_NAME_CHARS).orEmpty(),
-            repeat = (element.number("repeat") ?: 1).coerceIn(1, MAX_STAGE_REPEAT),
-            untilDone = element.flag("untilDone"),
+            // A stage over a list is one pass per item, and the count beside it is not read (see Stage.each).
+            repeat = if (each != null) 1 else (element.number("repeat") ?: 1).coerceIn(1, MAX_STAGE_REPEAT),
+            untilDone = each == null && element.flag("untilDone"),
+            each = each,
             cards = cards,
         )
     }
 
+    /**
+     * The list a stage runs once per item of, when the model gave it one. Held to a slot's rule for the name, and
+     * dropped rather than mended for the same reason a slot is (see [usableName]): a name made up here would not
+     * be the one the prompts were written with.
+     */
+    private fun eachOf(element: JsonObject): StageEach? {
+        val each = element["each"] as? JsonObject ?: return null
+        val name = usableName(each.string("name")) ?: return null
+        return StageEach(name = name, description = each.text("description"))
+    }
+
     /** A card with nothing to say is not a card: the prompt is the only thing an agent is ever told. */
-    private fun cardOf(element: JsonObject, inputNames: Set<String>): Card? {
+    private fun cardOf(element: JsonObject, inputNames: Set<String>, item: String?): Card? {
         val prompt = element.text("prompt")
         if (prompt.isBlank()) return null
-        val slots = element.array("slots").take(MAX_SLOTS).mapNotNull { slotOf(it) }
+        // The item of a stage over a list is the panel's to fill, so a slot under its name is one nobody would ask for.
+        val slots = element.array("slots").take(MAX_SLOTS).mapNotNull { slotOf(it) }.filter { it.name != item }
 
         return Card(
             id = ScenarioStore.newId(),
             title = element.string("title")?.trim()?.take(MAX_NAME_CHARS).orEmpty(),
-            prompt = withInputBrackets(prompt, inputNames, slots.map { it.name }.toSet()),
+            prompt = withInputBrackets(prompt, inputNames, slots.map { it.name }.toSet() + listOfNotNull(item)),
             slots = slots,
             dod = element.text("dod"),
             after = element.text("after"),

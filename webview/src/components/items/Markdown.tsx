@@ -8,7 +8,7 @@ import { CopyButton } from './CopyButton'
 import { Formula } from './Formula'
 import { PathLink, withPathLinks } from './PathLink'
 import s from '../feed.module.css'
-import { useKnownFiles, useOpenFile } from '../../hooks/useOpenFile'
+import { useKnownFiles, useMissingFiles, useOpenFile } from '../../hooks/useOpenFile'
 import { useT } from '../../i18n'
 
 /**
@@ -324,6 +324,7 @@ const InlineCode = ({ text, reveal }: { text: string; reveal: boolean }) => {
   const t = useT()
   const openFile = useOpenFile()
   const known = useKnownFiles()
+  const missing = useMissingFiles()
   const [copied, setCopied] = useState(false)
 
   useEffect(() => {
@@ -343,7 +344,8 @@ const InlineCode = ({ text, reveal }: { text: string; reveal: boolean }) => {
    * useOpenFile), and the path goes on copying exactly as it did.
    */
   const ref = openFile ? fileRef(text, true, known) : null
-  const opens = ref?.folder ? t.feed.copy.openFolder : t.feed.copy.openFile
+  // Pressed before and found nothing: the hover says so, and the next press asks the disk again.
+  const opens = ref && missing.has(ref.path) ? t.feed.copy.missing : ref?.folder ? t.feed.copy.openFolder : t.feed.copy.openFile
 
   return (
     <span

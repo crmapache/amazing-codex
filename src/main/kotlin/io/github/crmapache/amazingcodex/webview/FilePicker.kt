@@ -45,7 +45,7 @@ internal object FilePicker {
     /** The attachment kind - also for a file the IDE handed over itself, from the project tree's menu or the editor's. */
     fun kindOf(file: VirtualFile): String = when {
         file.isDirectory -> "dir"
-        file.extension?.lowercase() in IMAGE_EXTENSIONS -> "img"
+        PictureFormats.isPicture(file.extension) -> "img"
         else -> "file"
     }
 
@@ -60,6 +60,4 @@ internal object FilePicker {
 
         return if (file.path.startsWith(prefix)) file.path.removePrefix(prefix) else file.path
     }
-
-    private val IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "gif", "webp", "svg")
 }

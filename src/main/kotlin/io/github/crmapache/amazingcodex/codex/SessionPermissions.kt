@@ -271,15 +271,19 @@ internal class SessionPermissions(private val hub: CodexSessionHub) {
      * above the input field and are the only thing on screen that says a conversation is waiting for a
      * person, so nothing else would ever take them off it - the tab would go on promising a decision
      * that has nobody left to make it.
+     *
+     * Bar [except]: what the conversation replacing the dying process holds as its own and still waits on - a
+     * plan waiting for a decision moves with it (see CodexSession.HeldPlan), by the same request, so the card
+     * stays and its buttons answer the new process.
      */
-    fun withdrawAll(sessionId: String) {
+    fun withdrawAll(sessionId: String, except: Set<String> = emptySet()) {
         val requests = buildList {
             channelPermissions.entries.filter { it.value.sessionId == sessionId }.forEach { add(it.key) }
             plans.values.filter { it.sessionId == sessionId }.forEach { add(it.requestId) }
             asks.values.filter { it.sessionId == sessionId }.forEach { add(it.requestId) }
         }
 
-        requests.forEach { withdraw(sessionId, it) }
+        requests.filterNot { it in except }.forEach { withdraw(sessionId, it) }
     }
 
     /** The card a request was waiting under, by the request's own number. */

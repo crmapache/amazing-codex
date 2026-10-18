@@ -1,7 +1,8 @@
-import { normalizeMode } from '../catalog'
+import { expandModel, normalizeMode } from '../catalog'
 import { reducePanel } from '../feed/build'
 import { initialPanelState, type PanelAction, type PanelState } from '../feed/panelState'
-import type { ShellMessage } from '../protocol'
+import { sessionInfoAction } from '../feed/sessionInfo'
+import type { ModelInfo, ShellMessage } from '../protocol'
 import type { UserToken } from '../feed/types'
 
 /**
@@ -164,8 +165,16 @@ export const tickFeed = (feed: MobileFeed, now: number): MobileFeed => {
  * on request. It matters that it is the IDE's rather than the device's: the whole of this state is
  * measured in the IDE's time, and a single moment let in off the local clock is a duration counted
  * across two of them.
+ *
+ * `models` is that machine's catalogue, as its inventory last carried it - the reducer has none of its own,
+ * and a pick is judged by what the catalogue expands it into (see the `model` case below).
  */
-export const applyMessage = (feed: MobileFeed, message: ShellMessage, now: number = Date.now()): MobileFeed => {
+export const applyMessage = (
+  feed: MobileFeed,
+  message: ShellMessage,
+  now: number = Date.now(),
+  models: ModelInfo[] | null = null,
+): MobileFeed => {
   const at = message.at ?? now
   const seq = message.seq ?? feed.seq
 
@@ -265,6 +274,8 @@ export const applyMessage = (feed: MobileFeed, message: ShellMessage, now: numbe
         ...(message.editor ? { editor: message.editor } : {}),
         // The name it went into the conversation under - what a rewind from here names it by.
         ...(message.uuid ? { uuid: message.uuid } : {}),
+        // Said by the desk's IDE itself, PANEL over it as at the desk (see UserItem.auto).
+        ...(message.auto ? { auto: message.auto } : {}),
       })
 
     // The conversation was cut back - from the desk or from here (see the rewound message).
@@ -276,6 +287,10 @@ export const applyMessage = (feed: MobileFeed, message: ShellMessage, now: numbe
         uuid: message.uuid,
         all: message.fromSeq !== undefined && feed.lastHeld !== undefined && feed.lastHeld >= message.fromSeq,
       })
+
+    // Files of a turn put back from the desk - the rows on this screen show it too (see changesReverted).
+    case 'changesReverted':
+      return collect({ kind: 'changesReverted', id: message.id, files: message.files, restore: message.restore })
 
     case 'status':
       return collect({ kind: 'status', status: message.state })
@@ -290,8 +305,17 @@ export const applyMessage = (feed: MobileFeed, message: ShellMessage, now: numbe
     case 'turnStopped':
       return collect({ kind: 'stoppedForAccount' })
 
+    // The desk's plan to carry this conversation on after a limit - the same row and the same "no" as there.
+    case 'carryOnWait':
+      return collect({ kind: 'carryOnWait', at: message.until, guess: message.guess })
+
     case 'error':
       return collect({ kind: 'error', message: message.message })
+
+    // `/status` typed here: the IDE answers it with the desk's row rather than let it reach the model as words (see
+    // SessionCommands.statusAsked) - to this phone alone, and without the machine's paths.
+    case 'sessionInfo':
+      return collect(sessionInfoAction(message))
 
     /**
      * The repository's settings overrule the account this conversation came up on (see OutrankedItem).
@@ -322,8 +346,17 @@ export const applyMessage = (feed: MobileFeed, message: ShellMessage, now: numbe
     // what it needs is to know that the change was somebody's doing. Without this the tab's memory of
     // what the stream last named stays on the old model, and the first answer signed with the new one is
     // announced in the feed as a swap made behind one's back (see noteStreamModel).
+    //
+    // Expanded through the catalogue for the same reason as at the desk: "opus" names no generation, and a
+    // pick of the latest Opus made from Opus 4.8 would otherwise arrive looking like the agent's swap.
     case 'model':
-      return collect({ kind: 'modelApplied', model: message.model, error: message.error, born: message.born })
+      return collect({
+        kind: 'modelApplied',
+        model: message.model,
+        error: message.error,
+        born: message.born,
+        resolved: expandModel(models, message.model),
+      })
 
     /*
      * What this conversation works at (see ClaudeSessionHub.sendEffort). Nobody but the IDE knows it -
@@ -335,6 +368,20 @@ export const applyMessage = (feed: MobileFeed, message: ShellMessage, now: numbe
      */
     case 'effort':
       return collect({ kind: 'effortApplied', effort: message.effort })
+
+    // Fast mode asked for or not - live like the effort, and told ahead of a restore's tail (see attach in the hub).
+    case 'fastMode':
+      return collect({ kind: 'fastModeApplied', on: message.on })
+
+    /*
+     * The window this conversation is in, Std or Long - live like the effort, told at a birth, to a joining client and
+     * on a change at the desk. The phone has no CTX chip, but its gauge measures by the window: dropped, a
+     * conversation on Long was divided by the Std window until Codex's next count, and a change at the desk left
+     * the phone measuring by the window that was left. `born` travels on: an announcement keeps the exact figure
+     * the restore was opened with (see contextModeApplied).
+     */
+    case 'contextMode':
+      return collect({ kind: 'contextModeApplied', mode: message.mode, born: message.born })
 
     /*
      * The permission mode, applied at the desk (the MODE selector, Shift+Tab, an approved plan) or chosen
@@ -349,7 +396,7 @@ export const applyMessage = (feed: MobileFeed, message: ShellMessage, now: numbe
     // What this conversation is waiting to say. Held and fired by the IDE, so both screens show the same
     // list and a phone put back in a pocket does not take it along (see SessionQueue.kt).
     case 'queue':
-      return collect({ kind: 'queue', items: message.items })
+      return collect({ kind: 'queue', items: message.items, held: message.held })
 
     case 'context':
       return collect({ kind: 'context', used: message.used, max: message.max })

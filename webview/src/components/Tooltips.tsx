@@ -24,6 +24,24 @@ import s from './tooltip.module.css'
  * this fires on every pass of the pointer across the panel, and a render per pass is a price with
  * nothing to show for it.
  */
+/**
+ * Whether any part of an element is cut by its box - the condition `data-tooltip-clipped` puts on a hint.
+ * The parts are what clips: a name cut in the middle is two boxes, each with an ellipsis of its own (see
+ * TabTitle in Header), and the box around them never overflows itself.
+ */
+const clipped = (element: HTMLElement): boolean =>
+  [element, ...Array.from(element.querySelectorAll<HTMLElement>('*'))].some(
+    (part) => part.scrollWidth > part.clientWidth,
+  )
+
+/**
+ * Whether an element's hint has anything to say right now. One marked `data-tooltip-clipped` carries its
+ * own text as the hint, and the text is on screen whole unless something cut it - a hint repeating what
+ * stands under it is a hint the panel does not give (see panel-ui in the rules).
+ */
+const speaks = (element: HTMLElement): boolean =>
+  !!element.dataset.tooltip && (element.dataset.tooltipClipped === undefined || clipped(element))
+
 export const Tooltips = () => {
   const tip = useRef<HTMLDivElement | null>(null)
 
@@ -74,7 +92,8 @@ export const Tooltips = () => {
      * event. A frame with nothing changed costs two rectangle reads and no writes.
      */
     const follow = () => {
-      if (!anchor || !anchor.isConnected || !anchor.dataset.tooltip) {
+      // A name that was cut can stop being cut under the pointer: the tab grows into room freed beside it.
+      if (!anchor || !anchor.isConnected || !speaks(anchor)) {
         hide()
         return
       }
@@ -116,7 +135,7 @@ export const Tooltips = () => {
       const target = event.target
       const next = target instanceof Element ? target.closest<HTMLElement>('[data-tooltip]') : null
 
-      if (!next || !next.dataset.tooltip) {
+      if (!next || !speaks(next)) {
         hide()
         return
       }

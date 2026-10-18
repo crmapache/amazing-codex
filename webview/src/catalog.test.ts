@@ -4,10 +4,12 @@ import { en } from './i18n/en'
 import { ru } from './i18n/ru'
 import { describe, expect, it } from 'vitest'
 import {
+  carriesPick,
   columns,
   contextLimits,
   contextOptions,
   contextShortLabel,
+  contextWindowOf,
   LAST_USED,
   newTabContextOptions,
   effortFits,
@@ -287,6 +289,45 @@ describe('the caption of the model a tab works on', () => {
   })
 })
 
+describe('whether an answer carries the model picked', () => {
+  /*
+   * Codex names a model by one exact id, the menu picks it by that id and the answers are signed with it: there is
+   * no family to fall back on, and a model of the same line in another version is another model. The original's
+   * cases were Claude's ("opus" against "claude-opus-5-5", "opus[1m]", "opusplan"); these are the same questions as
+   * Codex asks them.
+   */
+  it('measures a pick by the model itself, whatever case it was written in', () => {
+    expect(carriesPick('gpt-6.1-sol', 'gpt-6.1-sol')).toBe(true)
+    expect(carriesPick('GPT-6.1-Sol', 'gpt-6.1-sol')).toBe(true)
+  })
+
+  // A pick of gpt-6-sol from gpt-6.1-sol is a pick, not "the model already at work" - the case that, read by the
+  // family, put "switched by Codex, not by you" under a pick the person had just made.
+  it('reads another version of the same line as another model', () => {
+    expect(carriesPick('gpt-6-sol', 'gpt-6.1-sol')).toBe(false)
+    expect(carriesPick('gpt-5.6-luna', 'gpt-5.6-sol')).toBe(false)
+  })
+
+  it('measures a pick by what the catalogue expands it into', () => {
+    expect(carriesPick('gpt-6-astra', 'gpt-6-astra', 'gpt-6-astra')).toBe(true)
+    expect(carriesPick('gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-astra')).toBe(false)
+  })
+
+  // A model added by hand for another provider is still one exact id, the one the thread is asked for and signed by.
+  it('measures a model added by hand by its own name', () => {
+    expect(carriesPick('my-provider-model', 'my-provider-model')).toBe(true)
+    expect(carriesPick('my-provider-model', 'gpt-6-astra')).toBe(false)
+  })
+
+  // "Default" is whatever Codex runs on a tab that asks for none, and Codex's catalogue has no entry for it to
+  // expand into - so no signature says whether it arrived.
+  it('has no answer for "default"', () => {
+    expect(carriesPick('default', 'gpt-6-astra')).toBeUndefined()
+    expect(carriesPick('default', 'gpt-6-astra', 'default')).toBeUndefined()
+    expect(carriesPick('Default', 'gpt-6-astra')).toBeUndefined()
+  })
+})
+
 describe('the model caption in the bottom row', () => {
   it('names the generation and the model out of an OpenAI id', () => {
     expect(modelLabel('gpt-5.6-sol')).toBe('GPT-5.6 Sol')
@@ -486,6 +527,39 @@ describe('context windows', () => {
     expect(limits).toEqual({ standard: 258_400, long: 828_400 })
     expect(contextShortLabel('standard', limits)).toBe('Std 258K')
     expect(contextShortLabel('long', limits)).toBe('Long 828K')
+  })
+
+  /*
+   * One function for the chip and the gauge (see contextOf): the gauge used to guess 258,400 for every GPT while
+   * the chip named the model's own window. gpt-6.1-sol holds 475,000 in Std (500,000 less Codex's margin), and every
+   * model of the cache 828,400 in Long.
+   */
+  it('names the window of the model in the mode, the one number for the chip and the gauge', () => {
+    const catalogue = [
+      ...models,
+      {
+        value: 'gpt-6.1-sol',
+        label: 'GPT-6.1 Sol',
+        description: '',
+        resolved: 'gpt-6.1-sol',
+        standardContext: 475_000,
+        longContext: 828_400,
+      },
+    ]
+
+    expect(contextWindowOf(catalogue, 'gpt-6.1-sol', 'standard')).toBe(475_000)
+    expect(contextWindowOf(catalogue, 'gpt-6.1-sol', 'long')).toBe(828_400)
+    expect(contextWindowOf(catalogue, 'default', 'standard')).toBe(258_400)
+    expect(contextWindowOf(catalogue, 'my-provider-model', 'standard')).toBeUndefined()
+    expect(contextWindowOf(null, 'gpt-6.1-sol', 'long')).toBeUndefined()
+  })
+
+  // The chip shows the choice: a turn still running in Std after a switch to Long read "Long 258K" by Codex's count.
+  it('labels the chip by the window chosen, and by Codex only where the catalogue is silent', () => {
+    const limits = contextLimits(models, 'default')
+    expect(contextShortLabel('long', limits, 258_400)).toBe('Long 828K')
+    expect(contextShortLabel('standard', null, 258_400)).toBe('Std 258K')
+    expect(contextShortLabel('long', null)).toBe('Long')
   })
 
   it('disables long context when the model has no larger window', () => {

@@ -361,19 +361,48 @@ export const rangePlace = (range: string): Omit<FileRef, 'path'> | null => {
 const RANGE = /^L(\d+)(?::(\d+))?(?:-(?:L(\d+)(?::(\d+))?|(\d+)))?$/
 
 /**
+ * What a chip for a path is called: a picture by its extension, a file otherwise - the same split the IDE
+ * makes for a file chosen in its dialog (see FilePicker.kindOf). The colour and the preview under the
+ * pointer hang on it (see imagePreview.ts); the path travels to the agent the same way either way.
+ */
+export const kindOfPath = (path: string): 'img' | 'file' =>
+  PICTURE_EXTENSIONS.has(path.substring(path.lastIndexOf('.') + 1).toLowerCase()) ? 'img' : 'file'
+
+/**
+ * The extensions of a picture - the page's copy of the IDE's list (PictureFormats.kt), held to it both ways by
+ * pictureFormats.test.ts: four lists had drifted apart, and a pasted BMP previewed but came back as a file.
+ */
+export const PICTURE_EXTENSIONS: ReadonlySet<string> = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'])
+
+/** The caption a pasted picture wears - the same `Image #N` the agent reads in the text. */
+const PASTED_CAPTION = /^Image #\d+$/
+
+/**
+ * A picture that travelled as bytes beside the text, whether or not this copy of the chip still holds
+ * them - unlike one picked in the IDE's dialog, which travels as `@path` and carries the path as its
+ * caption.
+ *
+ * The bytes are not always here: a phone sends them once, beside the chip rather than in it (see
+ * withoutImageBytes in mobile/screens/Composer); a queued message reaches the panel without them; a
+ * conversation read back off the disk has only the caption. The caption is what all of these keep, and
+ * the count of such chips is the picture's place among the ones the message carried (see imagePreview.ts).
+ */
+export const isPastedImage = (chip: Chip): boolean =>
+  chip.kind === 'img' && (Boolean(chip.data) || PASTED_CAPTION.test(chip.value))
+
+/**
  * The file a chip in a sent message opens, or nothing when it stands for no file.
  *
- * An attached file opens itself; a reference from the editor opens on its own selection; a pasted
- * picture opens the file the shell wrote it into (see PastedFiles.kt) - when there is one, which an old
- * shell or a failed write leaves out. A folder is not a file, a command and a quote are not even paths,
- * and a paste has its own way of opening (see PasteView).
+ * An attached file opens itself; a reference from the editor opens on its own selection. A picture opens by a
+ * road of its own, whatever holds it - its file, the page's bytes, the queue, the transcript - and says when it
+ * did not open (see chipOpening in imagePreview.ts). A folder is not a file, a command and a quote are not
+ * even paths, and a paste has its own way of opening (see PasteView).
  *
  * The same refusals as for a path in an answer (see isOpenablePath): a chip's path comes from the file
  * chooser and from what was typed after "@", and neither is a reason to reach for a network share.
  */
 export const chipFile = (chip: Chip): FileRef | null => {
   if (chip.kind === 'file') return isOpenablePath(chip.value) ? { path: chip.value } : null
-  if (chip.kind === 'img') return chip.path && isOpenablePath(chip.path) ? { path: chip.path } : null
   if (chip.kind === 'ref') {
     if (!isOpenablePath(chip.value)) return null
     return { path: chip.value, ...(chip.range ? rangePlace(chip.range) ?? {} : {}) }

@@ -1,7 +1,9 @@
 package io.github.crmapache.amazingcodex.editor
 
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 
 /**
  * Which of the files called by a name are the one the agent wrote - the part of opening a path that can
@@ -126,5 +128,34 @@ class OpenInEditorTest {
     fun `without a home nothing is expanded`() {
         assertEquals("~/.claude", OpenInEditor.expandHome("~/.claude", null))
         assertEquals("~/.claude", OpenInEditor.expandHome("~/.claude", "  "))
+    }
+
+    /*
+     * Where a written path points before the project is asked by name - one answer for the click and for the
+     * preview of the same chip (see ImagePreviews), which used to look for the file each its own way.
+     */
+    @Test
+    fun `a relative path is the project's, even when the project lives on a share`() {
+        val wsl = "//wsl\$/Ubuntu/home/me/app"
+
+        assertEquals(OpenInEditor.Written(File(wsl, "shots/a.png"), byName = true), OpenInEditor.written("shots/a.png", wsl, null))
+        assertEquals(OpenInEditor.Written(File("/p", "a.png"), byName = true), OpenInEditor.written(" a.png ", "/p", "/Users/me"))
+    }
+
+    @Test
+    fun `a path from the home is the home's and is never looked up by name`() {
+        assertEquals(
+            OpenInEditor.Written(File("/Users/me/Desktop/a.png"), byName = false),
+            OpenInEditor.written("~/Desktop/a.png", "/p", "/Users/me"),
+        )
+        assertEquals(OpenInEditor.Written(File("/abs/a.png"), byName = false), OpenInEditor.written("/abs/a.png", "/p", "/Users/me"))
+    }
+
+    @Test
+    fun `a network path written in the chip is refused, and so is nothing at all`() {
+        assertNull(OpenInEditor.written("//host/share/a.png", "/p", "/Users/me"))
+        assertNull(OpenInEditor.written("\\\\host\\share\\a.png", "/p", "/Users/me"))
+        assertNull(OpenInEditor.written("a\u0000.png", "/p", "/Users/me"))
+        assertNull(OpenInEditor.written("   ", "/p", "/Users/me"))
     }
 }

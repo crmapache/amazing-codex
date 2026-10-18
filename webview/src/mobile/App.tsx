@@ -13,6 +13,8 @@ import type {
 } from '../protocol'
 import { ClockContext } from '../hooks/useNow'
 import { asideQuestion, NO_THREAD, sideHistory, sideThread, type SideAction, type SideExchange, type SideThread } from '../feed/side'
+import { fastAsked, fastCommand, fastModeShown } from '../feed/fastMode'
+import { isStatusCommand } from '../feed/sessionInfo'
 import { planDecisionOf, useCardState } from '../hooks/useCardState'
 import { applyFact, customModelsOf, emptyFacts, factsFor, isFact, liveRunsOf, type ProjectFacts } from './facts'
 import { shelfHome, type RepositoryChoice, type ShelfChoice } from './scenarios'
@@ -209,6 +211,9 @@ export const App = () => {
   const [agents, setAgents] = useState<PairedAgent[]>([])
   const [screen, setScreen] = useState<Screen>({ at: 'sessions' })
   const [inventories, setInventories] = useState<Record<string, Inventory>>({})
+  /** For the handler of the feed's messages, which is built once: a pick is judged by the catalogue. */
+  const inventoriesRef = useRef(inventories)
+  inventoriesRef.current = inventories
   const [states, setStates] = useState<Record<string, LinkState>>({})
   const [feed, setFeed] = useState<MobileFeed>(emptyFeed())
   const [opening, setOpening] = useState<Opening | null>(null)
@@ -1082,7 +1087,8 @@ export const App = () => {
       })
     }
 
-    setFeed((previous) => applyMessage(previous, message, clockOf(agentId).now()))
+    const models = inventoriesRef.current[agentId]?.models ?? null
+    setFeed((previous) => applyMessage(previous, message, clockOf(agentId).now(), models))
   }, [clockOf, cards, sideStep])
 
   /** Watch a conversation from the beginning and show it. */
@@ -2595,6 +2601,7 @@ export const App = () => {
                     photos: (inventories[at.agentId]?.caps ?? []).includes(CAP_PARTS) ? ROOMY : NARROW,
                     connected: states[at.agentId] === 'connected',
                     voice: dictation,
+                    dictates: inventories[at.agentId]?.voice,
                   }
                 : null
             }
@@ -2917,13 +2924,28 @@ export const App = () => {
               facts[`${screen.agentId}:${screen.projectKey}`] ?? emptyFacts(),
               chatAccounts[chatKey(screen.agentId, screen.projectKey, screen.sessionId)] ?? '',
             )}
+            // The machine's catalogue - the gauge measures by the window it names (see Thread's context).
+            models={inventories[screen.agentId]?.models ?? null}
             // Photos at full size where the machine takes a message in parts, one frame's worth where it
             // predates them - see images.ts.
             photos={(inventories[screen.agentId]?.caps ?? []).includes(CAP_PARTS) ? ROOMY : NARROW}
             connected={states[screen.agentId] === 'connected'}
             loading={!feed.loaded}
             voice={dictation}
+            dictates={inventories[screen.agentId]?.voice}
             onSend={(prompt: OutgoingPrompt) => {
+              // Fast mode is the conversation's switch rather than a message: the app-server knows no slash
+              // commands (see fastCommand). Read off what is shown, so `/fast` over Codex's own config turns it off.
+              const fast = fastCommand(prompt.text)
+              if (fast !== null) {
+                command(screen.agentId, screen.projectKey, {
+                  type: 'setFastMode',
+                  sessionId: screen.sessionId,
+                  on: fastAsked(fast, fastModeShown(feed.state.fastMode, feed.state.fastReport)),
+                })
+                return
+              }
+
               // A side question goes beside the work, the panel's way, and never as a message: the agent
               // would only answer "/btw isn't available in this environment" (see feed/side).
               const aside = asideQuestion(prompt.text)
@@ -2937,7 +2959,7 @@ export const App = () => {
               // The first message names the tab, with the panel's own rule and the panel's own function -
               // otherwise a conversation begun from a phone stays "new session" at the desk for as long as
               // it lasts. The better name from the model replaces this one when it arrives.
-              if (!entry || entry.titleSource === 'default') {
+              if ((!entry || entry.titleSource === 'default') && !isStatusCommand(prompt.text)) {
                 command(screen.agentId, screen.projectKey, {
                   type: 'renameSession',
                   sessionId: screen.sessionId,
@@ -2979,6 +3001,17 @@ export const App = () => {
             }
             onAsideClose={() => sideStep(chatKey(screen.agentId, screen.projectKey, screen.sessionId), { kind: 'hide' })}
             onQueue={(prompt: OutgoingPrompt) => {
+              // Not a message either way - queued, it would wait for the turn only to reach Codex as words.
+              const fast = fastCommand(prompt.text)
+              if (fast !== null) {
+                command(screen.agentId, screen.projectKey, {
+                  type: 'setFastMode',
+                  sessionId: screen.sessionId,
+                  on: fastAsked(fast, fastModeShown(feed.state.fastMode, feed.state.fastReport)),
+                })
+                return
+              }
+
               const aside = asideQuestion(prompt.text)
               if (aside !== null) {
                 // Queue is not offered for one (see Composer), but the send key may still bring it here.
@@ -3007,6 +3040,9 @@ export const App = () => {
                 sessionId: screen.sessionId,
                 id,
               })
+            }
+            onCancelCarryOn={() =>
+              command(screen.agentId, screen.projectKey, { type: 'cancelCarryOn', sessionId: screen.sessionId })
             }
             onStop={() =>
               command(screen.agentId, screen.projectKey, { type: 'stop', sessionId: screen.sessionId })
@@ -3161,6 +3197,7 @@ export const App = () => {
           model={feed.state.model ?? ''}
           effort={feed.state.effort ?? ''}
           mode={feed.state.permissionMode ?? ''}
+          fast={fastModeShown(feed.state.fastMode, feed.state.fastReport)}
           onApply={(change) => {
             setSheet('')
             if (change.model !== undefined) {
@@ -3175,6 +3212,13 @@ export const App = () => {
                 type: 'setEffort',
                 sessionId: onThread.sessionId,
                 effort: change.effort,
+              })
+            }
+            if (change.fast !== undefined) {
+              command(onThread.agentId, onThread.projectKey, {
+                type: 'setFastMode',
+                sessionId: onThread.sessionId,
+                on: change.fast,
               })
             }
           }}

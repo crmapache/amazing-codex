@@ -1,13 +1,16 @@
-import type { AgentEvent, AgentStatus, AgentUsage, EditorRef, OutrankedReason, QueuedMessage } from '../protocol'
+import type { FastModeReport } from './fastMode'
+import type { AgentEvent, AgentStatus, AgentUsage, EditorRef, OutrankedReason, QueuedMessage, RevertOutcome } from '../protocol'
 import type {
   BackgroundTask,
   CheckpointItem,
   FeedItem,
+  FileChange,
   ModPane,
   ModToast,
   PermDecision,
   RetryReason,
   TodoEntry,
+  UserItem,
   UserToken,
 } from './types'
 
@@ -83,6 +86,11 @@ export interface PanelState {
    * own. Absent, the tab follows the setting, as a fresh tab does.
    */
   ownModel?: string
+  /**
+   * What the catalogue expands [ownModel] into ("opus" -> "claude-opus-5-5"), when it knows. A pick is
+   * judged by it rather than by its own name, which may carry no generation (see carriesPick).
+   */
+  ownModelResolved?: string
   permissionMode?: string
   /**
    * A mode chosen but not yet confirmed. The button and the menu show it until the agent answers:
@@ -108,9 +116,29 @@ export interface PanelState {
   effort?: string
   /** A chosen effort until the shell confirms it - as with the model and the mode. */
   pendingEffort?: string
-  /** The context window selected for this conversation and a choice waiting for a process restart. */
+  /**
+   * The context window selected for this conversation and a choice waiting for the IDE's answer. What the gauge
+   * measures by when Codex has not counted yet, through the tab's catalogue (see contextOf).
+   */
   contextMode?: 'standard' | 'long'
   pendingContextMode?: 'standard' | 'long'
+
+  /**
+   * Whether this conversation asks for fast mode - the IDE's word (the `fastMode` message), drawn at once on a
+   * pick of one's own; undefined while it asks nothing and Codex's own config decides. Whether it is ON is
+   * [fastReport]'s: see feed/fastMode.ts for why it takes both.
+   */
+  fastMode?: boolean
+  /**
+   * What the stream last said about fast mode, at the thread's open or a turn's end - live turns only, and only
+   * since the ask last changed (see `fastModeApplied`).
+   */
+  fastReport?: FastModeReport
+  /**
+   * The reason the feed has already been told fast mode is unavailable for, since it was last asked for - so
+   * that every turn after it does not say the same thing again (see noteFastReport).
+   */
+  fastNoted?: string
 
   /**
    * The model the agent moved this conversation OFF by itself, when it did - and nothing while nobody
@@ -160,12 +188,14 @@ export interface PanelState {
    * Since that pick, a request that could carry it has actually begun - so the next signature is a
    * verdict on it rather than an echo of the one in flight.
    *
-   * Without this there is nothing to judge a pick by: while the old request keeps answering, a signature
-   * naming the model being left proves nothing at all. Two things raise it, and both mean "whatever comes
-   * next is a new request": a tool call that has come back (the agent goes to the model again with its
-   * result) and a turn of one's own beginning. Measured against a live CLI 2.1.263: a model set in the
-   * middle of a turn is taken at once, the request in flight answers on the old one, and the very next
-   * step - straight after the tool result - is signed by the new model, about 2.6s later.
+   * Without this there is nothing to judge a pick by: while the old turn keeps answering, a signature
+   * naming the model being left proves nothing at all. With Codex the request that carries a pick is the
+   * next `turn/start` and nothing earlier - it keeps a turn's model "for this turn and subsequent turns",
+   * and a tool coming back mid-turn goes on in the model the turn started on. So two things raise it, and
+   * both mean "the next answer is a new turn's": a turn of one's own beginning, and the end of the turn the
+   * pick was made in (a `result` - whatever starts the next turn, the queue, a phone, the plan approved).
+   * Claude Code took a pick at the next step and the original raised this on a tool result as well; read
+   * that way here, the rest of the turn on the old model was announced as the pick not arriving.
    */
   ownSwapDue?: boolean
   /**
@@ -198,6 +228,21 @@ export interface PanelState {
    * descriptions, which a turn's usage does not show.
    */
   liveContextUsed?: number
+  /**
+   * The window each model of this conversation has, by the CLI's model id, as the CLI says it at the end of
+   * every turn (`modelUsage` of the result).
+   *
+   * Never filled under Codex, and kept so on purpose: Codex's turn has no `modelUsage`, and its windows come with
+   * every step (`context`) and from its own catalogue, per model AND per window mode (see contextOf). A window
+   * learned per model alone would be the wrong one after every switch between Std and Long; the code stays for
+   * the merges from the original.
+   *
+   * The size the meter divides by when no exact figure is at hand (see contextOf): the estimate during a
+   * turn, and the phone handed a journal's end with no figure in it. A size guessed from the model's name
+   * was wrong there in the worst direction - Opus 5.5 has a million where the name read two hundred
+   * thousand, so a conversation at 29% stood at a red 100%.
+   */
+  contextWindows?: Record<string, number>
   cost: number
   /** The slash command list arrives from the agent itself when a session starts. */
   slashCommands: string[]
@@ -250,6 +295,21 @@ export interface PanelState {
    */
   queue: QueuedMessage[]
   /**
+   * The queue waits for the person's next message rather than for the turn: it came back with a tab closed
+   * while it worked and opened again, and the turn it was queued behind died with the close (see
+   * SessionQueue.hold on the plugin's side).
+   */
+  queueHeld: boolean
+  /**
+   * The files the turn going on now has changed so far - laid into the feed as one row when it ends (see
+   * closeChanges in feed/changes.ts), and empty again after that.
+   *
+   * Gathered as the results come rather than read back out of the feed at the end, because a subagent's
+   * edits never become cards of this feed: its calls are lines in its own log, and the result's diff is
+   * the one moment its changes can be counted.
+   */
+  turnChanges: FileChange[]
+  /**
    * A subagent's card by the tool_use_id of the Task/Agent call that spawned it - out of the task_started
    * system event. The subagent's own messages carry only a tool_use_id in parent_tool_use_id, while the
    * card may live under a task_id: without this map there is nothing to tie them together with.
@@ -289,6 +349,12 @@ export interface PanelState {
    * instead of being left running against a process that is gone.
    */
   stoppedForAccount?: boolean
+  /**
+   * When the IDE carries this conversation on by itself - a limit refused its turn and the work resumes once
+   * the window resets (see the carryOnWait message). Drawn as a row at the end of the feed with a way to say
+   * no (see CarryOnRow); absent when nothing is planned. `guess`: the limit did not say when it resets.
+   */
+  carryOn?: { at: number; guess: boolean }
   /** The conversation's process has died on its own since the last turn - the tab has something to point at. */
   crashed: boolean
   /** A context compaction is running right now - the status line should name that rather than "working". */
@@ -409,13 +475,24 @@ export type PanelAction =
    * steps rather than start a new turn with it. Such a message is only added to the feed and interrupts
    * nothing in it.
    */
-  | { kind: 'prompt'; tokens: UserToken[]; quotes: string[]; steering?: boolean; editor?: EditorRef; uuid?: string }
+  | {
+      kind: 'prompt'
+      tokens: UserToken[]
+      quotes: string[]
+      steering?: boolean
+      editor?: EditorRef
+      uuid?: string
+      /** The panel said it, not the person - see UserItem.auto. */
+      auto?: UserItem['auto']
+    }
   /**
    * The conversation was cut back to before the message `uuid` - see the rewound message in protocol.ts and
    * applyRewound in feed/build.ts. `all`: the feed does not hold the message and everything it holds came
    * after it, which the client works out from the journal numbers (see lastHeld in mobile/feed.ts).
    */
   | { kind: 'rewound'; uuid: string; all?: boolean }
+  /** The IDE's answer to putting back a turn's files - see changesReverted in protocol.ts. */
+  | { kind: 'changesReverted'; id: string; files: { path: string; outcome: RevertOutcome }[]; restore?: boolean }
   /**
    * replay marks an event of a past conversation's replay rather than a live turn: it lands in the feed
    * the same way but tells nothing about the conversation right now (see 'assistant').
@@ -501,8 +578,11 @@ export type PanelAction =
    * protocol.ts). Both kinds draw the chip, and only a choice is judged afterwards: read as a pick, an
    * announcement of the model a tab has been working on all along accused it of not arriving (see
    * [ownSwap]), and a re-attach was enough to put that in the feed of a conversation nobody had touched.
+   *
+   * [resolved] is what the tab's catalogue expands the model into, when the client has one: the reducer
+   * has no catalogue of its own, and without it a pick of "opus" cannot be told from a stay on Opus 4.8.
    */
-  | { kind: 'modelApplied'; model: string; error?: string; born?: boolean }
+  | { kind: 'modelApplied'; model: string; error?: string; born?: boolean; resolved?: string }
   | { kind: 'effortRequested'; effort: string }
   /**
    * The effort this conversation works at, as the shell says it does. There is no "applied" beside it
@@ -511,9 +591,18 @@ export type PanelAction =
    */
   | { kind: 'effortApplied'; effort: string }
   | { kind: 'contextModeRequested'; mode: 'standard' | 'long' }
-  | { kind: 'contextModeApplied'; mode: 'standard' | 'long' }
+  /**
+   * The window this conversation is in. [born] says the IDE is NAMING it - at a birth, to a client that has just
+   * joined, after a reset, for a tab not started yet - rather than reporting a change, exactly as with the model:
+   * only a change makes Codex's last count about another window (see the case in build.ts).
+   */
+  | { kind: 'contextModeApplied'; mode: 'standard' | 'long'; born?: boolean }
+  /** Whether this conversation asks for fast mode - the shell's word, or a pick of one's own drawn at once. */
+  | { kind: 'fastModeApplied'; on: boolean }
+  /** `/status` answered: a row with the conversation's id, and the IDE's word on the terminal line (see SessionInfoItem). */
+  | { kind: 'sessionInfo'; conversationId?: string; resume?: string; account?: string; onDefault?: boolean }
   /** The queue as the IDE now holds it - the whole list, from whichever window last changed it. */
-  | { kind: 'queue'; items: QueuedMessage[] }
+  | { kind: 'queue'; items: QueuedMessage[]; held?: boolean }
   /** A mark from the panel in the feed: that this conversation was branched off another, for instance. */
   | { kind: 'checkpoint'; chip: string; target: string; targetKey?: CheckpointItem['targetKey'] }
   /** Once a second it pulls up the duration of the calls that have not finished. */
@@ -522,6 +611,8 @@ export type PanelAction =
   | { kind: 'stopRequested' }
   /** The IDE is stopping this turn to move the conversation to another account - see stoppedForAccount. */
   | { kind: 'stoppedForAccount' }
+  /** When the IDE carries this conversation on by itself, or that it no longer will - see PanelState.carryOn. */
+  | { kind: 'carryOnWait'; at?: number; guess?: boolean }
   /**
    * The tab's process is being replaced while the tab itself was saying nothing - see processReplaced in
    * protocol.ts. Everything the process was holding apart from a turn (a workflow's fleet, a background
@@ -573,6 +664,8 @@ export const initialPanelState: PanelState = {
   pendingTasks: {},
   pausedMs: 0,
   queue: [],
+  queueHeld: false,
+  turnChanges: [],
   reachedStart: false,
   earlierPages: 0,
   lastPageRows: 0,

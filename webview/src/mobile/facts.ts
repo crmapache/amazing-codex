@@ -308,9 +308,9 @@ export const applyFact = (facts: ProjectFacts, message: ShellMessage, watching =
  * Past conversations are not lost by this: the phone has a screen for them already, reached from the
  * project rather than from the field.
  *
- * `/btw` is the one panel command kept: a question beside the work is exactly what a phone watching a long
- * run wants to ask, and the phone answers it itself, the panel's way - through the IDE's side question
- * rather than through the agent (see feed/side and the phone's onSend).
+ * `/btw` is kept: a question beside the work is exactly what a phone watching a long run wants to ask, and the
+ * phone answers it itself, the panel's way - through the IDE's side question rather than through the agent
+ * (see feed/side and the phone's onSend). So is `/fast`, answered the same way by the switch the run sheet has.
  *
  * Takes the two facts it is made of rather than the whole bundle, and that is what keeps the composer's
  * memo honest. Every project fact returns a new bundle and one of them arrives about once a second, so
@@ -325,8 +325,18 @@ export const phoneCommands = (
   added: ProjectFacts['added'] = {},
 ): CommandEntry[] =>
   buildCommands(t, commands, withAdded(hints, added)).filter(
-    (command) => command.group !== 'panel' || command.id === ASIDE_COMMAND,
+    (command) =>
+      command.group !== 'panel' || command.id === ASIDE_COMMAND || command.id === FAST_COMMAND || command.id === STATUS_COMMAND,
   )
+
+/** `/fast`, kept beside `/btw`: the phone answers it itself, by the same switch as its run sheet (see fastCommand). */
+const FAST_COMMAND = 'fast'
+
+/**
+ * `/status`, kept too: sent as a message, and the IDE answers it with the desk's row instead of passing it to the
+ * model (see SessionCommands.statusAsked).
+ */
+const STATUS_COMMAND = 'status'
 
 /**
  * The runs going in a project right now, or nothing.

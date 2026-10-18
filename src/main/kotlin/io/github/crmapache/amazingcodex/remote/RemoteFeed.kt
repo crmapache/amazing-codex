@@ -454,6 +454,19 @@ internal object RemoteFeed {
                     name,
                     JsonObject((value as? JsonObject).orEmpty().mapValues { (_, slot) -> cut(slot, words, SLOT_CHARS) }),
                 )
+                // The item of a pass of a list (see RunItem): its value is a slot's and gets a slot's cut, and
+                // why it is a second go is a line like a verdict's. The label stays - it is what the row is called.
+                "item" -> put(
+                    name,
+                    (value as? JsonObject)?.let { item ->
+                        JsonObject(
+                            item + mapOf(
+                                "value" to cut(item["value"], words, SLOT_CHARS),
+                                "again" to cut(item["again"], words, LINE_CHARS),
+                            ),
+                        )
+                    } ?: value,
+                )
                 else -> put(name, value)
             }
         }
@@ -473,7 +486,7 @@ internal object RemoteFeed {
                 "head" -> put(name, JsonObject((value as? JsonObject).orEmpty() + ("briefing" to BLANK)))
                 "stages" -> put(
                     name,
-                    mapObjects(value) { stage -> JsonObject(stage + ("cards" to mapObjects(stage["cards"], ::cardBody))) },
+                    mapObjects(value) { stage -> JsonObject(stage + ("cards" to mapObjects(stage["cards"], ::cardBody)) + eachBody(stage)) },
                 )
                 else -> put(name, value)
             }
@@ -489,6 +502,15 @@ internal object RemoteFeed {
 
     private fun cardBody(card: JsonObject): JsonObject =
         JsonObject(card + mapOf("prompt" to BLANK, "dod" to BLANK, "after" to BLANK))
+
+    /**
+     * What the list of a stage that runs once per item is, emptied like a card's prompt: it is said to the head
+     * and read in the editor, and the name of the item is all a timeline needs of it.
+     */
+    private fun eachBody(stage: JsonObject): Map<String, JsonElement> {
+        val each = stage["each"] as? JsonObject ?: return emptyMap()
+        return mapOf("each" to JsonObject(each + ("description" to BLANK)))
+    }
 
     /** Every object of an array through one rule, and anything that is not an array left alone. */
     private fun mapObjects(value: JsonElement?, transform: (JsonObject) -> JsonObject): JsonElement {

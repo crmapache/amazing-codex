@@ -1,4 +1,4 @@
-import type { SearchHit } from '../protocol'
+import type { SearchHit, SearchScope } from '../protocol'
 import type { FeedItem } from './types'
 import { tokensText } from './tokens'
 
@@ -6,6 +6,61 @@ import { tokensText } from './tokens'
  * The rules of the search that break without showing - apart from the screens, so a test can hold
  * them (see Search.tsx for the window, SearchCapsule.tsx for the capsule, App.tsx for the wiring).
  */
+
+/** The window's three tabs: the two scopes of a typed search, and the model's. */
+export type SearchTab = SearchScope | 'ai'
+
+/** The tabs in the order they stand - the order the keys number them by and step through. */
+export const SEARCH_TABS: readonly SearchTab[] = ['chat', 'project', 'ai']
+
+/**
+ * The tab [step] places along from [tab], round the end - where the panel's next and previous tab keys take the
+ * window while it is open: the tabs the mouse can reach there are its own (see pressPanelKey in App).
+ */
+export const searchTabBeside = (tab: SearchTab, step: 1 | -1): SearchTab =>
+  SEARCH_TABS[(SEARCH_TABS.indexOf(tab) + step + SEARCH_TABS.length) % SEARCH_TABS.length] ?? tab
+
+/**
+ * The tab a digit key stands for (with Alt and Cmd held, see searchKeys in Search.tsx) - by the key's place
+ * rather than its character, so a keyboard printing "&" or "é" on it means the same, and so does the keypad.
+ */
+export const searchTabOfKey = (code: string): SearchTab | undefined => {
+  const digit = /^(?:Digit|Numpad)([1-9])$/.exec(code)?.[1]
+  return digit ? SEARCH_TABS[Number(digit) - 1] : undefined
+}
+
+/**
+ * A press of the window's chord off a Mac, held until it is known whether it typed (see the keys in Search.tsx).
+ *
+ * Off a Mac the chord is Ctrl+Alt, and on Windows that is the right Alt: on a Spanish keyboard with 2 it is "@", on a
+ * French one with 3 "#", on a German one with 2 "²", on a Polish one with C "ć" - taken for the chord, the character
+ * never reached the field. Nothing in the press says which it is: the IDE's browser carries no AltGraph (its key
+ * events know Ctrl, Alt, Shift and Meta alone), and the page, served from no secure origin, is not handed the
+ * keyboard's layout to compare the key with - and the key alone lies both ways: a Russian keyboard gives "с" for C,
+ * a French one "&" for 1, and neither types anything with Ctrl+Alt. So the browser is let do what it does: a
+ * character it puts into the field is the field's ([typed]), and a press it lets go of with nothing typed was the
+ * chord, done as its key comes up ([release]).
+ */
+export const chordWait = () => {
+  let held: { code: string; act: () => void } | null = null
+
+  return {
+    press: (code: string, act: () => void) => {
+      held = { code, act }
+    },
+    typed: () => {
+      held = null
+    },
+    /** Whether the key coming up was the chord's, and the chord was done. */
+    release: (code: string): boolean => {
+      const press = held
+      if (!press || press.code !== code) return false
+      held = null
+      press.act()
+      return true
+    },
+  }
+}
 
 /** A piece of a snippet: painted or not. */
 export interface SnippetPiece {

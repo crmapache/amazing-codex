@@ -80,6 +80,13 @@ button:disabled {
  * element that measures itself against the window - see components/Tooltips.tsx.
  */
 
+/* A chip with a picture behind it shows the picture under the pointer (see ImagePreview.tsx), and the
+   pointer says so before the picture comes. Here rather than with each chip: the field, the feed and the
+   queue draw their chips three different ways, and the mark is the one thing they share. */
+[data-acc-preview] {
+  cursor: pointer;
+}
+
 /* The user explicitly asked for the focus ring to be removed everywhere: it irritates more than it helps.
    One shared reset instead of an outline:none on every class. */
 *:focus,

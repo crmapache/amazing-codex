@@ -166,6 +166,26 @@ class SessionJournalTest {
         assertEquals(4, journal.append("""{"n":"after"}""", at = 0).seq)
     }
 
+    /**
+     * A client holding anything from before a journal started over holds a feed that is gone - up to the very last
+     * entry, and while nothing has come since: a journal of a tab closed and opened again is one such.
+     */
+    @Test
+    fun `a client holding a feed from before the journal started over holds a wiped one`() {
+        val journal = SessionJournal()
+        repeat(3) { journal.append("""{"n":$it}""", at = 0) }
+        journal.reset()
+        assertTrue(journal.wiped(1))
+        assertTrue(journal.wiped(3))
+        assertFalse(journal.wiped(0))
+        assertFalse(journal.wiped(journal.append("""{"n":"after"}""", at = 0).seq))
+
+        val again = SessionJournal(after = 40)
+        assertTrue(again.wiped(40))
+        assertFalse(again.wiped(0))
+        assertEquals(41, again.append("""{"n":"back"}""", at = 0).seq)
+    }
+
     // --- Strands -------------------------------------------------------------------
 
     private val report = SessionJournal.Strand("task:wf", SessionJournal.Strand.Kind.REPORT)

@@ -1,9 +1,9 @@
 ---
 paths:
   - "webview/src/components/items/Rows.tsx"
-  - "src/main/kotlin/io/github/crmapache/amazingclaudecode/claude/AgentStream.kt"
-  - "src/main/kotlin/io/github/crmapache/amazingclaudecode/claude/ClaudeLogin.kt"
-  - "src/main/kotlin/io/github/crmapache/amazingclaudecode/claude/ProjectAuth.kt"
+  - "src/main/kotlin/io/github/crmapache/amazingcodex/codex/AgentStream.kt"
+  - "src/main/kotlin/io/github/crmapache/amazingcodex/codex/CodexLogin.kt"
+  - "src/main/kotlin/io/github/crmapache/amazingcodex/codex/ProjectAuth.kt"
   - "webview/src/components/LoginGate.tsx"
 ---
 
@@ -24,13 +24,13 @@ paths:
   код едет и в повторах (`api_retry`), поэтому строка ожидания называет причину с первой попытки.
 - **Заглушка становится красной строкой с дверью, а не серым абзацем** (`ErrorItem.signIn`,
   `SignInOffer` в `Rows.tsx`). Кнопка та же, что на экране входа - `login`, то есть терминал в ящике
-  текущего аккаунта (`ClaudeLogin`), - и там же вторая, к экрану аккаунтов, но только когда есть куда
+  текущего аккаунта (`CodexLogin`), - и там же вторая, к экрану аккаунтов, но только когда есть куда
   переключаться: строка «сменить аккаунт», ведущая к списку из одного имени, тратит нажатие.
   Сам текст ложится ошибкой ПЕРЕД разбором блоков, и заглушка выбрасывается как эхо
   (`alreadyShownAsError`): одна беда - одна строка.
 - **В реплее двери нет.** Вход, упавший месяц назад, - запись, а не работа; кнопка предлагала бы чинить
   то, чего никто не делает (см. «Прошлый разговор - запись»).
-- **Следующее сообщение поднимает процесс заново** (`ClaudeSessions.renewAfterSignIn`). Процесс читает
+- **Следующее сообщение поднимает процесс заново** (`CodexSessions.renewAfterSignIn`). Процесс читает
   credential один раз, при старте, поэтому встретивший отвергнутый refresh встретит его снова, как бы
   человек ни починил вход. Подтвердить вход нечем - вопрос «залогинен ли» отвечает «да» и над мёртвым
   токеном, - поэтому переподнятие висит не на подтверждении, а на следующем сообщении, где свежий

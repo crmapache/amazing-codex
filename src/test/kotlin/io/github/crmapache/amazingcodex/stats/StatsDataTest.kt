@@ -324,4 +324,59 @@ class StatsDataTest {
         val decoded = StatsJson.decodeDay(StatsJson.encodeDay(one))
         assertEquals(mapOf("voice" to 3, "screen:history" to 1), decoded.features)
     }
+
+    /** The hour since the epoch that [at] falls in. */
+    private fun hourOf(at: String): Long = java.time.Instant.parse(at).epochSecond / 3600
+
+    @Test
+    fun `the tokens of the transcripts keep every hour through the file and a merge`() {
+        val mine = snapshot {
+            tokens["h-1"] = TokenHome().apply {
+                record(mapOf(hourOf("2026-10-16T09:00:00Z") to 500L, hourOf("2026-10-16T10:00:00Z") to 40L), 1_000)
+            }
+        }
+        val theirs = snapshot {
+            tokens["h-1"] = TokenHome().apply {
+                record(mapOf(hourOf("2026-10-16T09:00:00Z") to 300L, hourOf("2026-10-16T11:00:00Z") to 70L), 2_000)
+            }
+            tokens["h-wsl"] = TokenHome().apply { record(mapOf(hourOf("2026-10-16T09:00:00Z") to 5L), 3_000) }
+        }
+
+        val decoded = StatsJson.decode(StatsJson.encode(mine.mergedWith(theirs)))
+        assertNotNull(decoded)
+
+        // Two copies of one folder: the larger of each hour, the later reading.
+        val home = decoded.tokens["h-1"]
+        assertNotNull(home)
+        assertEquals(
+            mapOf(
+                hourOf("2026-10-16T09:00:00Z") to 500L,
+                hourOf("2026-10-16T10:00:00Z") to 40L,
+                hourOf("2026-10-16T11:00:00Z") to 70L,
+            ),
+            home.hours.toMap(),
+        )
+        assertEquals(2_000, home.readAt)
+        assertEquals(3_000, decoded.tokens["h-wsl"]?.readAt)
+    }
+
+    @Test
+    fun `the tokens come out by the calendar of the zone they are looked at from, every folder added up`() {
+        val book = snapshot {
+            tokens["h-1"] = TokenHome().apply {
+                record(mapOf(hourOf("2026-10-16T21:00:00Z") to 100L, hourOf("2026-10-16T09:00:00Z") to 7L), 1)
+            }
+            tokens["h-wsl"] = TokenHome().apply { record(mapOf(hourOf("2026-10-16T21:00:00Z") to 20L), 1) }
+        }
+
+        val utc = book.tokensByDay(java.time.ZoneId.of("UTC"))
+        assertEquals(setOf("2026-10-16"), utc.keys)
+        assertEquals(120L, utc["2026-10-16"]!![21])
+        assertEquals(7L, utc["2026-10-16"]!![9])
+
+        // Four hours east, nine in the evening is already one in the morning of the next day.
+        val tbilisi = book.tokensByDay(java.time.ZoneId.of("Asia/Tbilisi"))
+        assertEquals(120L, tbilisi["2026-10-17"]!![1])
+        assertEquals(7L, tbilisi["2026-10-16"]!![13])
+    }
 }

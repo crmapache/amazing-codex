@@ -100,9 +100,10 @@ const quoteOf = (raw: unknown): Quote | null => {
  * whole draft.
  *
  * A pasted picture comes back with its bytes when its file was still there (the IDE reads it back). One
- * whose file is gone - swept after two weeks, or never written - comes back as a reference to that path
- * if there is one, and not at all if there is not: the same rule a sent message follows when it is put
- * back into the field (see reusableMessage).
+ * whose bytes were not read back - the file swept after two weeks, or past what is read back - comes back
+ * as a picture chip naming that path if there is one (it travels as `@path`, and the preview says when the
+ * file is gone), and not at all if there is not: the same rule a sent message follows when it is put back
+ * into the field (see reusableMessage).
  */
 export const restoredDraft = (raw: unknown): SavedDraft | null => {
   if (typeof raw !== 'object' || raw === null) return null

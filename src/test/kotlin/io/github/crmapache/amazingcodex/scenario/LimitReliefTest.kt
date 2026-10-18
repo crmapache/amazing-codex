@@ -1,10 +1,16 @@
 package io.github.crmapache.amazingcodex.scenario
 
 import io.github.crmapache.amazingcodex.codex.AccountUsage
+import io.github.crmapache.amazingcodex.codex.CodexRateLimit
+import io.github.crmapache.amazingcodex.codex.CodexShapes
+import io.github.crmapache.amazingcodex.codex.CodexUsage
+import io.github.crmapache.amazingcodex.codex.ExtraUsageAnnouncements
 import io.github.crmapache.amazingcodex.scenario.LimitRelief.Candidate
 import io.github.crmapache.amazingcodex.scenario.LimitRelief.Way
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
 
 /**
  * Where a run goes on when its account's limit refuses it.
@@ -176,5 +182,81 @@ class LimitReliefTest {
         )
 
         assertEquals(Way.Wait(now + LimitRelief.MIN_WAIT_MS), way)
+    }
+
+    // --- Business seats: no window of the plan, only the workspace's spending cap -------------------------
+
+    private val day = 24 * hour
+
+    /** The IDE's memory of the accounts, fed the way Codex speaks - see AccountUsage. */
+    private val usage = AccountUsage(publish = {}, announcements = { ExtraUsageAnnouncements() })
+
+    /** A whole answer to the read about a seat whose only limit is its cap, at [percent] until [resets]. */
+    private fun seat(account: String, percent: Int, resets: Long) = usage.fold(
+        account,
+        CodexUsage.parse(
+            CodexShapes.usageAnswer(
+                Json.parseToJsonElement(
+                    """{"rateLimits":{"individualLimit":{"limit":"100","used":"$percent",
+                       "remainingPercent":${100 - percent},"resetsAt":${resets / 1000}}}}""",
+                ).jsonObject,
+            ),
+        ),
+        now,
+    )
+
+    private fun candidate(id: String) = Candidate(id, usage.standing(id, now), runs = true)
+
+    /**
+     * The loop this was written against. The cap's reset was unknown, so a refused seat read as free a quarter of an
+     * hour after its refusal: the run went from one spent seat to the other and back every fifteen minutes, refused
+     * each time, until the end of the month. Now a spent cap refuses its seat until the budget starts over, and with
+     * nothing else free the run waits for the first cap to start over - not a quarter of an hour.
+     */
+    @Test
+    fun `a run does not go round business seats whose caps are spent`() {
+        val sooner = now + 9 * day
+        val later = now + 14 * day
+        seat("seat-a", 100, later)
+        seat("seat-b", 100, sooner)
+
+        val way = LimitRelief.choose("seat-a", "seat-a", listOf(candidate("seat-a"), candidate("seat-b")), now)
+
+        assertEquals(Way.Wait(sooner / 1000 * 1000), way)
+    }
+
+    /** A seat with room in its cap is measured by it, and a run goes to the least spent one. */
+    @Test
+    fun `a run goes on on the business seat with the most room in its cap`() {
+        seat("seat-a", 100, now + 14 * day)
+        seat("seat-b", 64, now + 14 * day)
+        seat("seat-c", 12, now + 14 * day)
+
+        val way = LimitRelief.choose(
+            "seat-a",
+            "seat-a",
+            listOf(candidate("seat-a"), candidate("seat-b"), candidate("seat-c")),
+            now,
+        )
+
+        assertEquals(Way.Go("seat-c"), way)
+    }
+
+    /**
+     * The refusal itself names the cap and its start-over (see CodexShapes.resetOf): a seat refused this way is not
+     * taken for free again before then, even when no figure of it has arrived yet.
+     */
+    @Test
+    fun `a seat refused by its cap stays refused until the cap starts over`() {
+        val month = (now + 14 * day) / 1000 * 1000
+        usage.noteRateLimit(
+            "seat-a",
+            CodexRateLimit.Verdict(extraUsage = false, stopped = true, window = "workspace_member_usage_limit_reached", resetsAt = month),
+            now,
+        )
+
+        val way = LimitRelief.choose("seat-a", "seat-a", listOf(candidate("seat-a")), now)
+
+        assertEquals(Way.Wait(month), way)
     }
 }

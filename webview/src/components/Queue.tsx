@@ -1,18 +1,20 @@
 import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
-import { withoutShellText } from '../feed/bash'
 import type { QueuedMessage } from '../protocol'
 import s from './composer.module.css'
 import { useT } from '../i18n'
 import { ReuseArrow } from './items/UserCard'
+import { QueueLine } from './QueueLine'
 import { sendKeyCap, type SendKey } from '../sendKey'
 
 interface QueueProps {
   /**
-   * The list as the IDE holds it - see QueuedMessage. What the message was typed with and the bytes of
-   * anything attached to it stay there: this is a row, and a row needs the text, the count beside it, and
-   * a name to take it back out by.
+   * The list as the IDE holds it - see QueuedMessage. The bytes of anything attached stay there: this is a
+   * row, and a row needs the message's pieces, a name to take it back out by, and a way to ask for a
+   * picture when the pointer is on one (see QueueLine).
    */
   items: QueuedMessage[]
+  /** The tab the queue belongs to - a queued picture is asked of the IDE by its message (see PreviewPlace). */
+  sessionId: string
   onReorder: (from: number, to: number) => void
   onRemove: (id: string) => void
   /** Take a message out and back into the field, to be corrected and queued again (see App.takeQueued). */
@@ -26,9 +28,15 @@ interface QueueProps {
   editing: { before: string | null } | null
   /** The key that sends - while a message is being edited it puts it back instead, and the place says so. */
   sendKey: SendKey
+  /**
+   * The queue waits for the person's next message, not for a turn: it came back with a tab opened again after
+   * it was closed while working, and the turn it was queued behind died with the close (see
+   * SessionQueue.hold). Said in the head, or the rows would promise to fire on their own and never do.
+   */
+  held?: boolean
 }
 
-export const Queue = ({ items, onReorder, onRemove, onEdit, editing, sendKey }: QueueProps) => {
+export const Queue = ({ items, sessionId, onReorder, onRemove, onEdit, editing, sendKey, held = false }: QueueProps) => {
   const t = useT()
   const [dragFrom, setDragFrom] = useState<number | null>(null)
   const [dragOver, setDragOver] = useState<number | null>(null)
@@ -95,7 +103,9 @@ export const Queue = ({ items, onReorder, onRemove, onEdit, editing, sendKey }: 
       <div className={s.queueHead}>
         <span className={s.queueLabel}>{t.chrome.queue.label}</span>
         {/* Nothing to count and nothing to drag while the one message there is sits in the field. */}
-        {items.length > 0 ? <span className={s.queueHint}>{t.chrome.queue.hint(items.length)}</span> : null}
+        {items.length > 0 ? (
+          <span className={s.queueHint}>{held ? t.chrome.queue.held(items.length) : t.chrome.queue.hint(items.length)}</span>
+        ) : null}
         <div className={s.spacer} />
       </div>
 
@@ -114,8 +124,7 @@ export const Queue = ({ items, onReorder, onRemove, onEdit, editing, sendKey }: 
             ⠿
           </span>
           <span className={s.queueNum}>{index + 1}</span>
-          <span className={s.queueText}>{withoutShellText(item.text)}</span>
-          {item.attach ? <span className={s.queueAttach}>{item.attach}</span> : null}
+          <QueueLine item={item} sessionId={sessionId} className={`${s.queueText} ${s.queueLine}`} />
           {/* Disabled while another message is being edited: there is one field, and a second message
               put into it would replace the first - which is out of the queue and would be lost. */}
           <button

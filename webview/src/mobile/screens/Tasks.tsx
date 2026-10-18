@@ -7,6 +7,7 @@ import type { AgentTab } from '../../components/StreamSwitcher'
 import { Back } from './Back'
 import m from '../mobile.module.css'
 import { useT } from '../../i18n'
+import { EmptyPlate } from './EmptyPlate'
 
 /** The phone has no "clear finished agents", so every agent the turn ever ran stays on this screen. */
 const NO_HIDDEN_TASKS: ReadonlySet<string> = new Set()
@@ -57,7 +58,7 @@ export const Tasks = ({ feed, cards, title, onAgent, onStopTask, onBack }: Tasks
       </header>
 
       <div className={m.pageList}>
-        {nothing && <p className={m.empty}>{t.mobile.tasks.nothing}</p>}
+        {nothing && <EmptyPlate title={t.mobile.tasks.nothing} />}
 
         {todo && todo.todos.length > 0 && (
           <>

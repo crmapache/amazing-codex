@@ -20,6 +20,7 @@ import {
 } from '../askSteps'
 import { Back } from './Back'
 import m from '../mobile.module.css'
+import { EmptyPlate } from './EmptyPlate'
 
 interface DecisionProps {
   feed: PanelState
@@ -203,7 +204,7 @@ export const Decision = ({
         )}
 
         {!waiting && (
-          <p className={m.empty}>{t.mobile.decision.nothingWaiting}</p>
+          <EmptyPlate title={t.mobile.decision.nothingWaiting} />
         )}
 
         {/* One line of what the agent was doing. This is what makes reading the conversation optional

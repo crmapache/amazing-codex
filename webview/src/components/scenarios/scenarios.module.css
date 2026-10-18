@@ -2212,6 +2212,14 @@
   color: var(--acc-fg-ghost);
 }
 
+/* The list of a stage that runs once per item: its item's name and what the list is, between the stage's own
+   settings and its cards - it belongs to every card of the stage. */
+.listBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .cardPair {
   display: flex;
   gap: 8px;
@@ -2661,6 +2669,17 @@
   min-width: 4px;
 }
 
+/* The item a pass of a list is for, by name - one card seven times is seven items, and this line is what tells
+   the rows apart, so it reads before the slots and the card's own words. */
+.stepItem {
+  max-width: 100%;
+  font: 500 11.5px var(--acc-font);
+  color: var(--acc-fg-body);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .stepTime {
   flex: none;
   font: 10.5px var(--acc-mono);
@@ -2696,6 +2715,11 @@
 
 .stepVerdictBad {
   color: var(--acc-bad-light);
+}
+
+/* An item put off until the rest of the list: not done and not failed - it comes back. */
+.stepVerdictLater {
+  color: var(--acc-warn);
 }
 
 .stepNudge {

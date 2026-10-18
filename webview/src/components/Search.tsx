@@ -1,20 +1,32 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { copyToClipboard } from '../clipboard'
 import { describeWhen } from '../feed/when'
-import { groupByChat, snippetPieces, type SearchGroup } from '../feed/search'
+import { chordWait, groupByChat, SEARCH_TABS, searchTabOfKey, snippetPieces, type SearchGroup, type SearchTab } from '../feed/search'
 import type { SearchHit, SearchProgressStep, SearchScope } from '../protocol'
 import { useHoverTarget } from '../hooks/useHoverTarget'
 import { useWheelScroll } from '../hooks/useWheelScroll'
 import { useFieldHistory } from '../hooks/useFieldHistory'
 import { useT } from '../i18n'
 import type { Dict } from '../i18n/en'
+import { keyText, pageCaps } from '../panelKeys'
+import type { KeyCap } from './HotkeyCaps'
 import s from './search.module.css'
 import { Magnifier } from './SearchCapsule'
 
-/** The three tabs: the two scopes of a typed search, and the model's. */
-export type SearchTab = SearchScope | 'ai'
+export type { SearchTab }
 
-const SEARCH_TABS: readonly SearchTab[] = ['chat', 'project', 'ai']
+/**
+ * The window's own keys, one family: Alt with Cmd (Ctrl off a Mac) and a key - the switches' C and W, the pair
+ * Find in Files has, and the tabs by number. Cmd with a digit alone would have been the obvious choice for the
+ * tabs, and it is the IDE's: it opens the tool windows before the page hears the press (see PanelKeys.kt). Alt
+ * with Cmd and 1 to 3 is bound in no default keymap of 2026.2 and in no plugin it ships; only the Visual Studio
+ * keymap takes Ctrl+Alt+1 to 3.
+ */
+export const searchKeys = {
+  tab: (tab: SearchTab): KeyCap[] => pageCaps.chord(['mod', 'alt'], pageCaps.key(String(SEARCH_TABS.indexOf(tab) + 1))),
+  matchCase: (): KeyCap[] => pageCaps.chord(['mod', 'alt'], pageCaps.key('C')),
+  wholeWords: (): KeyCap[] => pageCaps.chord(['mod', 'alt'], pageCaps.key('W')),
+}
 
 /** One and the same empty list, so the selection is not reset on every render that shows nothing. */
 const NO_HITS: readonly SearchHit[] = []
@@ -172,6 +184,9 @@ export const Search = ({
     field.style.height = `${Math.min(line * AI_LINES_MAX, Math.max(line * AI_LINES_MIN, field.scrollHeight))}px`
   }, [aiQuery, tab])
 
+  /** The window's chord off a Mac, waiting for its key to come up (see chordWait). */
+  const chordHeld = useRef(chordWait())
+
   /*
    * The keys the window answers to. Escape puts the window away and nothing else - in the
    * capture phase, ahead of the panel's own handler that would stop the agent, exactly as the confirm
@@ -190,21 +205,30 @@ export const Search = ({
         return
       }
 
-      // The field's two switches, by the keys Find in Files gives them: Alt+Cmd+C and Alt+Cmd+W (Ctrl
-      // for Cmd off a Mac). By the key's code, not its character - with Alt held a Mac types "ç" for C.
-      if (tab !== 'ai' && event.altKey && (event.metaKey || event.ctrlKey) && !event.shiftKey) {
-        if (event.code === 'KeyC') {
+      // The window's chord (see searchKeys): the tabs by number, Alt+Cmd+1 to 3 - asked for in a report: the three
+      // tabs could be switched only by mouse, on every tab, the model's too - and the field's two switches by the keys
+      // Find in Files gives them, Alt+Cmd+C and Alt+Cmd+W. Ctrl for Cmd off a Mac, and the keys by their code rather
+      // than their character: with Alt held a Mac types "ç" for C.
+      const chord = event.altKey && (event.metaKey || event.ctrlKey) && !event.shiftKey
+      const byNumber = chord ? searchTabOfKey(event.code) : undefined
+      const act = byNumber
+        ? () => onTab(byNumber)
+        : chord && tab !== 'ai' && event.code === 'KeyC'
+          ? () => onMatchCase(!matchCase)
+          : chord && tab !== 'ai' && event.code === 'KeyW'
+            ? () => onWholeWords(!wholeWords)
+            : undefined
+      if (act) {
+        // A Mac types nothing under Cmd: the chord is the chord. Off a Mac it may be the right Alt typing a
+        // character, and the browser is let show which (see chordWait) - a dead key always is one.
+        if (event.metaKey) {
           event.preventDefault()
           event.stopPropagation()
-          onMatchCase(!matchCase)
-          return
+          act()
+        } else if (event.key !== 'Dead') {
+          chordHeld.current.press(event.code, act)
         }
-        if (event.code === 'KeyW') {
-          event.preventDefault()
-          event.stopPropagation()
-          onWholeWords(!wholeWords)
-          return
-        }
+        return
       }
 
       const pick = selected >= 0 ? shown[selected] : undefined
@@ -269,9 +293,21 @@ export const Search = ({
       }
     }
 
+    // What the held chord waits for: a character the browser puts into the field, or its key coming up.
+    const onTyped = () => chordHeld.current.typed()
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (chordHeld.current.release(event.code)) event.stopPropagation()
+    }
+
     window.addEventListener('keydown', onKeyDown, true)
-    return () => window.removeEventListener('keydown', onKeyDown, true)
-  }, [onDismiss, onPick, onRunAi, shown, selected, tab, aiRunning, matchCase, wholeWords, onMatchCase, onWholeWords])
+    window.addEventListener('beforeinput', onTyped, true)
+    window.addEventListener('keyup', onKeyUp, true)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true)
+      window.removeEventListener('beforeinput', onTyped, true)
+      window.removeEventListener('keyup', onKeyUp, true)
+    }
+  }, [onDismiss, onPick, onRunAi, onTab, shown, selected, tab, aiRunning, matchCase, wholeWords, onMatchCase, onWholeWords])
 
   // The selected hit follows the keys into view.
   useEffect(() => {
@@ -294,7 +330,7 @@ export const Search = ({
   return (
     <>
       <div className={s.scrim} onClick={onDismiss} />
-      <div className={s.window} ref={window_} role="dialog" aria-modal="true" aria-label={t.search.title}>
+      <div className={s.window} ref={window_} role="dialog" aria-modal="true" aria-label={t.search.title} data-acc-search="">
         <div className={s.tabs} role="tablist">
           {SEARCH_TABS.map((one) => (
             <button
@@ -303,6 +339,9 @@ export const Search = ({
               role="tab"
               aria-selected={one === tab}
               className={`${s.tab} ${one === tab ? s.tabOn : ''} ${one === 'ai' ? s.tabAi : ''}`}
+              // The key alone: the tab's name is right there on it (see the panel's rule on hints).
+              data-tooltip={keyText([searchKeys.tab(one)])}
+              data-tooltip-at="bottom"
               onClick={() => onTab(one)}
             >
               {one === 'ai' ? <AiMark busy={aiRunning} /> : null}
@@ -373,10 +412,10 @@ export const Search = ({
                 />
               ) : null}
               <span className={s.switches}>
-                <FieldSwitch on={matchCase} label={t.search.matchCase} onToggle={() => onMatchCase(!matchCase)}>
+                <FieldSwitch on={matchCase} label={t.search.matchCase} keys={searchKeys.matchCase()} onToggle={() => onMatchCase(!matchCase)}>
                   Cc
                 </FieldSwitch>
-                <FieldSwitch on={wholeWords} label={t.search.wholeWords} onToggle={() => onWholeWords(!wholeWords)}>
+                <FieldSwitch on={wholeWords} label={t.search.wholeWords} keys={searchKeys.wholeWords()} onToggle={() => onWholeWords(!wholeWords)}>
                   W
                 </FieldSwitch>
               </span>
@@ -665,15 +704,27 @@ const SteadyWord = ({ word, other }: { word: string; other: string }) => (
 /**
  * One of the field's two switches - Match case and Whole words, the pair Find in Files has, lettered
  * the way it letters them. "Cc" and "W" are not words and are not translated; the tooltip says what
- * they do. The press does not take the keyboard from the field, like the × beside them.
+ * they do, and by which key. The press does not take the keyboard from the field, like the × beside them.
  */
-const FieldSwitch = ({ on, label, onToggle, children }: { on: boolean; label: string; onToggle: () => void; children: ReactNode }) => (
+const FieldSwitch = ({
+  on,
+  label,
+  keys,
+  onToggle,
+  children,
+}: {
+  on: boolean
+  label: string
+  keys: KeyCap[]
+  onToggle: () => void
+  children: ReactNode
+}) => (
   <button
     type="button"
     className={`${s.switch} ${on ? s.switchOn : ''}`}
     aria-pressed={on}
     aria-label={label}
-    data-tooltip={label}
+    data-tooltip={`${label} (${keyText([keys])})`}
     data-tooltip-at="bottom"
     onMouseDown={(event) => event.preventDefault()}
     onClick={onToggle}

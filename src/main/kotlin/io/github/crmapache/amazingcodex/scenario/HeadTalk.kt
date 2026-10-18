@@ -76,6 +76,29 @@ internal object HeadTalk {
             "main thread answers, and it answers quickly. A command you run in the background is not " +
             "waited for: if you need what it returns, wait for it before you end your turn."
 
+    /** How much of what a first go ran into a second go is told - one reason, on a launch argument (see [cardBriefing]). */
+    const val AGAIN_CHARS = 600
+
+    /**
+     * What a card is told beyond its prompt, and for a second go at an item of a list (see StageList.putOff)
+     * what the first go ran into.
+     *
+     * Said here rather than added to the prompt, and the difference matters: a prompt that starts with a
+     * command a person types has everything after the command's name read as its arguments, and a paragraph
+     * the panel wrote under it would change what the command does. The briefing reaches the session beside
+     * its task instead. It travels as a launch argument, so it obeys that rule: one line, no quotation mark
+     * and no apostrophe - a reason the head wrote is the one part of it this file did not write, and is made
+     * to obey it here, its marks turned into the typographic ones a shell does not read.
+     */
+    fun cardBriefing(again: String): String {
+        if (again.isBlank()) return CARD_BRIEFING
+        val reason = again.replace('"', '”').replace('\'', '’').split(Regex("\\s+")).filter(String::isNotEmpty).joinToString(" ")
+        val cut = if (reason.length <= AGAIN_CHARS) reason else reason.take(AGAIN_CHARS) + "..."
+        return "$CARD_BRIEFING This is a second go at this task: an earlier go did not finish it, and the main " +
+            "thread put it off until the rest of the list was done. What the earlier go ran into: $cut - look at " +
+            "what it left behind before you start anything over."
+    }
+
     /** The first message of the run: what it is for, how the board works, and what to answer with. */
     fun opening(scenario: Scenario, projectPath: String, inputs: Map<String, String>, total: Int): String {
         val said = scenario.head.briefing.trim()
@@ -111,6 +134,17 @@ internal object HeadTalk {
             appendLine("2. **What to do about a question it stopped on**, if it stops on one.")
             appendLine("3. **Whether it is done**, once its turn is over, judged against its definition of done.")
             appendLine()
+            val lists = scenario.stages.filter { it.each != null }
+            if (lists.isNotEmpty()) {
+                appendLine(
+                    "${stageNames(lists)} ${if (lists.size == 1) "runs" else "run"} once for each item of a " +
+                        "list rather than a set number of times. As such a stage begins, before any of its " +
+                        "cards, you will be asked one thing more: the list itself, once. The panel then gives " +
+                        "the stage exactly one pass per item and writes each item into its pass, so the " +
+                        "person can see how many there are and which one is going.",
+                )
+                appendLine()
+            }
             appendLine(
                 "Every message ends by naming the json object it wants back. Answer with one or two " +
                     "sentences first - those are shown to the person in the timeline, so say what you " +
@@ -121,7 +155,14 @@ internal object HeadTalk {
             appendLine("## This run")
             appendLine()
             appendLine("- Project folder: $projectPath")
-            appendLine("- Cards to get through: $total")
+            appendLine(
+                if (lists.isEmpty()) {
+                    "- Cards to get through: $total"
+                } else {
+                    "- Cards to get through: $total for now, counting one pass of every stage that runs per " +
+                        "item - the count grows by its list once you have given it"
+                },
+            )
             appendLine()
             if (scenario.inputs.isNotEmpty()) {
                 appendLine(
@@ -137,6 +178,57 @@ internal object HeadTalk {
             append("Say you have read this, and answer with `{\"ready\": true}`.")
         }
     }
+
+    private fun stageNames(stages: List<Stage>): String =
+        stages.joinToString(" and ") { "The stage \"${it.title.ifBlank { "Untitled" }}\"" }
+
+    /**
+     * Asking for the list a stage runs once per item of (see Stage.each), as the stage begins.
+     *
+     * The cards' prompts go with the question, because the list is only right if its values fit where they
+     * land: an item written into `/plan [[card]]` has to be a card's link, and the head can only know that
+     * by seeing the line. What the person said the list is comes first, and it is the whole of the rule -
+     * the head picks nothing else about this stage.
+     */
+    fun listRequest(stage: Stage, each: StageEach, number: Int, stages: Int, prompts: List<Pair<Card, String>>): String =
+        buildString {
+            appendLine("# Stage $number of $stages - ${stage.title.ifBlank { "Untitled" }}: its list")
+            appendLine()
+            appendLine(
+                "This stage runs once for each item of a list, and the list is yours to give - now, once, before " +
+                    "any of its cards starts. Each item becomes a pass of its own: its cards run in fresh " +
+                    "sessions, with `[[${each.name}]]` in their prompts replaced by the item's value. The screen " +
+                    "draws one row per item, so give every item that belongs on the list and nothing else, in " +
+                    "the order the passes should run.",
+            )
+            appendLine()
+            appendLine("## What the list is")
+            appendLine()
+            appendLine(each.description.trim().ifEmpty { "(Nothing was written. Go by the cards themselves.)" })
+            appendLine()
+            appendLine("## What every pass runs")
+            appendLine()
+            for ((card, prompt) in prompts) {
+                appendLine("**${card.title.ifBlank { "Untitled" }}**")
+                appendLine()
+                appendLine("```")
+                appendLine(prompt)
+                appendLine("```")
+                appendLine()
+            }
+            appendLine("---")
+            appendLine()
+            appendLine(
+                "An empty list is an answer too: the stage is then skipped and the run goes on past it. A stage " +
+                    "takes at most $MAX_STAGE_ITEMS items, and a longer list ends the run rather than being cut " +
+                    "short - so do not shorten one to fit, and do not pad one either.",
+            )
+            append(
+                "Answer with `{\"items\": [{\"label\": \"...\", \"value\": \"...\"}]}`. `value` is written into the " +
+                    "prompts exactly as it stands - give a link, a path or a name, not a sentence about one. " +
+                    "`label` is what the screen calls the item: a few words a person recognises it by.",
+            )
+        }
 
     /**
      * Handing over one card: what its session will be told, what has to be filled in first, and how the
@@ -157,14 +249,38 @@ internal object HeadTalk {
         prompt: String,
         retries: Int,
         handsOver: Boolean = false,
+        /** The item of the list this pass is for, in a stage that runs once per item (see Stage.each). */
+        item: RunItem? = null,
     ): String {
-        val slots = ScenarioRules.declaredSlots(card)
+        val slots = ScenarioRules.slotsToFill(stage, card)
+        val each = stage.each
 
         return buildString {
             appendLine("# Card $index of $total - ${card.title.ifBlank { "Untitled" }}")
             appendLine()
-            appendLine(if (passes > 1) "Stage ${stage.title}, pass $pass of $passes." else "Stage ${stage.title}.")
-            if (passes > 1 && pass > 1) {
+            when {
+                item != null && item.again.isNotEmpty() -> appendLine(
+                    "Stage ${stage.title}, a second go at item ${item.index} of ${item.count}: ${item.label}.",
+                )
+                item != null -> appendLine("Stage ${stage.title}, item ${item.index} of ${item.count}: ${item.label}.")
+                passes > 1 -> appendLine("Stage ${stage.title}, pass $pass of $passes.")
+                else -> appendLine("Stage ${stage.title}.")
+            }
+            if (item != null && item.again.isNotEmpty()) {
+                appendLine()
+                appendLine(
+                    "You put this item off after its first go, until the rest of the list was done. What you " +
+                        "said then: ${item.again}. Its session is told the same in its own briefing, so tell " +
+                        "it only what has changed since.",
+                )
+            } else if (item != null && item.index > 1) {
+                appendLine()
+                appendLine(
+                    "Every item of the list is a pass of its own, in fresh sessions: the cards of the items " +
+                        "before it have already run, and this session remembers nothing of them - tell it what " +
+                        "it needs through its slots.",
+                )
+            } else if (item == null && passes > 1 && pass > 1) {
                 appendLine()
                 appendLine(
                     "This stage is going round again. The cards of an earlier pass have already run; this " +
@@ -180,10 +296,22 @@ internal object HeadTalk {
             appendLine("```")
             appendLine()
 
+            // Written in already: the prompt above carries it, and it is not the head's to fill.
+            if (item != null && each != null) {
+                appendLine("`[[${each.name}]]` is this pass's item, and the panel has written it in: ${item.value}")
+                appendLine()
+            }
+
             if (slots.isEmpty()) {
                 appendLine("## Slots")
                 appendLine()
-                appendLine("This card declares none. Answer with an empty object for `slots`.")
+                appendLine(
+                    if (item != null) {
+                        "There are none for you to fill. Answer with an empty object for `slots`."
+                    } else {
+                        "This card declares none. Answer with an empty object for `slots`."
+                    },
+                )
             } else {
                 appendLine("## Slots you must fill")
                 appendLine()
@@ -258,6 +386,11 @@ internal object HeadTalk {
      * the head is offered two ways of saying no rather than one, and the difference is the point: a card
      * that could not do it is work the head can pick up, and a stop the briefing forbids getting past is
      * not - the head saying which is how a scenario's hard stops stay stops with the fence down.
+     *
+     * [putOff] is whether the card's item of a list may still be put off until the rest of the list is done
+     * (see StageList.canPutOff). Offered beside the others rather than folded into "not done": an item stopped
+     * by something that passes - a sign-in, a card later in the list - is neither finished nor a reason to end
+     * the night, and without a way to say so the head has to choose between the two wrong answers.
      */
     fun verdictRequest(
         card: Card,
@@ -267,6 +400,7 @@ internal object HeadTalk {
         handsOver: Boolean = false,
         waited: Boolean = false,
         overdue: Boolean = false,
+        putOff: Boolean = false,
     ): String = buildString {
         appendLine(
             if (ok) {
@@ -337,6 +471,15 @@ internal object HeadTalk {
                 "- `{\"retry\": \"...\"}` - send it back to work. `retry` is said into the same session, " +
                     "which remembers everything it already did, so say exactly what is missing and do not " +
                     "repeat the task at it. $nudgesLeft go(es) left.",
+            )
+        }
+        if (putOff) {
+            appendLine(
+                "- `{\"later\": \"...\"}` - it could not get its item done now, for a reason that may pass: a " +
+                    "service that would not let it in, something an item later in the list has to finish first. " +
+                    "The item gets one more go, in fresh sessions, once the rest of the list is done, and the run " +
+                    "goes on meanwhile. `later` is what that go is told about this one: what it ran into, and " +
+                    "what it left behind. Once per item - a second go is done or not.",
             )
         }
         if (handsOver) {

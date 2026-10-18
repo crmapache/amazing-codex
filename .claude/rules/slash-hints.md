@@ -1,12 +1,12 @@
 ---
 paths:
-  - "src/main/kotlin/io/github/crmapache/amazingclaudecode/claude/ClaudeCommandHints.kt"
-  - "src/main/kotlin/io/github/crmapache/amazingclaudecode/claude/ClaudeCommandNames.kt"
-  - "src/main/kotlin/io/github/crmapache/amazingclaudecode/claude/ClaudePlugin.kt"
-  - "src/test/kotlin/io/github/crmapache/amazingclaudecode/claude/ClaudeCommandHints*Test.kt"
-  - "src/test/kotlin/io/github/crmapache/amazingclaudecode/claude/ClaudePluginListTest.kt"
-  - "src/test/kotlin/io/github/crmapache/amazingclaudecode/claude/HintPaceTest.kt"
-  - "src/test/kotlin/io/github/crmapache/amazingclaudecode/claude/SentHintsTest.kt"
+  - "src/main/kotlin/io/github/crmapache/amazingcodex/codex/CodexCommandHints.kt"
+  - "src/main/kotlin/io/github/crmapache/amazingcodex/codex/CodexCommandNames.kt"
+  - "src/main/kotlin/io/github/crmapache/amazingcodex/codex/CodexPlugin.kt"
+  - "src/test/kotlin/io/github/crmapache/amazingcodex/codex/CodexCommandHints*Test.kt"
+  - "src/test/kotlin/io/github/crmapache/amazingcodex/codex/CodexPluginListTest.kt"
+  - "src/test/kotlin/io/github/crmapache/amazingcodex/codex/HintPaceTest.kt"
+  - "src/test/kotlin/io/github/crmapache/amazingcodex/codex/SentHintsTest.kt"
   - "webview/src/feed/slash.ts"
   - "webview/src/feed/slash.test.ts"
   - "webview/src/components/SlashSuggest.tsx"
@@ -16,7 +16,7 @@ paths:
 
 Список в подсказке поля - это два источника: имена, которые агент называет в `system:init` (то есть уже
 после отправки первого сообщения), и файлы, которые панель читает с диска сама
-(`ClaudeCommandHints.scan`). Второй источник существует именно ради первых минут: человек, только что
+(`CodexCommandHints.scan`). Второй источник существует именно ради первых минут: человек, только что
 поставивший плагин, набирает «/» и обязан увидеть команды своего проекта.
 
 - **Файл без frontmatter - это команда.** CLI запускает такой файл как есть (проверено живьём), а скан
@@ -46,7 +46,7 @@ CLI подхватывает новые и поправленные файлы �
 
 - **У подсказки свой круг - две секунды, и он сперва только `stat`.** Столько же у `AccountsWatch`, и
   примерно столько же собственное окно CLI, так что подсказка и CLI догоняют новый файл вместе.
-  `ClaudeCommandHints` разбит на «собрать кандидатов» / «отпечаток» / «прочитать frontmatter», и на
+  `CodexCommandHints` разбит на «собрать кандидатов» / «отпечаток» / «прочитать frontmatter», и на
   неизменившемся диске круг стоит один обход без единого чтения: замерено на этой машине - 97 кандидатов,
   1.0-1.3 мс против 3.5-5.2 мс с чтением.
 - **Минутный круг остался БЕЗУСЛОВНЫМ, и это две страховки в одной.** Он перечитывает frontmatter целиком
@@ -88,7 +88,7 @@ CLI подхватывает новые и поправленные файлы �
   файловый ввод-вывод не прерывается, и обход, повисший на мёртвой шаре, иначе собрал бы по задаче на тик
   и прогнал бы их все, когда шара ответит. `AtomicBoolean` тут был бы хуже: поднятый исключением, он убил
   бы обновление навсегда.
-- **`ClaudeHome` считается ВНУТРИ каждой задачи, а не в конструкторе, поле или `by lazy`.** С EDT
+- **`CodexHome` считается ВНУТРИ каждой задачи, а не в конструкторе, поле или `by lazy`.** С EDT
   платформа отвечает локальным домом, и WSL-проект навсегда читал бы личные команды чужой машины; ответ
   кешируется по дистрибутиву, так что спрашивать заново ничего не стоит. Он же стал параметром
   `scan`/`scanIfChanged` - иначе тест подмешивает настоящий `~/.claude` того, кто его гоняет.
@@ -105,7 +105,7 @@ CLI подхватывает новые и поправленные файлы �
 - **Список плагинов остался на минутном круге и кешируется** (`ProjectCatalog.installedPlugins`): это
   отдельный процесс, а не чтение диска. Охранник `isNotEmpty()` снят - с ним кеш не мог опустеть, и
   снесённый плагин жил бы в подсказке до конца жизни хаба; успешный пустой ответ и провал теперь разные
-  вещи. Правило одно на ОБЕ двери к списку (`ClaudePlugin.unreadable`, с тестом): его пишет и обновление
+  вещи. Правило одно на ОБЕ двери к списку (`CodexPlugin.unreadable`, с тестом): его пишет и обновление
   подсказки, и экран плагинов с любым действием над плагином, а стоявший на одной двери охранник
   переименованное поле будущего CLI пропускал бы второй дорогой - молча и без единого признака.
 - **Имя удалённого скилла, которое агент уже называл, живёт до следующего `system:init`.** Сверять список

@@ -4,6 +4,7 @@ import { Back } from './Back'
 import m from '../mobile.module.css'
 import { useT } from '../../i18n'
 import type { Dict } from '../../i18n/en'
+import { EmptyPlate } from './EmptyPlate'
 
 interface McpProps {
   /** null means the answer has not arrived yet - it is asked for when this screen opens. */
@@ -114,7 +115,7 @@ export const Mcp = ({
         ) : null}
 
         {servers === null && <p className={m.empty}>{t.common.loading}</p>}
-        {servers?.length === 0 && <p className={m.empty}>{t.mcp.empty}</p>}
+        {servers?.length === 0 && <EmptyPlate title={t.mcp.empty} />}
 
         {servers && servers.length > 0 && (
           <div className={m.card}>

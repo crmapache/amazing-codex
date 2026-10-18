@@ -26,15 +26,26 @@ describe('reusableMessage', () => {
     expect(reusableMessage({ tokens })).toEqual({ tokens, lostImages: 0 })
   })
 
-  it('turns an image with only a file under it into that file', () => {
+  it('turns an image with only a file under it into a picture of that file', () => {
     const result = reusableMessage({
       tokens: [{ kind: 'chip', chip: { kind: 'img', value: 'Image #1', path: '/tmp/acc/shot.png' } }],
     })
 
     expect(result).toEqual({
-      tokens: [{ kind: 'chip', chip: { kind: 'file', value: '/tmp/acc/shot.png' } }],
+      tokens: [{ kind: 'chip', chip: { kind: 'img', value: '/tmp/acc/shot.png' } }],
       lostImages: 0,
     })
+  })
+
+  /* Picked in the dialog, or read back off the transcript as `@design/sheet.png`: the chip is its own path. */
+  it('gives a picked picture back as it is, and counts it as nothing lost', () => {
+    const tokens: UserToken[] = [
+      { kind: 'chip', chip: { kind: 'img', value: 'design/sheet.png' } },
+      text(' and '),
+      { kind: 'chip', chip: { kind: 'file', value: 'src/Sheet.tsx' } },
+    ]
+
+    expect(reusableMessage({ tokens })).toEqual({ tokens, lostImages: 0 })
   })
 
   it('leaves out an image that has neither, and says how many', () => {

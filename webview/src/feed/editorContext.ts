@@ -58,8 +58,34 @@ export const editorLabel = (ref: EditorRef): string => {
 }
 
 /**
- * The same file with the same lines - what a "not with this message" is remembered by (see App's
- * editorSkips). Selecting other lines, or opening another file, is a new thing on screen, and it goes with
- * the next message again unless switched off anew.
+ * The same file with the same lines - what a one-message exception is remembered by (see EditorOnce).
+ * Selecting other lines, or opening another file, is a new thing on screen, and the next message follows
+ * the setting again unless told otherwise anew.
  */
 export const editorKey = (ref: EditorRef): string => `${ref.path}#${ref.from ?? ''}-${ref.to ?? ''}`
+
+/**
+ * One tab's next message going the other way from the setting: without the editor while it is on, or with
+ * it while it is off - for the file and lines it was chosen over (`key`, see editorKey). Forgotten when the
+ * message goes, and when the setting itself is changed: then it was an exception to something that is no
+ * longer so.
+ */
+export interface EditorOnce {
+  key: string
+  on: boolean
+}
+
+/** Whether the next message carries what the editor shows: the setting, unless this tab said otherwise for it. */
+export const editorGoes = (shared: boolean, once: EditorOnce | undefined, ref: EditorRef): boolean =>
+  once !== undefined && once.key === editorKey(ref) ? once.on : shared
+
+/**
+ * The entry of the chip's menu that stands ticked (see editorMenu): the setting either way, or the exception
+ * for this one message. An exception that agrees with the setting is no exception and does not show as one.
+ */
+export type EditorChoice = 'always' | 'once' | 'never'
+
+export const editorChoice = (shared: boolean, once: EditorOnce | undefined, ref: EditorRef): EditorChoice => {
+  if (editorGoes(shared, once, ref) !== shared) return 'once'
+  return shared ? 'always' : 'never'
+}

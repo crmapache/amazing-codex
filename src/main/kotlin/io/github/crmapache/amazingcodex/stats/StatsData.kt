@@ -1,5 +1,7 @@
 package io.github.crmapache.amazingcodex.stats
 
+import java.time.Instant
+import java.time.ZoneId
 import java.util.TreeMap
 import kotlin.reflect.KMutableProperty1
 import kotlinx.serialization.json.Json
@@ -378,6 +380,54 @@ internal class ProjectRecord(var name: String) {
 }
 
 /**
+ * The tokens one folder of transcripts holds, as they were read out of it (see TranscriptTokens). A
+ * folder rather than a project: the CLI keeps one for the whole machine, plus one inside every WSL
+ * distribution a project was opened from - and each of them is a different lot of work.
+ *
+ * By the hour since the epoch rather than by calendar day, and that is what makes [mergedWith] honest.
+ * Two readings of one hour are the same tokens counted twice over, so they fold by the larger. A calendar
+ * day is not the same thing everywhere: a person who flew across six time zones would see the same answers
+ * land in other hours of other days, and the larger of each bucket would keep them in both. An hour since
+ * the epoch is the same hour in every zone; the calendar is applied on the way out (see
+ * [StatsSnapshot.tokensByDay]).
+ */
+internal class TokenHome {
+
+    /** Hour since the epoch -> the tokens of the answers written in it. Quiet hours are not kept. */
+    val hours = TreeMap<Long, Long>()
+
+    /**
+     * When the folder was last read through, epoch millis; zero until the first reading. Everything older
+     * than a little before it is already in [hours], so the next reading only opens the files changed
+     * since then (see TranscriptTokens.SLACK_MS).
+     */
+    var readAt = 0L
+
+    /**
+     * A reading taken in: each hour at the larger of what was known and what was read.
+     *
+     * The larger rather than the reading, because a reading may hold only part of an hour. It opens the
+     * files changed lately, and a conversation from last week resumed today brings some of its old
+     * answers along - those hours are already counted in full, and the part must not replace the whole.
+     * The hours a reading does cover in full can only have grown since.
+     */
+    fun record(read: Map<Long, Long>, at: Long) {
+        for ((hour, tokens) in read) {
+            if (tokens > (hours[hour] ?: 0L)) hours[hour] = tokens
+        }
+        readAt = maxOf(readAt, at)
+    }
+
+    /** This and another copy of the same folder's figures - the larger of every hour, the later reading. */
+    fun mergedWith(other: TokenHome): TokenHome {
+        val merged = TokenHome()
+        merged.record(hours, readAt)
+        merged.record(other.hours, other.readAt)
+        return merged
+    }
+}
+
+/**
  * Everything on disk, in memory: the projects with their days, the achievements with their moments.
  */
 internal class StatsSnapshot {
@@ -390,6 +440,12 @@ internal class StatsSnapshot {
 
     /** Achievement id -> tier -> when it was reached. */
     val earned = LinkedHashMap<String, TreeMap<Int, Long>>()
+
+    /**
+     * The tokens the CLI's transcripts hold, by the folder they were read from (see TranscriptTokens) -
+     * under a hash of its path, never the path itself.
+     */
+    val tokens = LinkedHashMap<String, TokenHome>()
 
     /** Phones paired with this IDE, ever. Not about any one project. */
     var devicesPaired = 0
@@ -449,6 +505,26 @@ internal class StatsSnapshot {
     }
 
     private var folded: TreeMap<String, DayRecord>? = null
+
+    /**
+     * The tokens of every folder of transcripts together, by calendar day in [zone]: each day's 24 hours,
+     * midnight first. Days without a token are left out.
+     *
+     * Added up across the folders rather than taken at the larger: two folders are two machines' worth of
+     * transcripts (this one and a WSL distribution), never two copies of one.
+     */
+    fun tokensByDay(zone: ZoneId): TreeMap<String, LongArray> {
+        val out = TreeMap<String, LongArray>()
+        for (home in tokens.values) {
+            for ((hour, count) in home.hours) {
+                if (count <= 0) continue
+                val local = Instant.ofEpochSecond(hour * 3600).atZone(zone)
+                val day = out.getOrPut(local.toLocalDate().toString()) { LongArray(24) }
+                day[local.hour] += count
+            }
+        }
+        return out
+    }
 
     /**
      * This and another copy of the same file, folded into one.
@@ -519,6 +595,16 @@ internal class StatsSnapshot {
             if (tiers.isNotEmpty()) merged.earned[id] = tiers
         }
 
+        for (home in tokens.keys + other.tokens.keys) {
+            val a = tokens[home]
+            val b = other.tokens[home]
+            merged.tokens[home] = when {
+                a == null -> b!!
+                b == null -> a
+                else -> a.mergedWith(b)
+            }
+        }
+
         return merged
     }
 }
@@ -561,6 +647,23 @@ internal object StatsJson {
             buildJsonObject {
                 for ((id, tiers) in snapshot.earned) {
                     put(id, buildJsonObject { for ((tier, at) in tiers) put(tier.toString(), at) })
+                }
+            },
+        )
+        put(
+            "tokens",
+            buildJsonObject {
+                for ((key, home) in snapshot.tokens) {
+                    put(
+                        key,
+                        buildJsonObject {
+                            put("readAt", home.readAt)
+                            put(
+                                "hours",
+                                buildJsonObject { for ((hour, count) in home.hours) put(hour.toString(), count) },
+                            )
+                        },
+                    )
                 }
             },
         )
@@ -616,6 +719,20 @@ internal object StatsJson {
                 val moment = at.jsonPrimitive.longOrNull ?: continue
                 known[number] = moment
             }
+        }
+
+        val tokens = root["tokens"] as? JsonObject ?: JsonObject(emptyMap())
+        for ((key, element) in tokens) {
+            val home = element as? JsonObject ?: continue
+            val record = TokenHome()
+            record.readAt = home["readAt"]?.jsonPrimitive?.longOrNull ?: 0L
+            val hours = home["hours"] as? JsonObject ?: JsonObject(emptyMap())
+            for ((hour, count) in hours) {
+                val number = hour.toLongOrNull() ?: continue
+                val value = (count as? JsonPrimitive)?.longOrNull ?: continue
+                if (value > 0) record.hours[number] = value
+            }
+            snapshot.tokens[key] = record
         }
 
         return snapshot

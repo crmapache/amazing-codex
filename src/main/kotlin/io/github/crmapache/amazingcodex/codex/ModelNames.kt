@@ -10,6 +10,12 @@ package io.github.crmapache.amazingcodex.codex
  */
 internal object ModelNames {
 
+    /**
+     * The menu's name for "whatever Codex runs" - a tab that never picked a model is on it, and it is never sent
+     * as one (see DEFAULT_MODEL in catalog.ts).
+     */
+    const val DEFAULT = "default"
+
     fun key(model: String): String = model.trim().lowercase()
 
     fun same(one: String, other: String): Boolean = key(one) == key(other)

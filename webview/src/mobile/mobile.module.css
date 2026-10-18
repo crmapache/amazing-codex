@@ -169,6 +169,38 @@
   line-height: 1.5;
 }
 
+/* An empty section as the card missing from it (see EmptyPlate.tsx): a card's width, radius and gap below,
+   drawn dashed and with nothing raised inside - the desk's empty shelf at a thumb's size. */
+.emptyPlate {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: var(--acc-sp-3);
+  padding: var(--acc-sp-4) var(--acc-sp-4);
+  border: 1px dashed var(--acc-line-strong);
+  border-radius: var(--acc-r-card);
+}
+
+/* On a screen that runs to the glass: in from the edges as the cards are there (see .project), and off the
+   header above when nothing else stands between them. */
+.emptyPlateInset {
+  margin: var(--acc-sp-3) var(--acc-sp-5);
+}
+
+.emptyPlateTitle {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--acc-fg-dim);
+}
+
+.emptyPlateNote {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--acc-fg-faint);
+}
+
 /* --- A project and what can be started in it --------------------------------- */
 
 /*
@@ -582,12 +614,18 @@
   color: var(--acc-fg-dim);
 }
 
+/* Words and chips together (see QueueLine), up to two lines - as at the desk: with names instead of paths
+   most messages fit, and the second line keeps a picture at the end from going behind the ellipsis. */
 .queueText {
   flex: 1 1 auto;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
   font-size: 13px;
+  line-height: 20px;
   color: var(--acc-fg-dim);
 }
 
@@ -2081,6 +2119,20 @@
   color: var(--acc-c-sand-4);
 }
 
+/* Fast mode beside the model - dim while it waits or is paused, lit while it serves, the warning colour when it
+   cannot (the desk's mark, see .selectorFast). */
+.runChipFast {
+  color: var(--acc-fg-faint);
+}
+
+.runChipFastOn {
+  color: var(--acc-accent);
+}
+
+.runChipFastWarn {
+  color: var(--acc-warn);
+}
+
 .runChipChevron {
   flex: none;
   color: var(--acc-fg-ghost);
@@ -3142,14 +3194,47 @@
   color: var(--acc-fg-fainter);
 }
 
+/* A capsule per window on a grid, as on the desk (see .accountMeters in sideMenu.module.css): the reset time
+   stands under its own share rather than trailing into the next window's. */
 .accountMeters {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: var(--acc-sp-2);
+}
+
+/* The time left until the window resets, under its share and behind a clock - quieter than the share, which
+   is the news. Indented to the share, past the ring. */
+.accountMeterReset {
   display: flex;
   align-items: center;
-  gap: var(--acc-sp-4);
+  gap: 4px;
+  padding-left: 21px;
+  font: 10.5px var(--acc-mono);
+  color: var(--acc-fg-faint);
+  white-space: nowrap;
+}
+
+/* An account at its limit, and when it takes work again (see UsableAgain). */
+.accountWaits {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--acc-warn);
 }
 
 .accountMeter {
-  display: inline-flex;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding: 6px 8px 7px;
+  border: 1px solid var(--acc-neutral-12);
+  border-radius: var(--acc-r-md);
+  background: rgb(var(--acc-ch-mist) / 6%);
+}
+
+.accountMeterShare {
+  display: flex;
   align-items: center;
   gap: 5px;
   font: 11px var(--acc-mono);
@@ -3611,6 +3696,13 @@
   white-space: nowrap;
 }
 
+/* The item a pass of a list is for, by name - what tells seven rows of one card apart (see itemLabel). */
+.stepItem {
+  font: 500 var(--acc-fs-body) var(--acc-font);
+  color: var(--acc-fg-body);
+  overflow-wrap: anywhere;
+}
+
 .stepTime {
   flex: none;
   font: var(--acc-fs-label) var(--acc-mono);
@@ -3641,6 +3733,12 @@
 
 .stepVerdictBad {
   color: var(--acc-bad-text);
+  --acc-glance-strong: currentColor;
+}
+
+/* An item put off until the rest of the list: not done and not failed - it comes back. */
+.stepVerdictLater {
+  color: var(--acc-warn);
   --acc-glance-strong: currentColor;
 }
 
@@ -4392,6 +4490,13 @@
 
 .stageBody .wideButton {
   margin-bottom: 0;
+}
+
+/* Under the list of a stage that runs once per item: where its item lands in the prompts. */
+.listNote {
+  margin: 0;
+  font: var(--acc-fs-meta) var(--acc-font);
+  color: var(--acc-fg-ghost);
 }
 
 .stageCards {

@@ -1,11 +1,12 @@
 ---
 paths:
-  - "src/main/kotlin/io/github/crmapache/amazingclaudecode/voice/**"
-  - "src/test/kotlin/io/github/crmapache/amazingclaudecode/voice/**"
+  - "src/main/kotlin/io/github/crmapache/amazingcodex/voice/**"
+  - "src/test/kotlin/io/github/crmapache/amazingcodex/voice/**"
   - "webview/src/feed/voice.ts"
   - "webview/src/feed/voice.test.ts"
   - "webview/src/mobile/dictation.ts"
   - "webview/src/mobile/useDictation.ts"
+  - "webview/src/mobile/screens/Composer.tsx"
   - "webview/src/components/VoiceInput.tsx"
   - "webview/src/components/Microphone.tsx"
   - "webview/src/components/HotkeyCaps.tsx"
@@ -102,6 +103,18 @@ paths:
   устройству умеет носить только запечатанные конверты, - единственное, чего он носить не должен, да и
   шёл бы вдвое дольше. Постоянный ключ не уходит с машины никогда, а `voiceToken` - единственная
   голосовая команда в `ALLOWED`; всё остальное телефону запрещено (`RemoteCommands`).
+- **Выключен голос на машине - на телефоне нет кнопки микрофона** (`voice` в `RemoteAgent.inventoryBody`,
+  `dictates` у композера в `mobile/screens/Composer.tsx`). Раньше кнопка стояла всегда, и каждое нажатие
+  кончалось строкой «Voice input is switched off on the machine» - кнопка, которая заранее известно не
+  работает. Флаг машинный и едет в инвентаре, а не фактом проекта: телефон диктует на ключе машины. Смена
+  выключателя рассылается сразу (`VoiceDesk.setEnabled` → `inventoryChanged` во всех хабах), иначе кнопка жила бы
+  до следующего стука, до полминуты.
+  - Идущую диктовку кнопка не бросает: выключили за столом посреди фразы - кнопка остаётся, пока запись не
+    кончится, иначе её не остановить (держит её захват указателя).
+  - Отказ «выключено» прячется, когда машина говорит «включено»: он про нажатие, сделанное до переключения.
+  - Нет поля в инвентаре - значит плагин старше него: кнопка остаётся, а отказ говорит, в чём дело.
+  - Проверено живьём: релей, песочница и телефон в браузере без окна - выключили, кнопка ушла за пару секунд,
+    включили, вернулась.
 - **Запись начинается до того, как приедет токен.** Круг до IDE и обратно - полсекунды на хорошей сети,
   и это ровно те полсекунды, в которые человек уже говорит: куски копятся в памяти и уходят одним махом,
   когда сокет открылся. Токен, успевший прийти раньше микрофона, тоже не теряется (`waiting` в

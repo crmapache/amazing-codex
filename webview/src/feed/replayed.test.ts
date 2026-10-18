@@ -38,6 +38,16 @@ describe('a message read back out of a transcript', () => {
     expect(chips(tokens)).toEqual([{ kind: 'img', value: 'Image #2' }])
   })
 
+  /** A picture picked in the dialog travelled as `@path` - it comes back the picture's chip it was. */
+  it('gives a picked picture back its own kind of chip', () => {
+    const { tokens } = replayedMessage('@design/sheet-loading-state.png and @src/Sheet.tsx side by side')
+
+    expect(chips(tokens)).toEqual([
+      { kind: 'img', value: 'design/sheet-loading-state.png' },
+      { kind: 'file', value: 'src/Sheet.tsx' },
+    ])
+  })
+
   /**
    * The case this guard exists for: `@media`, `@Override`, somebody's handle. A chip promises the agent
    * was given a file, and a wrong promise is worse than plain text.

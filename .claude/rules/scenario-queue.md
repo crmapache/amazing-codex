@@ -1,10 +1,10 @@
 ---
 paths:
-  - "src/main/kotlin/io/github/crmapache/amazingclaudecode/scenario/ScenarioQueue.kt"
-  - "src/main/kotlin/io/github/crmapache/amazingclaudecode/scenario/QueueRules.kt"
-  - "src/main/kotlin/io/github/crmapache/amazingclaudecode/scenario/QueueStore.kt"
-  - "src/main/kotlin/io/github/crmapache/amazingclaudecode/scenario/ScenarioDesk.kt"
-  - "src/test/kotlin/io/github/crmapache/amazingclaudecode/scenario/Queue*Test.kt"
+  - "src/main/kotlin/io/github/crmapache/amazingcodex/scenario/ScenarioQueue.kt"
+  - "src/main/kotlin/io/github/crmapache/amazingcodex/scenario/QueueRules.kt"
+  - "src/main/kotlin/io/github/crmapache/amazingcodex/scenario/QueueStore.kt"
+  - "src/main/kotlin/io/github/crmapache/amazingcodex/scenario/ScenarioDesk.kt"
+  - "src/test/kotlin/io/github/crmapache/amazingcodex/scenario/Queue*Test.kt"
   - "webview/src/scenarios/queue.ts"
   - "webview/src/scenarios/queue.test.ts"
   - "webview/src/components/scenarios/QueueBand.tsx"

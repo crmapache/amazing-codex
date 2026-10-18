@@ -18,7 +18,7 @@ import io.github.crmapache.amazingcodex.codex.accounts.CodexAccounts
  */
 class CodexSessionsTest : BasePlatformTestCase() {
 
-    private fun sessions(onBorn: (String, String, String, String, String) -> Unit = { _, _, _, _, _ -> }) = CodexSessions(
+    private fun sessions(onBorn: (String, String, String, String, String, Boolean?) -> Unit = { _, _, _, _, _, _ -> }) = CodexSessions(
         workingDirectory = null,
         parentDisposable = testRootDisposable,
         onEvent = { _, _ -> },
@@ -97,7 +97,7 @@ class CodexSessionsTest : BasePlatformTestCase() {
     fun testAResumedConversationAdoptsItsOwnModelBeforeItWakes() {
         CodexPreferences.model = "gpt-5.1-codex-mini"
         val born = mutableMapOf<String, String>()
-        val sessions = sessions { sessionId, _, model, _, _ -> born[sessionId] = model }
+        val sessions = sessions { sessionId, _, model, _, _, _ -> born[sessionId] = model }
 
         sessions.resume("old", "conversation-1")
         assertEquals("gpt-5.1-codex-mini", born["old"])
@@ -114,7 +114,7 @@ class CodexSessionsTest : BasePlatformTestCase() {
 
     fun testEachConversationIsBornAtWhatWasChosenByThen() {
         val born = mutableMapOf<String, String>()
-        val sessions = sessions { sessionId, effort, _, _, _ -> born[sessionId] = effort }
+        val sessions = sessions { sessionId, effort, _, _, _, _ -> born[sessionId] = effort }
 
         CodexPreferences.effort = "high"
         sessions.setPermissionMode("first", PermissionModes.PLAN) {}
@@ -222,6 +222,117 @@ class CodexSessionsTest : BasePlatformTestCase() {
     }
 
     /**
+     * The fast tier spends the plan's limits faster, so asking for it is the conversation's alone: it writes no
+     * setting, and a tab opened after it asks nothing - unlike the effort, whose last choice is what the next tab
+     * starts on. Asking nothing is not "off": Codex's own config decides there, and nothing here overrides it.
+     */
+    fun testFastModeBelongsToItsConversationAndNoNewTabStartsWithIt() {
+        val sessions = sessions()
+        sessions.setFastMode("main", true)
+        sessions.setEffort("other", "low")
+
+        assertEquals(true, sessions.fastMode("main"))
+        assertNull(sessions.fastMode("other"))
+        assertNull(sessions.fastMode("never-opened"))
+    }
+
+    /** A fork is the same conversation, and a move to another account is the same conversation too. */
+    fun testFastModeTravelsWithTheConversationIntoAForkAndOntoAnotherAccount() {
+        val sessions = sessions()
+        sessions.setFastMode("parent", true)
+        sessions.setFastMode("plain", false)
+
+        sessions.branchFrom("parent", "branch-1")
+        sessions.branchFrom("plain", "branch-2")
+        assertEquals(true, sessions.fastMode("branch-1"))
+        assertEquals(false, sessions.fastMode("branch-2"))
+
+        register("work")
+        sessions.switchAllTo()
+        assertEquals(true, sessions.fastMode("parent"))
+        assertEquals(true, sessions.fastMode("branch-1"))
+    }
+
+    /**
+     * A model without a fast tier turns the ask off - Codex would drop the tier from its requests anyway - and it
+     * stays off when the next model has one again: coming back on by itself would be a cost nobody asked for. Only
+     * on the catalogue's word: no catalogue yet, or a model it does not name, keeps what was asked. "default" is
+     * named, as the model it comes to (see CodexShapes.fastModels).
+     */
+    fun testAModelWithoutFastModeTurnsItOffOnlyOnTheCataloguesWord() {
+        val sessions = sessions()
+        val account = sessions.accountOf("main")
+        val accounts = CodexAccounts.getInstance()
+        try {
+            sessions.setFastMode("main", true)
+            sessions.setModel("main", "gpt-5.5") {}
+            assertEquals(true, sessions.fastMode("main"))
+
+            accounts.noteFastModels(
+                account,
+                listOf(
+                    Triple("gpt-5.6-sol", "gpt-5.6-sol", true),
+                    Triple("gpt-5.5", "gpt-5.5", false),
+                    Triple("default", "", true),
+                ),
+            )
+            sessions.setModel("main", "gpt-5.6-sol") {}
+            assertEquals(true, sessions.fastMode("main"))
+            sessions.setModel("main", "default") {}
+            assertEquals(true, sessions.fastMode("main"))
+            // Codex names a model by one id, whatever case it is written in; a name it does not offer is not judged.
+            assertEquals(true, accounts.hasFastMode(account, "GPT-5.6-Sol"))
+            assertNull(accounts.hasFastMode(account, "llama-from-my-own-server"))
+            sessions.setModel("main", "llama-from-my-own-server") {}
+            assertEquals(true, sessions.fastMode("main"))
+
+            sessions.setModel("main", "gpt-5.5") {}
+            assertEquals(false, sessions.fastMode("main"))
+
+            sessions.setModel("main", "gpt-5.6-sol") {}
+            assertEquals(false, sessions.fastMode("main"))
+
+            // A tier from Codex's config is not the panel's to take away: a conversation that asked nothing still asks nothing.
+            sessions.setModel("other", "gpt-5.5") {}
+            assertNull(sessions.fastMode("other"))
+        } finally {
+            accounts.noteFastModels(account, null)
+        }
+    }
+
+    /**
+     * A process does not die at once, and what it says after its tab is closed arrives under the tab's id - into
+     * the same tab opened again, under its replayed transcript. A conversation that goes on in its tab under a new
+     * process is another matter: its old process's last words are part of it.
+     */
+    fun testAClosedTabHearsNothingMoreFromItsProcessAndAMovedOneDoes() {
+        val heard = mutableListOf<String>()
+        val sessions = CodexSessions(
+            workingDirectory = null,
+            parentDisposable = testRootDisposable,
+            onEvent = { sessionId, _ -> heard += sessionId },
+            onError = { _, _ -> },
+            onFinished = {},
+        )
+        val line = "{\"type\":\"assistant\",\"message\":{\"content\":[]}}\n"
+
+        sessions.setEffort("closed", "low", remember = false)
+        val closing = sessions.conversation("closed")!!
+        closing.heard(line)
+        sessions.close("closed")
+        closing.heard(line)
+        assertEquals(listOf("closed"), heard)
+
+        sessions.setEffort("main", "low", remember = false)
+        val moving = sessions.conversation("main")!!
+        register("work")
+        sessions.switchAllTo()
+        assertNotSame(moving, sessions.conversation("main"))
+        moving.heard(line)
+        assertEquals(listOf("closed", "main"), heard)
+    }
+
+    /**
      * A tab whose process is replaced while it says nothing has to announce it all the same.
      *
      * A turn would be interrupted and every client told; a silent swap used to say nothing at all - and
@@ -238,7 +349,7 @@ class CodexSessionsTest : BasePlatformTestCase() {
             onEvent = { _, _ -> },
             onError = { _, _ -> },
             onFinished = {},
-            onProcessDropping = { dropped += 1 },
+            onProcessDropping = { _, _ -> dropped += 1 },
         )
         sessions.setEffort("main", "low")
 
@@ -246,6 +357,21 @@ class CodexSessionsTest : BasePlatformTestCase() {
         sessions.switchAllTo()
 
         assertEquals(0, dropped)
+    }
+
+    /**
+     * Only a turn the switch interrupted is carried on afterwards (see CarryOns). A tab that was
+     * saying nothing when the account changed has no turn to finish, and a "carry on" into it would start work
+     * nobody asked for - in every idle tab of every project at once.
+     */
+    fun testAQuietMoveOwesNoCarryOn() {
+        val sessions = sessions()
+        sessions.setEffort("main", "low")
+
+        register("work")
+        sessions.switchAllTo()
+
+        assertNull(sessions.takeCarryOn("main"))
     }
 
     /** A tab with no process has nothing to move, and no process is raised to move it. */
@@ -292,7 +418,7 @@ class CodexSessionsTest : BasePlatformTestCase() {
             onEvent = { _, _ -> },
             onError = { _, _ -> },
             onFinished = {},
-            onProcessDropping = { dropped += 1 },
+            onProcessDropping = { _, _ -> dropped += 1 },
         )
 
         assertFalse(sessions.restart("never-opened") { answered += 1 })

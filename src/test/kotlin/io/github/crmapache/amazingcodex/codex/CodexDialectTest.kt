@@ -226,6 +226,65 @@ class CodexDialectTest {
         assertTrue(CodexDialect.toolResults(patch("failed")).all { it.content == "The patch did not apply." && it.isError })
     }
 
+    /**
+     * The panel's list of a turn's files trusts a structured half only where an event holds one result (see
+     * noteChanges in feed/changes.ts), so a patch is said one event per file, each with the file and what became of
+     * it - and no diff: the card carries that already.
+     */
+    @Test
+    fun `a patch of three files is three results, each with its file's half`() {
+        val lines = CodexDialect.resultLines(
+            item(
+                """{"type":"fileChange","id":"p","status":"completed","changes":[
+                    {"path":"/p/new.ts","kind":{"type":"add"},"diff":"one\n"},
+                    {"path":"/p/a.ts","kind":{"type":"update","move_path":"/p/b.ts"},"diff":"@@ -1 +1 @@\n-x\n+y\n"},
+                    {"path":"/p/old.ts","kind":{"type":"delete"},"diff":"gone\n"}
+                ]}""",
+            ),
+        ).map(::item)
+
+        assertEquals(listOf("p:0-result", "p:1-result", "p:2-result"), lines.map { it.text("uuid") })
+        assertEquals(listOf("p:0", "p:1", "p:2"), lines.map { line -> line.blocks().single().text("tool_use_id") })
+        val halves = lines.map { it["toolUseResult"]!!.jsonObject }
+        assertEquals(listOf("/p/new.ts", "/p/b.ts", "/p/old.ts"), halves.map { it.text("filePath") })
+        assertEquals(listOf("create", "update", "delete"), halves.map { it.text("type") })
+        assertEquals("/p/a.ts", halves[1].text("movedFrom"))
+        assertTrue(halves.none { "unified_diff" in it || "content" in it })
+        assertTrue(lines.none { "parent_tool_use_id" in it })
+    }
+
+    /** A subagent's patch is no card of this feed: its half carries the change, and its result names the agent's card. */
+    @Test
+    fun `a subagent's patch result carries its change and its parent`() {
+        val lines = CodexDialect.resultLines(
+            item(
+                """{"type":"fileChange","id":"q","status":"completed","changes":[
+                    {"path":"/p/a.ts","kind":{"type":"update","move_path":null},"diff":"@@ -1 +1 @@\n-x\n+y\n"},
+                    {"path":"/p/n.ts","kind":{"type":"add"},"diff":"n\n"}
+                ]}""",
+            ),
+            parentToolUseId = "spawn-1",
+        ).map(::item)
+
+        assertEquals(listOf("spawn-1", "spawn-1"), lines.map { it.text("parent_tool_use_id") })
+        val halves = lines.map { it["toolUseResult"]!!.jsonObject }
+        assertEquals("@@ -1 +1 @@\n-x\n+y\n", halves[0].text("unified_diff"))
+        assertEquals("n\n", halves[1].text("content"))
+    }
+
+    @Test
+    fun `a patch that did not apply says no file changed`() {
+        val lines = CodexDialect.resultLines(
+            item("""{"type":"fileChange","id":"r","status":"failed","changes":[{"path":"/p/a.ts","kind":{"type":"add"},"diff":"x\n"}]}"""),
+        ).map(::item)
+
+        assertNull(lines.single()["toolUseResult"])
+        assertEquals("true", lines.single().blocks().single().text("is_error"))
+    }
+
+    private fun JsonObject.blocks(): List<JsonObject> =
+        this["message"]!!.jsonObject["content"]!!.let { it as JsonArray }.map { it.jsonObject }
+
     @Test
     fun `one file keeps the item's own id, several are numbered`() {
         assertEquals(listOf("f1"), CodexDialect.fileCallIds("f1", 1))

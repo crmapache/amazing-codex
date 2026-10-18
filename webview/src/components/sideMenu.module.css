@@ -329,9 +329,21 @@
   color: var(--acc-fg-dim);
 }
 
+/* The same neutral again: whether the field underlines misspelled words is its behaviour too. */
+.rowIconSpellcheck {
+  background: var(--acc-neutral-12);
+  color: var(--acc-fg-dim);
+}
+
 /* The key shares that same neutral: which key sends is about the input field's behaviour, exactly as the
    two rows above it are. */
 .rowIconSend {
+  background: var(--acc-neutral-12);
+  color: var(--acc-fg-dim);
+}
+
+/* The keys take the same neutral as the send key beside them: both are about the keyboard. */
+.rowIconKeys {
   background: var(--acc-neutral-12);
   color: var(--acc-fg-dim);
 }
@@ -2081,6 +2093,91 @@
   color: var(--acc-fg-ghost);
 }
 
+/* --- The cheat sheet of keys (see KeysScreen) ----------------------------- */
+
+/*
+ * One group of keys, as one card: the same frame the voice hotkeys stand in, because the caps inside are
+ * the same caps - a key drawn in two kinds of box on two screens would read as two kinds of key.
+ */
+.keysGroup {
+  --acc-hotkey-h: 22px;
+  display: flex;
+  flex-direction: column;
+  padding: 8px 0 6px;
+  border: 1px solid var(--acc-line);
+  border-radius: var(--acc-r-2xl);
+  background: var(--acc-bg-card);
+}
+
+.keysGroupTitle {
+  padding: 0 10px 4px;
+  font: 500 12.5px var(--acc-font);
+  color: var(--acc-fg);
+}
+
+/* What it does on the left, the keys on the right - the keys never give way, the words do. */
+.keysRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 30px;
+  padding: 3px 10px;
+}
+
+.keysText {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.keysLabel,
+.keysWhen {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.keysLabel {
+  font: 12px var(--acc-font);
+  color: var(--acc-fg-body);
+}
+
+/* When the key works, where that needs saying: "while the agent works", "in an empty field". */
+.keysWhen {
+  font-size: 10.5px;
+  color: var(--acc-fg-faint);
+}
+
+/* A chord cut short is not a shorter key, it is a different one - so this half never shrinks. */
+.keysCaps {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+/* Between two alternatives ("/"), or between the two strokes of one shortcut (","). */
+.keysBetween {
+  padding: 0 2px;
+  font: 11px var(--acc-mono);
+  color: var(--acc-fg-ghost);
+}
+
+/* A key of the IDE's that nobody has bound - said in words, in the place a key would stand. */
+.keysUnset {
+  font-size: 11px;
+  color: var(--acc-fg-ghost);
+}
+
+.keysFoot {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
 .hotkeyClear {
   flex: none;
   width: 18px;
@@ -2228,17 +2325,50 @@
 
 /* What is left of each window, side by side. The figure carries the colour and the name stays quiet:
    two coloured words next to each other cancel each other out. */
+/* A capsule per window, on a grid rather than in a run: the capsules line up from one account's card to the
+   next, and a window's reset time stands under its own share instead of trailing into the next window. */
 .accountMeters {
-  display: flex;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(88px, 1fr));
+  gap: 6px;
   font: 10.5px var(--acc-mono);
 }
 
+/* Half-seen on purpose: the backing of the neutral chips, only fainter - enough to hold the two lines of one
+   window together and apart from the next, and nothing that competes with the share's own colour. */
 .accountMeter {
-  display: inline-flex;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding: 5px 8px 6px;
+  border: 1px solid var(--acc-neutral-12);
+  border-radius: var(--acc-r-md);
+  background: rgb(var(--acc-ch-mist) / 6%);
+}
+
+.accountMeterShare {
+  display: flex;
   gap: 4px;
 }
 
 .accountMeterName {
   color: var(--acc-fg-ghost);
+}
+
+/* The time left until the window resets, under its share - quieter than the share, which is the news, and
+   behind a clock, which says what the figure is. */
+.accountMeterReset {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--acc-fg-faint);
+  white-space: nowrap;
+}
+
+/* An account at its limit, and when it takes work again: the warning colour, since it cannot take any now. */
+.accountWaits {
+  font: 11px/1.4 var(--acc-font);
+  color: var(--acc-warn);
 }

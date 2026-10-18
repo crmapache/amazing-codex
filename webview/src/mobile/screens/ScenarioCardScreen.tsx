@@ -8,6 +8,7 @@ import { Back } from './Back'
 import { PickSheet } from './ScenarioPick'
 import { labelOf, modelChoices, PickRow } from './ScenarioEditor'
 import m from '../mobile.module.css'
+import { EmptyPlate } from './EmptyPlate'
 
 /**
  * One card, all of it, on one screen.
@@ -67,7 +68,7 @@ export const ScenarioCardScreen = ({
           </div>
         </header>
         <div className={m.pageList}>
-          <p className={m.empty}>{t.scenarios.problems.emptyStage}</p>
+          <EmptyPlate title={t.scenarios.problems.emptyStage} />
         </div>
       </>
     )

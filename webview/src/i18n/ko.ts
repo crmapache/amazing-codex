@@ -40,7 +40,9 @@ export const ko: Dict = {
       newChatMode: { title: '기본 모드', hint: '새 탭이 시작하는 모드' },
       composerLayout: { title: '입력창 배치', hint: '입력창을 두는 자리' },
       pasteCollapse: { title: '붙여넣은 텍스트', hint: '붙여넣기를 칩으로 접는 기준' },
+      spellcheck: { title: '맞춤법 검사', hint: '틀린 단어에 밑줄 표시' },
       sendKey: { title: '메시지 보내기', hint: '어떤 키로 보낼지' },
+      keys: { title: '키보드 단축키', hint: '패널이 반응하는 모든 키' },
       codexConfig: { title: 'CODEX 설정', hint: '자체 config.toml - /config로 바뀌는 것' },
       improvePrompt: { title: '프롬프트 다듬기', hint: '별 버튼이 요청하는 내용' },
       voice: { title: '음성 입력', hint: '타이핑 대신 말하기' },
@@ -86,7 +88,9 @@ export const ko: Dict = {
       shareEditor: { label: '열린 파일과 선택 영역', sub: '메시지마다 함께 가는 것' },
       composerLayout: { label: '입력창 배치', sub: '입력창을 두는 자리' },
       pasteCollapse: { label: '붙여넣은 텍스트', sub: '붙여넣기를 칩으로 접는 기준' },
+      spellcheck: { label: '맞춤법 검사', sub: '틀린 단어에 밑줄 표시' },
       sendKey: { label: '메시지 보내기', sub: '어떤 키로 보낼지' },
+      keys: { label: '키보드 단축키', sub: '탭, 대기열, 검색 등' },
       codexConfig: { label: 'Codex 설정', sub: '자체 config.toml과 이 프로젝트의 신뢰' },
       improvePrompt: { label: '프롬프트 다듬기', sub: '별 버튼이 요청하는 내용' },
       voice: { label: '음성 입력', sub: '내 Deepgram 키로 받아쓰기' },
@@ -174,7 +178,15 @@ export const ko: Dict = {
   shareEditor: {
     label: '편집기 내용을 함께 보내기',
     hint: '메시지마다 편집기에 열린 파일과 그 안에서 선택한 줄을 함께 보내요. 터미널에서 Codex의 /ide가 하는 방식과 같아요',
-    note: '이 패널에서만 적용돼요: 휴대폰에서 쓴 메시지에는 편집기 내용이 붙지 않아요. 메시지 하나만 빼고 보낼 수도 있어요 - 입력창의 파일 칩을 누르세요.',
+    note: '이 패널에서만 적용돼요: 휴대폰에서 쓴 메시지에는 편집기 내용이 붙지 않아요. 입력창의 파일 칩에도 같은 스위치가 있고, 메시지 하나만 빼거나 반대로 하나만 함께 보낼 수도 있어요.',
+    on: '켜짐',
+    off: '꺼짐',
+  },
+
+  spellcheck: {
+    label: '맞춤법 검사하기',
+    hint: '검사기가 모르는 단어에 빨간 밑줄이 그어져요. 메시지 입력창과 패널의 다른 텍스트 입력창 모두 해당돼요',
+    note: '여러 언어로 쓰는데 다른 언어의 단어에 밑줄이 그어진다면 꺼 두세요. 휴대폰에서 쓴 메시지는 휴대폰 키보드가 검사하며, 이 스위치로는 바뀌지 않아요.',
     on: '켜짐',
     off: '꺼짐',
   },
@@ -253,6 +265,9 @@ export const ko: Dict = {
     empty: '이 프로젝트에는 아직 지난 대화가 없어요.',
     today: '오늘',
     earlier: '이전',
+    closed: '최근 닫은 탭',
+    reopen: (key) => (key ? `원래 자리에 다시 열기 · ${key}` : '원래 자리에 다시 열기'),
+    fork: '포크',
     messages: (n) => `메시지 ${n}개`,
   },
 
@@ -492,6 +507,7 @@ export const ko: Dict = {
       stopped: '직접 중단함',
       undone: '끝내지 못함',
       headGaveUp: '메인 스레드도 끝내지 못함',
+      longList: '목록이 너무 길었습니다',
     },
     outcomes: {
       scenarioBroken: '이 시나리오는 지금 상태로는 실행할 수 없습니다. 열어서 무엇이 잘못됐는지 보세요.',
@@ -542,6 +558,14 @@ export const ko: Dict = {
       tokens: '토큰',
       passOf: (pass, passes) => `${passes}회 중 ${pass}회차`,
       passOfUpTo: (pass, passes) => `최대 ${passes}회 중 ${pass}회차`,
+      itemOf: (index, count) => `${count}개 중 ${index}번째`,
+      secondGo: '두 번째 시도',
+      listPending: '목록 기다리는 중',
+      listEmpty: '목록이 비어 있음',
+      putOff: '나머지 뒤에 다시',
+      itemsShort: (n) => `${n}개 항목`,
+      listAheadShort: '목록 아직 없음',
+      listEmptyShort: '빈 목록',
       headSaid: '메인 스레드',
       sentBack: (n) => `${n}번 다시 시켰습니다`,
       takenOver: (why) => `메인 스레드가 넘겨받음: ${why}`,
@@ -644,6 +668,13 @@ export const ko: Dict = {
       roundsShort: (n: number): string => `×${n}`,
       roundsUntilShort: (n: number): string => `×${n}, 끝날 때까지`,
       untilDone: '메인 스레드가 다 됐다고 하면 그보다 적어도 됨',
+      perItem: '목록의 항목마다 한 번',
+      perItemShort: '항목마다',
+      listLabel: '목록',
+      itemName: '이름',
+      listHint:
+        '어떤 목록인지, 항목 하나가 어떤 모양인지. 단계가 시작되면 메인 스레드가 목록 전체를 주고, 단계는 항목마다 한 번씩 돕니다.',
+      itemNote: (name) => `본문에 [[${name}]]이라고 쓴 곳마다 회차별 항목이 들어갑니다 - 자리는 필요 없습니다.`,
       cards: '카드',
       addCard: '카드 추가',
       addCardHere: '이 단계에 카드 추가',
@@ -677,6 +708,10 @@ export const ko: Dict = {
       duplicateInput: (name) => `두 질문의 이름이 모두 ${name}입니다.`,
       duplicateSlot: (card, name) => `${card}: 두 자리의 이름이 모두 ${name}입니다.`,
       badInputName: (name) => `"${name}"은 이름으로 쓸 수 없습니다 - 영문자, 숫자, - 와 _ 를 쓰세요.`,
+      badItemName: (stage, name) => `${stage}: "${name}"은 항목 이름으로 쓸 수 없습니다 - 영문자, 숫자, - 와 _ 를 쓰세요.`,
+      noItemList: (stage) => `${stage}: 어떤 목록인지 적혀 있지 않습니다.`,
+      itemSlotClash: (card, name) => `${card}: 자리 ${name}이 단계의 항목과 이름이 같습니다. 항목은 패널이 직접 채웁니다.`,
+      unusedItem: (stage, name) => `${stage}: 어느 본문도 [[${name}]]을 쓰지 않아서 모든 회차가 같은 말을 듣습니다.`,
       badSlotName: (card, name) => `${card}: "${name}"은 이름으로 쓸 수 없습니다 - 영문자, 숫자, - 와 _ 를 쓰세요.`,
     },
   },
@@ -704,6 +739,47 @@ export const ko: Dict = {
     enterSub: 'Shift+Enter는 줄바꿈',
     modEnter: (mod: string): string => `${mod}+Enter`,
     modEnterSub: 'Enter는 줄바꿈',
+  },
+
+  keys: {
+    note: '키는 포커스가 패널에 있는 동안 작동해요. 탭 키는 IDE 키맵에서 에디터 탭을 바꾸고 닫는 키와 같아요.',
+    notSet: '지정 안 됨',
+    keymapNote: '탭 키, 대기열, 패널 열기는 IDE 동작이에요. Settings | Keymap 에서 바꿀 수 있어요.',
+    openKeymap: 'Keymap 에서 바꾸기',
+    groups: { tabs: '탭', message: '메시지 입력란', agent: '에이전트', panel: '패널' },
+    rows: {
+      nextTab: '다음 탭',
+      previousTab: '이전 탭',
+      newTab: '새 탭',
+      closeTab: '탭 닫기',
+      searchTabsWhen: '검색 창에서는 그 탭',
+      closeTabWhen: '에이전트가 작업 중이면 먼저 물어봐요',
+      reopenTab: '닫은 탭 다시 열기',
+      reopenTabWhen: '최근 20개, 기록에도 있어요',
+      openPanel: '패널 열기',
+      openPanelWhen: 'IDE 어디에서나',
+      send: '보내기',
+      newLine: '줄 바꿈',
+      queue: '대기열에',
+      queueWhen: '에이전트가 끝나면 보내요',
+      history: '보낸 메시지 넘겨 보기',
+      historyWhen: '입력란이 비어 있을 때',
+      commands: '명령',
+      files: '파일',
+      shell: '셸 명령',
+      shellWhen: '메시지 맨 앞에서',
+      deleteWord: '단어 지우기',
+      undo: '실행 취소',
+      redo: '다시 실행',
+      stop: '중지',
+      stopWhen: '에이전트가 작업하는 동안',
+      mode: '다음 권한 모드',
+      answer: '숫자로 답하기',
+      answerWhen: '권한이나 질문에, 입력란이 비어 있을 때',
+      search: '대화 검색',
+      fork: '선택한 곳에서 포크',
+      forkWhen: '피드에서 텍스트를 선택했을 때',
+    },
   },
 
   improvePrompt: {
@@ -841,6 +917,32 @@ export const ko: Dict = {
     addSub: 'Codex에 없는 모델',
   },
 
+  fast: {
+    label: '빠른 모드',
+    offSub: '꺼짐 · 응답이 빨라지고 사용 한도를 더 빨리 소진합니다',
+    offSubTier: (tier) => `꺼짐 · Codex 빠른 등급: ${tier}`,
+    waitingSub: '다음 메시지부터 켜짐 · 사용 한도를 더 빨리 소진합니다',
+    onSub: '켜짐 · 사용 한도를 더 빨리 소진합니다',
+    fromSettingsSub: 'Codex 설정에서 켜짐 · 이 대화에서는 끌 수 있습니다',
+    unavailableSub: (reason) => `사용할 수 없음. ${reason}`,
+    chipOn: '빠른 모드가 켜져 있습니다',
+    chipFromSettings: '빠른 모드가 Codex 설정에서 켜져 있습니다',
+    chipWaiting: '빠른 모드는 다음 메시지부터 켜집니다',
+    chipUnavailable: (reason) => `빠른 모드를 사용할 수 없습니다. ${reason}`,
+    row: { label: '고속', title: '빠른 모드가 켜지지 않았습니다', hint: '이 대화는 일반 속도로 계속됩니다.' },
+    reasons: {
+      notServed: 'Codex가 빠른 등급 없이 턴을 실행했습니다.',
+      modelNotAllowed: '이 모델에는 빠른 등급이 없습니다.',
+      unknown: '지금은 사용할 수 없습니다.',
+    },
+    phone: {
+      on: '켜짐',
+      off: '꺼짐',
+      note: '응답이 빨라지고 사용 한도를 더 빨리 소진합니다 - 이 대화에만 적용됩니다.',
+      noteTier: (tier) => `Codex 빠른 등급: ${tier} - 이 대화에만 적용됩니다.`,
+    },
+  },
+
   composer: {
     placeholder: '물어보거나, 바꾸고 싶은 걸 적어 주세요…',
     placeholderPlan: '무엇을 계획할지 적어 주세요…',
@@ -865,8 +967,19 @@ export const ko: Dict = {
     voice: '음성 입력',
     voiceStop: '받아쓰기 끝내기',
     editor: {
-      on: (place) => `Codex가 이 메시지와 함께 ${place}을(를) 봐요 · 클릭하면 빼요`,
-      off: (place) => `${place}은(는) 이 메시지에서 빠져요 · 클릭하면 함께 보내요`,
+      on: (place) => `Codex가 이 메시지와 함께 ${place}을(를) 봐요 · 클릭해서 선택`,
+      off: (place) => `${place}은(는) 이 메시지에서 빠져요 · 클릭해서 선택`,
+      muted: (place) => `${place}은(는) 보내지 않아요 - 편집기 보내기가 꺼져 있어요 · 클릭해서 선택`,
+      menu: {
+        always: '모든 메시지와 함께 보내기',
+        alwaysSub: '열린 파일과 선택한 줄을, 모든 탭에서',
+        skip: '이 메시지에서는 빼기',
+        skipSub: '다음 메시지부터 다시 함께 가요',
+        only: '이 메시지에만 보내기',
+        onlySub: '다음 메시지는 다시 빼고 가요',
+        never: '보내지 않기',
+        neverSub: '모든 탭에서, 다시 켤 때까지. 설정과 같은 스위치예요',
+      },
     },
   },
 
@@ -881,6 +994,7 @@ export const ko: Dict = {
     scenarios: '시나리오',
     closeScenarios: '시나리오 닫기',
     closeRun: '이 실행 닫기',
+    closeHint: (close, reopen) => `${close} · 다시 열기: ${reopen}`,
     conversations: '대화',
     newSession: '새 대화',
     fork: '이 대화를 포크: 여기서 이어지는 새 탭을 열고, 이 탭은 그대로 둡니다',
@@ -974,6 +1088,19 @@ export const ko: Dict = {
   feed: {
     empty: { title: '이 프로젝트에 대해 Codex에게 물어보세요', hint: '@ 파일 · / 명령' },
     you: '나',
+    auto: {
+      label: '패널',
+      why: {
+        accountSwitch: '내가 쓴 게 아니에요. 계정 전환으로 턴이 끊겨서 패널이 알아서 이어 갔어요',
+        limit: '내가 쓴 게 아니에요. 사용 한도로 턴이 멈춰서, 다시 할 수 있게 되자 패널이 알아서 이어 갔어요',
+        restart: '내가 쓴 게 아니에요. 대화 아래에서 Codex가 다시 시작돼 백그라운드 에이전트가 사라져서, 패널이 이어 가라고 했어요',
+      },
+    },
+    carryOn: {
+      planned: (clock: string): string => `한도가 초기화되는 ${clock}에 이 대화를 알아서 이어 가요`,
+      guessed: (clock: string): string => `${clock}에 이 대화를 알아서 이어 가 볼게요 - 한도가 언제 초기화되는지는 알려 주지 않았어요`,
+      cancel: '이어 가지 않기',
+    },
     jumpToLatest: '최신으로 이동',
     copyBlock: '이 블록 복사',
     copyReply: '답변 전체 복사',
@@ -1009,6 +1136,11 @@ export const ko: Dict = {
     copyPaste: '붙여넣은 텍스트 복사',
     pasteShown: (shown, total) => `전체 ${total}줄 중 처음 ${shown}줄 · 복사는 전체`,
     fromOutput: '출력에서',
+    imagePreview: {
+      missing: '이미지를 읽을 수 없습니다. 파일이 없어졌거나 메시지에 더 이상 저장되어 있지 않습니다',
+      opens: '클릭하면 열림',
+      unopened: '열 수 없습니다. 클릭하면 다시 시도',
+    },
 
     think: { chip: '생각', thoughts: (n) => `생각 ${n}개` },
 
@@ -1132,6 +1264,19 @@ export const ko: Dict = {
       textWithCode: (code) => `Codex가 예기치 않게 종료됐어요 (종료 코드 ${code}).`,
     },
 
+    session: {
+      label: '세션',
+      id: '세션 ID',
+      terminal: '터미널에서',
+      copyId: '세션 ID 복사',
+      terminalNote: '프로젝트 폴더에서 연 터미널에서 이 대화를 이어가요',
+      terminalNoteOn: (account: string): string =>
+        `프로젝트 폴더에서 연 터미널에서 ${account} 계정으로 이 대화를 이어가요`,
+      terminalNoteDefault: (account: string): string =>
+        `프로젝트 폴더에서 연 터미널에서 이 대화를 이어가요. ${account} 계정이 아니라 Codex 기본 로그인으로 진행돼요`,
+      unnamedAccount: '이 탭',
+      none: '아직 ID가 없어요. 첫 메시지와 함께 생겨요',
+    },
     outranked: {
       account: {
         label: '로그인',
@@ -1195,7 +1340,23 @@ export const ko: Dict = {
       unconfirmed: '미확인',
     },
 
-    copy: { copied: '복사됨', click: '클릭해서 복사', openFile: '편집기에서 열기', openFolder: '폴더 표시' },
+    copy: { copied: '복사됨', click: '클릭해서 복사', openFile: '편집기에서 열기', openFolder: '폴더 표시', missing: '디스크에 그 파일이 없어요 - 눌러서 다시 확인' },
+    changes: {
+      all: (n) => `모두 보기 (${n})`,
+      fewer: '접기',
+      revert: '이 파일 되돌리기',
+      revertAll: '모두 되돌리기',
+      reverting: '되돌리는 중…',
+      restore: '변경 다시 적용',
+      restoreAll: '모두 다시 적용',
+      restoring: '다시 적용하는 중…',
+      reverted: '되돌림',
+      changed: '이후에 바뀌어서 그대로 둠',
+      missing: '파일이 더 이상 없어요',
+      failed: '파일을 쓸 수 없었어요',
+      deleted: '삭제됨',
+      movedFrom: (from) => `${from}에서 이동`,
+    },
   },
 
   chrome: {
@@ -1209,6 +1370,7 @@ export const ko: Dict = {
     queue: {
       label: '대기 중',
       hint: (n) => `${n}개가 이번 실행이 끝나면 차례로 나가요 · 끌어서 순서 변경`,
+      held: (n) => `${n}개가 다음 메시지를 보낸 뒤 차례로 나가요 (기다리던 실행은 멈췄어요) · 끌어서 순서 변경`,
       edit: '입력창에서 편집',
       editing: (key, button) => `입력창에서 편집 중 · ${key} 또는 '${button}'을 누르면 이 자리로 돌아와요`,
     },
@@ -1262,7 +1424,16 @@ export const ko: Dict = {
       stopCommand: '이 명령 멈추기',
       stopCommandTitle: '이 명령을 멈출까요?',
     },
-    confirm: { cancel: '취소', stop: '멈추기' },
+    confirm: {
+      cancel: '취소',
+      stop: '멈추기',
+      close: '닫기',
+      closeWorking: '아직 작업 중인 탭을 닫을까요?',
+      closeWorkingNote: (key) =>
+        key
+          ? `에이전트가 멈춥니다. ${key}로 탭을 다시 열 수 있고, 대기열은 다음 메시지를 기다립니다.`
+          : '에이전트가 멈춥니다. 탭은 기록에서 다시 열 수 있고, 대기열은 다음 메시지를 기다립니다.',
+    },
     noChats: { title: '함께 일하게 되어 기뻐요!', button: '시작하기' },
     crash: {
       title: '패널에서 오류가 났어요',
@@ -1295,6 +1466,7 @@ export const ko: Dict = {
     fiveHour: '5시간',
     weekly: '주간',
     spending: '지출',
+    usableAgainIn: (left) => `한도 도달 · ${left} 후 다시 사용 가능`,
     row: {
       one: '계정 하나',
       adding: '로그인하는 중…',
@@ -1796,6 +1968,7 @@ export const ko: Dict = {
     weeklyApps: '주간 앱',
     weeklyFable: '주간 Fable',
     extra: '추가 사용',
+    spending: '지출',
   },
 
   permission: {
@@ -1873,6 +2046,8 @@ export const ko: Dict = {
     config: 'Codex 설정 - 메뉴에서 열기',
     btw: '작업을 멈추지 않고 잠깐 묻기',
     btwArgument: '<질문>',
+    fast: '빠른 모드 전환 - 응답이 빨라지고 사용 한도를 더 빨리 소진',
+    status: '이 대화의 ID와 터미널에서 이어가는 명령',
     model: '이 세션의 모델 바꾸기',
     effort: 'Codex가 움직이기 전에 얼마나 생각할지 정하기',
     codeReview: 'Codex 자체 리뷰어로 변경 사항 검토',

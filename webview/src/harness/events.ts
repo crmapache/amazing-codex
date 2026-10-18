@@ -1,4 +1,4 @@
-import type { AgentEvent, ShellMessage } from '../protocol'
+import type { AgentEvent, ShellMessage, ToolUseResult } from '../protocol'
 import type { Checkpoint, Scenario, ScenarioStep } from './types'
 
 export const SESSION = 'main'
@@ -169,10 +169,15 @@ export const toolUse = (name: string, input: unknown, id: string): ScenarioStep 
     message: { content: [{ type: 'tool_use', id, name, input }] },
   })
 
-export const toolResult = (id: string, content: string, isError = false): ScenarioStep =>
+/**
+ * A tool's answer. [structured] is the half the CLI sends beside the text - the diff an edit applied, or
+ * that a Write created its file - which is what the list of changed files at a turn's end is counted from.
+ */
+export const toolResult = (id: string, content: string, isError = false, structured?: ToolUseResult): ScenarioStep =>
   agent({
     type: 'user',
     message: { content: [{ type: 'tool_result', tool_use_id: id, content, is_error: isError }] },
+    ...(structured ? { tool_use_result: structured } : {}),
   })
 
 /** A nested subagent call or line - the same shape as an ordinary one but with the parent Task's parent_tool_use_id. */

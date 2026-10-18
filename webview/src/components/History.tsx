@@ -1,12 +1,20 @@
 import { describeWhen } from '../feed/when'
 import { useT } from '../i18n'
-import type { HistoryEntry } from '../protocol'
+import type { ClosedTab, HistoryEntry } from '../protocol'
 import s from './sideMenu.module.css'
 
 interface HistoryProps {
   /** null means the list has not arrived yet: it is read from disk by itself, before the menu opens. */
   conversations: HistoryEntry[] | null
   onOpen: (entry: HistoryEntry) => void
+  /**
+   * The tabs closed by hand that can be opened again, the latest first, with anything open again already left
+   * out (see ClosedTabs.kt) - each with the name it would wear on the strip.
+   */
+  closed?: (ClosedTab & { name: string })[]
+  onReopen?: (key: string) => void
+  /** The panel's key for the latest of them, as a hover hint names it - empty when there is none. */
+  reopenKey?: string
 }
 
 /**
@@ -17,7 +25,7 @@ interface HistoryProps {
  * in an hour ago" is a different question from "the one from that week", and a single flat list makes
  * the first question as much work as the second.
  */
-export const History = ({ conversations, onOpen }: HistoryProps) => {
+export const History = ({ conversations, onOpen, closed = [], onReopen, reopenKey = '' }: HistoryProps) => {
   const t = useT()
   const startOfToday = new Date().setHours(0, 0, 0, 0)
   const today = conversations?.filter((entry) => entry.updatedAt >= startOfToday) ?? []
@@ -25,6 +33,32 @@ export const History = ({ conversations, onOpen }: HistoryProps) => {
 
   return (
     <div className={`${s.screen} ${s.screenList}`}>
+      {/* Above the past conversations rather than among them: these are tabs - with what was in their field,
+          their model and their place on the strip - and opening one puts it back as it was, which a
+          conversation picked below does not. A conversation may stand in both lists for that reason. */}
+      {closed.length > 0 && onReopen ? (
+        <>
+          <div className={s.screenGroup}>
+            <span className={s.screenLabel}>{t.history.closed}</span>
+          </div>
+          {closed.map((tab, index) => (
+            <button
+              key={tab.key}
+              type="button"
+              className={s.historyRow}
+              onClick={() => onReopen(tab.key)}
+              // The key brings back the latest one, so it is named on that row alone.
+              data-tooltip={t.history.reopen(index === 0 ? reopenKey : '')}
+            >
+              <span className={s.historyTitle}>{tab.name}</span>
+              <span className={s.historyMeta}>
+                {[describeWhen(tab.closedAt), tab.kind === 'fork' ? t.history.fork : ''].filter(Boolean).join(' · ')}
+              </span>
+            </button>
+          ))}
+        </>
+      ) : null}
+
       {conversations === null ? <div className={s.screenEmpty}>{t.common.loading}</div> : null}
 
       {conversations?.length === 0 ? <div className={s.screenEmpty}>{t.history.empty}</div> : null}

@@ -3,6 +3,7 @@ import type { TaskItem } from '../../feed/types'
 import { Back } from './Back'
 import m from '../mobile.module.css'
 import { useT } from '../../i18n'
+import { EmptyPlate } from './EmptyPlate'
 
 interface AgentScreenProps {
   /** Absent when the agent has gone from the feed under this screen - see the note below. */
@@ -53,7 +54,7 @@ export const AgentScreen = ({ task, onStop, onBack }: AgentScreenProps) => {
       <div className={m.thread}>
         {/* The agent is gone from the feed under this screen - the conversation was switched, or its
             journal was reset. Saying so beats a blank screen with a back arrow on it. */}
-        {task ? <AgentStreamView item={task} /> : <p className={m.empty}>{t.mobile.tasks.agentGone}</p>}
+        {task ? <AgentStreamView item={task} /> : <EmptyPlate title={t.mobile.tasks.agentGone} inset />}
       </div>
     </>
   )

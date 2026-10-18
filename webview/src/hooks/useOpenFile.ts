@@ -1,5 +1,6 @@
 import { createContext, useContext } from 'react'
 import { NOTHING_KNOWN, type KnownFiles } from '../feed/paths'
+import type { PicturePlace } from '../protocol'
 
 /** What the panel asks the IDE to open, and where in it to land. */
 export interface OpenFileRequest {
@@ -44,6 +45,22 @@ export const OpenFileContext = createContext<((request: OpenFileRequest) => void
 export const useOpenFile = (): ((request: OpenFileRequest) => void) | null => useContext(OpenFileContext)
 
 /**
+ * Opening the picture behind a chip in the editor, wherever it is (see chipOpening): a file opens as itself,
+ * and a picture with no file of its own - bytes in the page, a queued message, a line of the transcript - is
+ * written out by the IDE first. A chip with a picture behind it is something a person clicks - the pointer
+ * and the preview over it say as much - and a click that opens nothing is what it may not do: the chip that
+ * was pressed is handed over too, so the preview over it can say the picture did not open (see
+ * imagePreviewLoad.ts).
+ *
+ * Null where there is no editor, as with [OpenFileContext].
+ */
+export type OpenPicture = (picture: PicturePlace, chip: HTMLElement) => void
+
+export const OpenPictureContext = createContext<OpenPicture | null>(null)
+
+export const useOpenPicture = (): OpenPicture | null => useContext(OpenPictureContext)
+
+/**
  * The project's files, for telling a file's name from a word that merely looks like one (see KnownFiles).
  *
  * A context for the same reason as the one above: the readers are the same leaves. The default knows
@@ -54,3 +71,13 @@ export const KnownFilesContext = createContext<KnownFiles>(NOTHING_KNOWN)
 
 /** What the project is known to have - see [KnownFilesContext]. */
 export const useKnownFiles = (): KnownFiles => useContext(KnownFilesContext)
+
+/**
+ * The paths a press found no file at, as this panel asked them (see the fileMissing message) - so a link that
+ * leads nowhere says so rather than doing nothing. A path leaves the set the moment it is pressed again: the
+ * file may be back, and the disk answers anew.
+ */
+export const MissingFilesContext = createContext<ReadonlySet<string>>(new Set())
+
+/** The paths a press found no file at - see [MissingFilesContext]. */
+export const useMissingFiles = (): ReadonlySet<string> => useContext(MissingFilesContext)

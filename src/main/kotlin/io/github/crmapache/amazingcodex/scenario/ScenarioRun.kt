@@ -73,6 +73,8 @@ internal object RunFailure {
     const val UNDONE = "undone"
     /** The head took over the work of a card its session could not finish, and could not finish it either. */
     const val HEAD_GAVE_UP = "headGaveUp"
+    /** A stage that runs once per item was given a longer list than a stage takes (see MAX_STAGE_ITEMS). */
+    const val LONG_LIST = "longList"
 }
 
 @Serializable
@@ -297,7 +299,10 @@ internal data class RunStep(
     val summary: String = "",
     /** How many times the head sent it back to work, and what it said each time. */
     val nudges: List<String> = emptyList(),
-    /** What the head decided about the definition of done, once it has decided. */
+    /**
+     * What the head decided about the definition of done, once it has decided: `done`, `undone`, or `later` -
+     * an item of a list it could not get done now and asked to come back to after the rest (see StageList.putOff).
+     */
     val verdict: String = "",
     val verdictReason: String = "",
     /** What the head carried forward from this card. */
@@ -323,6 +328,39 @@ internal data class RunStep(
      * Subtracted from the card's own span, so the row and the run's clock agree about the same pause.
      */
     val rested: Long = 0,
+    /**
+     * The item of the list this pass is for, in a stage that runs once per item (see Stage.each) - and null in
+     * every other stage, and in such a stage before its list was given: the pass then is the place the list
+     * will be asked for (see StageList).
+     */
+    val item: RunItem? = null,
+)
+
+/**
+ * One item of the list a stage runs once per item of, as the pass that is for it carries it.
+ *
+ * On the step rather than in a list of the run's own, because the step is what everything reads: the row draws
+ * it, the road names its stop after it, the card's prompt is filled from it, and a run picked up again finds it
+ * where it left it (see CarryOn).
+ */
+@Serializable
+internal data class RunItem(
+    /** What the screen calls it - a few words the head chose. */
+    val label: String = "",
+    /** What is written into the prompts for `[[name]]`, exactly as the head gave it. */
+    val value: String = "",
+    /** Its place in the list, counting from one - and 0 on a stage whose list came back empty (see [count]). */
+    val index: Int = 0,
+    /**
+     * How long the list is. Zero marks the passes of a stage whose list came back empty: they are skipped,
+     * and this is what tells them from passes a stopped run never reached.
+     */
+    val count: Int = 0,
+    /**
+     * Why this pass is a second go at its item: what the first go ran into, in the head's words, when it
+     * asked to come back to the item after the rest (see StageList.putOff). Empty for the first go.
+     */
+    val again: String = "",
 )
 
 /**
@@ -468,6 +506,12 @@ internal data class RoadmapStop(
 /** How much of a card's name its stop on the road carries - a hint's line, not the card's prompt. */
 private const val ROADMAP_TITLE = 80
 
+/**
+ * What a stop on the road is called: the item a pass of a list is for, otherwise the card. Seven stops of one
+ * card are seven items, and the item is the one thing that tells them apart in a hint (see scenarios/roadmap.ts).
+ */
+internal fun RunStep.stopTitle(): String = item?.label?.takeIf { it.isNotBlank() } ?: title
+
 internal fun ScenarioRun.summarise(): RunSummary {
     /*
      * The card the run is on: the first that is still open, and failing that the last that ever began.
@@ -488,7 +532,7 @@ internal fun ScenarioRun.summarise(): RunSummary {
      * eye, and it is the same road a moment later anyway.
      */
     val road = if (steps.isNotEmpty()) {
-        steps.map { RoadmapStop(state = it.state, stage = stageOf[it.stageId] ?: 0, pass = it.pass, title = it.title) }
+        steps.map { RoadmapStop(state = it.state, stage = stageOf[it.stageId] ?: 0, pass = it.pass, title = it.stopTitle()) }
     } else {
         ScenarioRules.plan(snapshot).map {
             RoadmapStop(state = StepState.WAITING, stage = stageOf[it.stageId] ?: 0, pass = it.pass, title = it.title)

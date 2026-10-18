@@ -44,7 +44,9 @@ export const fr: Dict = {
       newChatMode: { title: 'MODE PAR DÉFAUT', hint: 'ce avec quoi démarrent les nouveaux onglets' },
       composerLayout: { title: 'DISPOSITION DU CHAMP', hint: 'où se place le champ de saisie' },
       pasteCollapse: { title: 'TEXTE COLLÉ', hint: 'quand un collage se replie en pastille' },
+      spellcheck: { title: 'ORTHOGRAPHE', hint: 'souligner les mots mal écrits' },
       sendKey: { title: 'ENVOYER UN MESSAGE', hint: 'quelle touche envoie' },
+      keys: { title: 'RACCOURCIS CLAVIER', hint: 'chaque touche à laquelle le volet répond' },
       codexConfig: { title: 'RÉGLAGES DE CODEX', hint: 'son config.toml - ce que /config change' },
       improvePrompt: { title: 'AMÉLIORER LE PROMPT', hint: 'ce que demande le bouton étoile' },
       voice: { title: 'SAISIE VOCALE', hint: 'dicter au lieu de taper' },
@@ -90,7 +92,9 @@ export const fr: Dict = {
       shareEditor: { label: 'Fichier ouvert et sélection', sub: 'Ce qui part avec chaque message' },
       composerLayout: { label: 'Disposition du champ', sub: 'Où se place le champ de saisie' },
       pasteCollapse: { label: 'Texte collé', sub: 'Quand un collage se replie en pastille' },
+      spellcheck: { label: 'Orthographe', sub: 'Souligner les mots mal écrits' },
       sendKey: { label: 'Envoyer un message', sub: 'Quelle touche envoie' },
+      keys: { label: 'Raccourcis clavier', sub: 'Onglets, file, recherche et le reste' },
       codexConfig: { label: 'Réglages de Codex', sub: 'Son propre config.toml et la confiance accordée à ce projet' },
       improvePrompt: { label: 'Améliorer le prompt', sub: 'Ce que demande le bouton étoile' },
       voice: { label: 'Saisie vocale', sub: 'Dicter avec votre propre clé Deepgram' },
@@ -178,7 +182,15 @@ export const fr: Dict = {
   shareEditor: {
     label: 'Joindre l’éditeur',
     hint: 'Chaque message emporte le fichier ouvert dans l’éditeur et les lignes qui y sont sélectionnées - comme le fait /ide de Codex dans un terminal',
-    note: 'Depuis ce panneau seulement : un message écrit sur un téléphone n’emporte rien de l’éditeur. Un message peut partir sans - cliquez sur la puce du fichier dans le champ de saisie.',
+    note: 'Depuis ce panneau seulement : un message écrit sur un téléphone n’emporte rien de l’éditeur. La puce du fichier dans le champ de saisie porte le même interrupteur, et un seul message peut y partir sans lui ou, à l’inverse, avec lui.',
+    on: 'Activé',
+    off: 'Désactivé',
+  },
+
+  spellcheck: {
+    label: 'Vérifier l’orthographe',
+    hint: 'Les mots que le correcteur ne connaît pas sont soulignés en rouge - dans le champ du message et dans les autres champs de texte du panneau',
+    note: 'Désactivez-la si vous écrivez en plusieurs langues et que les mots des autres langues sont soulignés. Un message écrit sur un téléphone est vérifié par le clavier du téléphone, que ce bouton ne change pas.',
     on: 'Activé',
     off: 'Désactivé',
   },
@@ -257,6 +269,9 @@ export const fr: Dict = {
     empty: 'Aucune conversation passée ici pour l’instant.',
     today: 'AUJOURD’HUI',
     earlier: 'AVANT',
+    closed: 'FERMÉS RÉCEMMENT',
+    reopen: (key) => (key ? `Rouvrir à sa place · ${key}` : 'Rouvrir à sa place'),
+    fork: 'bifurcation',
     messages: (n) => (n === 1 ? `${n} message` : `${n} messages`),
   },
 
@@ -500,6 +515,7 @@ export const fr: Dict = {
       stopped: 'Interrompu par vous',
       undone: 'Pas terminé',
       headGaveUp: 'Le fil principal n’a pas pu la terminer non plus',
+      longList: 'La liste était trop longue',
     },
     outcomes: {
       scenarioBroken: 'Ce scénario ne peut pas être lancé tel quel - ouvrez-le et voyez ce qui cloche.',
@@ -550,6 +566,14 @@ export const fr: Dict = {
       tokens: 'jetons',
       passOf: (pass, passes) => `passe ${pass} sur ${passes}`,
       passOfUpTo: (pass, passes) => `passe ${pass} sur ${passes} au plus`,
+      itemOf: (index, count) => `élément ${index} sur ${count}`,
+      secondGo: 'deuxième essai',
+      listPending: 'attend la liste',
+      listEmpty: 'rien dans la liste',
+      putOff: 'revient après les autres',
+      itemsShort: (n) => (n === 1 ? '1 élément' : `${n} éléments`),
+      listAheadShort: 'liste pas encore donnée',
+      listEmptyShort: 'liste vide',
       headSaid: 'FIL PRINCIPAL',
       sentBack: (n) => (n === 1 ? 'renvoyée une fois' : `renvoyée ${n} fois`),
       takenOver: (why) => `Le fil principal a pris le relais : ${why}`,
@@ -652,6 +676,13 @@ export const fr: Dict = {
       roundsShort: (n: number): string => `×${n}`,
       roundsUntilShort: (n: number): string => `×${n}, jusqu\'à fait`,
       untilDone: 'ou moins, si le fil principal dit que c\'est fini',
+      perItem: 'une fois par élément d’une liste',
+      perItemShort: 'par élément',
+      listLabel: 'LA LISTE',
+      itemName: 'nom',
+      listHint:
+        'Ce qu’est la liste et à quoi ressemble un de ses éléments. Le fil principal donne toute la liste au début de l’étape, et l’étape passe une fois par élément.',
+      itemNote: (name) => `Chaque passe reçoit son propre élément là où le texte dit [[${name}]] - pas besoin d’emplacement.`,
       cards: 'CARTES',
       addCard: 'Ajouter une carte',
       addCardHere: 'Ajouter une carte à cette étape',
@@ -685,6 +716,10 @@ export const fr: Dict = {
       duplicateInput: (name) => `Deux questions portent le même nom : ${name}.`,
       duplicateSlot: (card, name) => `${card} : deux emplacements portent le même nom : ${name}.`,
       badInputName: (name) => `« ${name} » n\'est pas un nom - utilisez des lettres, des chiffres, - et _.`,
+      badItemName: (stage, name) => `${stage} : « ${name} » ne peut pas nommer l’élément - utilisez des lettres, des chiffres, - et _.`,
+      noItemList: (stage) => `${stage} : rien ne dit ce qu’est la liste.`,
+      itemSlotClash: (card, name) => `${card} : l’emplacement ${name} porte le nom de l’élément de l’étape, que le panneau remplit lui-même.`,
+      unusedItem: (stage, name) => `${stage} : aucun texte n’écrit [[${name}]], donc chaque passe reçoit la même chose.`,
       badSlotName: (card, name) => `${card} : « ${name} » n\'est pas un nom - utilisez des lettres, des chiffres, - et _.`,
     },
   },
@@ -712,6 +747,47 @@ export const fr: Dict = {
     enterSub: 'Shift+Enter passe à la ligne',
     modEnter: (mod: string): string => `${mod}+Enter`,
     modEnterSub: 'Enter passe à la ligne',
+  },
+
+  keys: {
+    note: "Les touches marchent tant que le focus est dans le volet. Celles des onglets sont celles qui changent et ferment les onglets de l'éditeur dans le keymap de ton IDE.",
+    notSet: 'Non défini',
+    keymapNote: "Les touches des onglets, la file et l'ouverture du volet sont des actions de l'IDE - réassigne-les dans Settings | Keymap.",
+    openKeymap: 'Modifier dans Keymap',
+    groups: { tabs: 'Onglets', message: 'Champ du message', agent: 'Agent', panel: 'Volet' },
+    rows: {
+      nextTab: 'Onglet suivant',
+      previousTab: 'Onglet précédent',
+      newTab: 'Nouvel onglet',
+      closeTab: "Fermer l'onglet",
+      searchTabsWhen: 'dans la recherche, ses onglets',
+      closeTabWhen: "demande d'abord si l'agent travaille",
+      reopenTab: 'Rouvrir l’onglet fermé',
+      reopenTabWhen: 'les 20 derniers, aussi dans l’Historique',
+      openPanel: 'Ouvrir le volet',
+      openPanelWhen: "depuis n'importe où dans l'IDE",
+      send: 'Envoyer',
+      newLine: 'Nouvelle ligne',
+      queue: 'Mettre en file',
+      queueWhen: "part quand l'agent a fini",
+      history: 'Parcourir les envoyés',
+      historyWhen: 'dans un champ vide',
+      commands: 'Commandes',
+      files: 'Fichiers',
+      shell: 'Commande shell',
+      shellWhen: "au début d'un message",
+      deleteWord: 'Effacer un mot',
+      undo: 'Annuler',
+      redo: 'Rétablir',
+      stop: 'Arrêter',
+      stopWhen: "pendant que l'agent travaille",
+      mode: 'Mode de permission suivant',
+      answer: 'Répondre par un chiffre',
+      answerWhen: 'à une permission ou une question, champ vide',
+      search: 'Chercher dans les conversations',
+      fork: 'Fork depuis la sélection',
+      forkWhen: 'avec du texte sélectionné dans le fil',
+    },
   },
 
   improvePrompt: {
@@ -851,6 +927,32 @@ export const fr: Dict = {
     addSub: 'Un que Codex ne propose pas',
   },
 
+  fast: {
+    label: 'Mode rapide',
+    offSub: 'Désactivé · des réponses plus rapides qui consomment vos limites plus vite',
+    offSubTier: (tier) => `Désactivé · niveau rapide de Codex : ${tier}`,
+    waitingSub: 'Activé dès le prochain message · consomme vos limites plus vite',
+    onSub: 'Activé · consomme vos limites plus vite',
+    fromSettingsSub: 'Activé dans vos réglages Codex · à couper pour cette conversation',
+    unavailableSub: (reason) => `Indisponible. ${reason}`,
+    chipOn: 'Le mode rapide est activé',
+    chipFromSettings: 'Le mode rapide est activé dans vos réglages Codex',
+    chipWaiting: "Le mode rapide s'active au prochain message",
+    chipUnavailable: (reason) => `Le mode rapide est indisponible. ${reason}`,
+    row: { label: 'RAPIDE', title: "Le mode rapide ne s'est pas activé", hint: 'Cette conversation continue à la vitesse normale.' },
+    reasons: {
+      notServed: 'Codex a fait le tour sans le niveau rapide.',
+      modelNotAllowed: "Ce modèle n'a pas de niveau rapide.",
+      unknown: 'Il est indisponible pour le moment.',
+    },
+    phone: {
+      on: 'Activé',
+      off: 'Désactivé',
+      note: 'Des réponses plus rapides qui consomment vos limites plus vite - pour cette conversation seulement.',
+      noteTier: (tier) => `Niveau rapide de Codex : ${tier} - pour cette conversation seulement.`,
+    },
+  },
+
   composer: {
     placeholder: 'Pose une question, ou décris un changement…',
     placeholderPlan: 'Décris ce qu’il faut planifier…',
@@ -875,8 +977,19 @@ export const fr: Dict = {
     voice: 'Dicter',
     voiceStop: 'Arrêter la dictée',
     editor: {
-      on: (place) => `Codex voit ${place} avec ce message · cliquez pour le retirer`,
-      off: (place) => `${place} ne part pas avec ce message · cliquez pour le joindre`,
+      on: (place) => `Codex voit ${place} avec ce message · cliquez pour choisir`,
+      off: (place) => `${place} ne part pas avec ce message · cliquez pour choisir`,
+      muted: (place) => `${place} n’est pas envoyé : l’envoi de l’éditeur est désactivé · cliquez pour choisir`,
+      menu: {
+        always: 'Joindre à chaque message',
+        alwaysSub: 'Le fichier ouvert et les lignes sélectionnées, dans tous les onglets',
+        skip: 'Ne pas joindre à ce message',
+        skipSub: 'Le message suivant le reprend',
+        only: 'Joindre à ce message seulement',
+        onlySub: 'Le suivant repart sans',
+        never: 'Ne jamais joindre',
+        neverSub: 'Dans tous les onglets, jusqu’à le réactiver : le même interrupteur que dans les réglages',
+      },
     },
   },
 
@@ -891,6 +1004,7 @@ export const fr: Dict = {
     scenarios: 'Scénarios',
     closeScenarios: 'Fermer les scénarios',
     closeRun: 'Fermer cette exécution',
+    closeHint: (close, reopen) => `${close} · ${reopen} le rouvre`,
     conversations: 'Conversations',
     newSession: 'Nouvelle conversation',
     fork: 'Forker cette conversation : un nouvel onglet qui reprend d’ici, pendant que celui-ci reste tel quel',
@@ -985,6 +1099,19 @@ export const fr: Dict = {
   feed: {
     empty: { title: 'Pose une question à Codex sur ce projet', hint: '@ pour les fichiers · / pour les commandes' },
     you: 'TOI',
+    auto: {
+      label: 'PANNEAU',
+      why: {
+        accountSwitch: "Ce n'est pas toi qui l'as écrit : le changement de compte a interrompu le tour, et le panneau l'a repris tout seul",
+        limit: "Ce n'est pas toi qui l'as écrit : la limite d'utilisation a arrêté le tour, et le panneau l'a repris tout seul dès que possible",
+        restart: "Ce n'est pas toi qui l'as écrit : Codex a redémarré sous la conversation, ses agents en arrière-plan ont été perdus, et le panneau lui a dit de reprendre",
+      },
+    },
+    carryOn: {
+      planned: (clock: string): string => `Reprendra cette conversation tout seul à ${clock}, une fois la limite réinitialisée`,
+      guessed: (clock: string): string => `Essaiera de reprendre cette conversation tout seul à ${clock} : la limite n'a pas dit quand elle se réinitialise`,
+      cancel: 'Ne pas reprendre',
+    },
     jumpToLatest: 'Aller au plus récent',
     copyBlock: 'Copier ce bloc',
     copyReply: 'Copier toute la réponse',
@@ -1020,6 +1147,11 @@ export const fr: Dict = {
     copyPaste: 'Copier le texte collé',
     pasteShown: (shown, total) => `${shown} premières lignes sur ${total} · la copie prend tout`,
     fromOutput: 'depuis la sortie',
+    imagePreview: {
+      missing: 'Impossible de lire l’image : le fichier n’existe plus, ou le message ne la garde plus',
+      opens: 'clic pour ouvrir',
+      unopened: 'impossible de l’ouvrir : clic pour réessayer',
+    },
 
     think: { chip: 'RÉFLEXION', thoughts: (n) => `${n} ${n === 1 ? 'pensée' : 'pensées'}` },
 
@@ -1143,6 +1275,19 @@ export const fr: Dict = {
       textWithCode: (code) => `Codex s’est arrêté de façon inattendue (code ${code}).`,
     },
 
+    session: {
+      label: 'SESSION',
+      id: 'ID de session',
+      terminal: 'Dans un terminal',
+      copyId: 'Copier l’ID de session',
+      terminalNote: 'Reprend cette conversation dans un terminal ouvert dans le dossier du projet',
+      terminalNoteOn: (account: string): string =>
+        `Reprend cette conversation sur le compte ${account} dans un terminal ouvert dans le dossier du projet`,
+      terminalNoteDefault: (account: string): string =>
+        `Reprend cette conversation dans un terminal ouvert dans le dossier du projet, avec la connexion par défaut de Codex et non sur le compte ${account}`,
+      unnamedAccount: 'de cet onglet',
+      none: 'Pas encore d’ID : la conversation en reçoit un avec son premier message',
+    },
     outranked: {
       account: {
         label: 'CONNEXION',
@@ -1207,7 +1352,23 @@ export const fr: Dict = {
       unconfirmed: 'non confirmé',
     },
 
-    copy: { copied: 'Copié', click: 'Cliquer pour copier', openFile: "Ouvrir dans l'éditeur", openFolder: 'Afficher le dossier' },
+    copy: { copied: 'Copié', click: 'Cliquer pour copier', openFile: "Ouvrir dans l'éditeur", openFolder: 'Afficher le dossier', missing: 'Ce fichier n’existe pas sur le disque - cliquer pour vérifier à nouveau' },
+    changes: {
+      all: (n) => `Tout afficher (${n})`,
+      fewer: 'Afficher moins',
+      revert: 'Annuler les changements de ce fichier',
+      revertAll: 'Tout annuler',
+      reverting: 'Annulation…',
+      restore: 'Rétablir les changements',
+      restoreAll: 'Tout rétablir',
+      restoring: 'Rétablissement…',
+      reverted: 'Annulé',
+      changed: 'Modifié depuis, laissé tel quel',
+      missing: 'Le fichier n’existe plus',
+      failed: 'Impossible d’écrire le fichier',
+      deleted: 'Supprimé',
+      movedFrom: (from) => `depuis ${from}`,
+    },
   },
 
   chrome: {
@@ -1221,6 +1382,7 @@ export const fr: Dict = {
     queue: {
       label: 'EN ATTENTE',
       hint: (n) => `${n} partiront dans l’ordre à la fin du tour · glissez pour réordonner`,
+      held: (n) => `${n} partiront dans l’ordre après votre prochain message - le tour qu’ils attendaient a été arrêté · glissez pour réordonner`,
       edit: 'Modifier dans le champ',
       editing: (key, button) => `En cours de modification dans le champ · ${key} ou « ${button} » le remet ici`,
     },
@@ -1274,7 +1436,16 @@ export const fr: Dict = {
       stopCommand: 'Arrêter cette commande',
       stopCommandTitle: 'Arrêter cette commande ?',
     },
-    confirm: { cancel: 'Annuler', stop: 'Arrêter' },
+    confirm: {
+      cancel: 'Annuler',
+      stop: 'Arrêter',
+      close: 'Fermer',
+      closeWorking: 'Fermer un onglet qui travaille encore ?',
+      closeWorkingNote: (key) =>
+        key
+          ? `L'agent s'arrête. ${key} rouvre l'onglet, sa file attendant votre prochain message.`
+          : "L'agent s'arrête. L'onglet peut être rouvert depuis l'Historique, sa file attendant votre prochain message.",
+    },
     noChats: { title: 'Ravi de travailler ensemble !', button: "C'est parti" },
     crash: {
       title: 'Le panneau a rencontré une erreur',
@@ -1320,6 +1491,7 @@ export const fr: Dict = {
     fiveHour: '5 h',
     weekly: 'sem.',
     spending: 'dépenses',
+    usableAgainIn: (left) => `Limite atteinte · de nouveau utilisable dans ${left}`,
     row: {
       /** The value on the menu row when there is nothing to switch between. */
       one: 'Un seul compte',
@@ -1832,6 +2004,7 @@ export const fr: Dict = {
     weeklyApps: 'hebdomadaire des applications',
     weeklyFable: 'hebdomadaire Fable',
     extra: 'd’usage supplémentaire',
+    spending: 'de dépenses',
   },
 
   permission: {
@@ -1909,6 +2082,8 @@ export const fr: Dict = {
     config: 'réglages de Codex - les ouvre dans le menu',
     btw: 'une petite question à part - le travail continue',
     btwArgument: '<ta question>',
+    fast: 'activer ou couper le mode rapide - des réponses plus rapides qui consomment vos limites plus vite',
+    status: 'l’ID de cette conversation et la commande pour la reprendre dans un terminal',
     model: 'changer le modèle de cette session',
     effort: 'régler combien de temps Codex réfléchit avant d’agir',
     codeReview: 'relire les changements avec le relecteur propre à Codex',

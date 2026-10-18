@@ -1,17 +1,34 @@
 ---
 paths:
-  - "src/main/kotlin/io/github/crmapache/amazingclaudecode/claude/SettingSources.kt"
-  - "src/test/kotlin/io/github/crmapache/amazingclaudecode/claude/SettingSourcesTest.kt"
-  - "src/main/kotlin/io/github/crmapache/amazingclaudecode/claude/ClaudeSettings.kt"
-  - "src/main/kotlin/io/github/crmapache/amazingclaudecode/claude/PermissionDefaultMode.kt"
-  - "src/main/kotlin/io/github/crmapache/amazingclaudecode/claude/PermissionBypass.kt"
-  - "src/main/kotlin/io/github/crmapache/amazingclaudecode/claude/accounts/AccountOverride.kt"
-  - "src/test/kotlin/io/github/crmapache/amazingclaudecode/claude/accounts/AccountOverrideTest.kt"
-  - "webview/src/settingSources.ts"
-  - "webview/src/settingSources.test.ts"
-  - "webview/src/components/SettingSources.tsx"
+  - "src/main/kotlin/io/github/crmapache/amazingcodex/codex/CodexConfig.kt"
+  - "src/test/kotlin/io/github/crmapache/amazingcodex/codex/CodexConfigTest.kt"
+  - "src/main/kotlin/io/github/crmapache/amazingcodex/codex/CodexSettings.kt"
+  - "src/main/kotlin/io/github/crmapache/amazingcodex/codex/PermissionDefaultMode.kt"
+  - "src/main/kotlin/io/github/crmapache/amazingcodex/codex/PermissionBypass.kt"
+  - "webview/src/components/CodexConfig.tsx"
   - "webview/src/components/items/Rows.tsx"
 ---
+
+## У форка экрана источников нет: доверие проекту и строки в ленте
+
+Экран «Settings sources» оригинала (флаг `--setting-sources` CLI) в форк не переносился (CLAUDE.md, «Что не
+перенесено и почему»). У Codex флага слоёв нет и не нужно: слой проекта (`.codex/config.toml`) он грузит только у
+доверенного проекта, а ключи провайдера и адреса (`model_provider`, `openai_base_url` и т.п.) из проектного
+конфига выбрасывает сам (замерено). Ниже этого раздела - механизм оригинала: общий код панели и слова, которые
+форк использует по-своему.
+
+- **Что вместо экрана**: блок «This project» с кнопкой Trust / Stop trusting на экране настроек Codex
+  (claude-config.md) и строка в ленте `accountOutranked` раз на разговор (`CodexSessionHub.checkProjectSettings`,
+  `sendAccountOutranked`): `reason: untrusted` - у проекта есть свои настройки, а доверия нет (Codex их не грузит);
+  `reason: account` - доверенный проект требует способ входа или рабочее пространство (`forced_login_method`,
+  `forced_chatgpt_workspace_id`), и Codex считает вход аккаунта отсутствующим в этой папке. Кнопка строки ведёт на
+  экран настроек Codex, а не на экран источников.
+- **Режим новой вкладки читается в порядке Codex** (`CodexSettings.effective`: проект только у доверенного, потом
+  человек, потом система; `PermissionDefaultMode.of` - пара `approval_policy` + `sandbox_mode` в режим панели,
+  `PermissionBypass` - разрешён ли полный доступ). То же правило, что у оригинала: что панель читает, обязано
+  совпадать с тем, с чем Codex запустит процесс.
+- **Отказ сервера по HTTP 400 объясняется так же** (раздел ниже): код переводчик берёт из ошибки хода Codex
+  (`CodexErrors.httpStatus` -> `api_error_status` у `result`), панель общая.
 
 ## Источники настроек: какие слои Claude Code читает в этом проекте
 
@@ -30,25 +47,25 @@ Claude Code сливает настройки из четырёх слоёв, и
   галочки: комбинация «проект без пользователя» никому не нужна, а закрытый список (`SettingSources.CHOICES`,
   `normalize`) - единственная защита от того, что в аргумент уедет строка из сообщения панели. Неизвестное
   значение - всегда «все слои»: сузить чужим словом то, что грузит разговор, нельзя ни при каких условиях.
-- **Пустой выбор обязан оставлять командную строку прежней** (`ClaudeLaunchTest`). Машина, где этот экран
+- **Пустой выбор обязан оставлять командную строку прежней** (`CodexLaunchTest`). Машина, где этот экран
   не открывали, запускает CLI байт в байт как до появления настройки.
-- **Настройка принадлежит ПРОЕКТУ, в отличие от всего в `ClaudePreferences`** (`PropertiesComponent.getInstance(project)`).
+- **Настройка принадлежит ПРОЕКТУ, в отличие от всего в `CodexPreferences`** (`PropertiesComponent.getInstance(project)`).
   «В этом репозитории свой шлюз» - факт о репозитории; машинный переключатель заткнул бы проектные настройки
   всех остальных чекаутов на диске, которые об этом не просили.
-- **Что панель ЧИТАЕТ, обязано совпадать с тем, с чем она ЗАПУСКАЕТ** (`ClaudeSettings.sources` берёт
+- **Что панель ЧИТАЕТ, обязано совпадать с тем, с чем она ЗАПУСКАЕТ** (`CodexSettings.sources` берёт
   `SettingSources.layers`). Режим разрешений для первого кадра панель достаёт из тех же файлов
   (`PermissionDefaultMode`, `PermissionBypass`); прочитанный из слоя, который CLI велено не грузить, он
   называл бы режим, в котором процесс не поднимется. Поэтому после смены выбора уходит и `newTabDefaults`.
 - **Слой политики не трогается никогда.** Флаг вообще не знает слова `policy`, managed-настройки организации
   действуют при любом выборе - и тест держит это отдельно.
-- **Смена выбора поднимает процессы заново, а не ждёт следующего запуска** (`ClaudeSessions.restartAll`,
+- **Смена выбора поднимает процессы заново, а не ждёт следующего запуска** (`CodexSessions.restartAll`,
   дорога добавленного MCP-сервера). Слои читаются при старте процесса, и без этого настройка выглядела бы
   неработающей ровно в тех вкладках, ради которых её открыли. Идущий ход при этом не обрывается: он всё
   равно не смог бы воспользоваться новым выбором.
-- **Выбор спрашивается на каждом запуске, а не запоминается сессией** (`ClaudeSession.settingSources` -
+- **Выбор спрашивается на каждом запуске, а не запоминается сессией** (`CodexSession.settingSources` -
   лямбда, как `titleWanted`). Экран открывают, когда разговоры уже идут, и следующий подъём процесса -
   падение, `--resume`, реконнект MCP - обязан поднять его так, как только что попросили.
-- **Старый CLI флага не знает, и тогда он не передаётся** (`ClaudeExecutable.supportsFlag`): неизвестный
+- **Старый CLI флага не знает, и тогда он не передаётся** (`CodexExecutable.supportsFlag`): неизвестный
   аргумент CLI не пропускает, он просто не стартует. Это пишется в `DiagnosticsLog` и говорится на экране
   (`supported: false` в сообщении `settingSources`) - иначе единственным следом было бы «настройка не
   работает».
@@ -62,7 +79,7 @@ Claude Code сливает настройки из четырёх слоёв, и
   карточка отвечает одной строкой, то оно или нет. Читается при открытии экрана (`askSettingSources`), а не
   в `init`: файлы могли поправить, а вторая половина ответа стоит процесса (`claude --help`).
 - **Имена переменных - да, значения - никогда.** В `env` лежит ключ; значение не читается, не едет в
-  сообщение, не попадает в журнал и в отчёт об ошибке. `ClaudeSettings.envNames` отдаёт только имена, и
+  сообщение, не попадает в журнал и в отчёт об ошибке. `CodexSettings.envNames` отдаёт только имена, и
   пустое значение считается незаданным - ровно так его читает CLI (см. `AccountStore.OUTRANKING_VARIABLES`).
 - **С телефона это не меняется и не спрашивается** (`RemoteCommands.DENIED`). Настройка решает, чья подписка
   платит и на какой адрес уходят запросы машины, за которой человека нет; экрана там нет, а ответ стоит
@@ -77,7 +94,7 @@ Claude Code сливает настройки из четырёх слоёв, и
 
 - **Предупреждение, а не отказ.** Отказ стартовать в репозитории, настроенном его владельцем, - безопасная и
   бесполезная половина ответа: так и задумано у многих. Чинить нельзя только то, чего не видно.
-- **Только при ИМЕНОВАННОМ аккаунте** (`ClaudeSession.start`). На обычном входе двух мнений нет, и шлюз,
+- **Только при ИМЕНОВАННОМ аккаунте** (`CodexSession.start`). На обычном входе двух мнений нет, и шлюз,
   прописанный в репозитории, - это просто то, как проект устроен; строка в ленте была бы шумом навсегда.
 - **Считается по тому, что реально запустилось, а не по выбранному** (`passedSources`): CLI, который флага не
   знает, читает настройки репозитория всё равно - именно тогда предупреждение и нужно.
@@ -93,7 +110,7 @@ Claude Code сливает настройки из четырёх слоёв, и
   дорогой. Сломанный или странный файл настроек - не повод для предупреждения: `jsonPrimitive` бросает на
   объекте, поэтому значения читаются приведением, и одна чужая запись не уносит с собой имена рядом.
 
-Проверить без IDE: `SettingSourcesTest`, `AccountOverrideTest`, `ClaudeLaunchTest`, в панели -
+Проверить без IDE: `SettingSourcesTest`, `AccountOverrideTest`, `CodexLaunchTest`, в панели -
 `settingSources.test.ts` и раздел про `outranked` в `feed/build.test.ts`; экран и строку ленты видно в
 харнессе - плеер отвечает на `askSettingSources` репозиторием, который аккаунт перебивает.
 

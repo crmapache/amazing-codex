@@ -40,7 +40,9 @@ export const zh: Dict = {
       newChatMode: { title: '默认模式', hint: '新标签页从哪种模式开始' },
       composerLayout: { title: '输入框布局', hint: '输入框放在哪里' },
       pasteCollapse: { title: '粘贴的文本', hint: '何时把粘贴折叠成小卡片' },
+      spellcheck: { title: '拼写检查', hint: '为拼错的词加下划线' },
       sendKey: { title: '发送消息', hint: '用哪个键发送' },
+      keys: { title: '键盘快捷键', hint: '面板响应的所有按键' },
       codexConfig: { title: 'CODEX 设置', hint: '它的 config.toml - /config 修改的就是它' },
       improvePrompt: { title: '优化提示词', hint: '星标按钮按什么要求改写' },
       voice: { title: '语音输入', hint: '用说的，不用打字' },
@@ -86,7 +88,9 @@ export const zh: Dict = {
       shareEditor: { label: '打开的文件和选区', sub: '每条消息附带的内容' },
       composerLayout: { label: '输入框布局', sub: '输入框放在哪里' },
       pasteCollapse: { label: '粘贴的文本', sub: '何时把粘贴折叠成小卡片' },
+      spellcheck: { label: '拼写检查', sub: '为拼错的词加下划线' },
       sendKey: { label: '发送消息', sub: '用哪个键发送' },
+      keys: { label: '键盘快捷键', sub: '标签页、队列、搜索等' },
       codexConfig: { label: 'Codex 设置', sub: '它自己的 config.toml，以及是否信任这个项目' },
       improvePrompt: { label: '优化提示词', sub: '星标按钮按什么要求改写' },
       voice: { label: '语音输入', sub: '用你自己的 Deepgram 密钥听写' },
@@ -174,7 +178,15 @@ export const zh: Dict = {
   shareEditor: {
     label: '随消息附带编辑器',
     hint: '每条消息都会附上编辑器中打开的文件及其中选中的行，就像终端里 Codex 的 /ide 那样',
-    note: '仅限此面板：在手机上写的消息不会附带编辑器的任何内容。单条消息可以不附带 - 点一下输入框里的文件标签即可。',
+    note: '仅限此面板：在手机上写的消息不会附带编辑器的任何内容。输入框里的文件标签也有这个开关，还可以让单条消息不附带，或反过来只让这一条附带。',
+    on: '开',
+    off: '关',
+  },
+
+  spellcheck: {
+    label: '检查拼写',
+    hint: '检查器不认识的词会加上红色下划线，包括消息输入框和面板中的其他文本框',
+    note: '如果你用多种语言写作，其他语言的词也会被画线，可以把它关掉。在手机上写的消息由手机自己的键盘检查，此开关不会改变它。',
     on: '开',
     off: '关',
   },
@@ -253,6 +265,9 @@ export const zh: Dict = {
     empty: '这个项目还没有过去的对话。',
     today: '今天',
     earlier: '更早',
+    closed: '最近关闭',
+    reopen: (key) => (key ? `在原位置重新打开 · ${key}` : '在原位置重新打开'),
+    fork: '分叉',
     messages: (n) => `${n} 条消息`,
   },
 
@@ -492,6 +507,7 @@ export const zh: Dict = {
       stopped: '被你中断',
       undone: '没做完',
       headGaveUp: '主线程也没能做完',
+      longList: '清单太长了',
     },
     outcomes: {
       scenarioBroken: '这个场景照现在的样子无法运行 - 打开看看哪里不对。',
@@ -542,6 +558,14 @@ export const zh: Dict = {
       tokens: 'token',
       passOf: (pass, passes) => `第 ${pass} 轮，共 ${passes} 轮`,
       passOfUpTo: (pass, passes) => `第 ${pass} 轮，最多 ${passes} 轮`,
+      itemOf: (index, count) => `第 ${index} 项，共 ${count} 项`,
+      secondGo: '第二次',
+      listPending: '等清单',
+      listEmpty: '清单里什么都没有',
+      putOff: '等其余的做完再回来',
+      itemsShort: (n) => `${n} 项`,
+      listAheadShort: '清单还没给',
+      listEmptyShort: '空清单',
       headSaid: '主线程',
       sentBack: (n) => `退回重做 ${n} 次`,
       takenOver: (why) => `主线程接手了：${why}`,
@@ -644,6 +668,13 @@ export const zh: Dict = {
       roundsShort: (n: number): string => `×${n}`,
       roundsUntilShort: (n: number): string => `×${n}，直到完成`,
       untilDone: '也可以更少，如果主线程说已经好了',
+      perItem: '清单里每项一次',
+      perItemShort: '按项',
+      listLabel: '清单',
+      itemName: '名字',
+      listHint:
+        '这是什么清单，一项长什么样。阶段开始时主线程给出整个清单，阶段对每一项走一次。',
+      itemNote: (name) => `正文里写 [[${name}]] 的地方，每一轮都会填进这一轮的项 - 不需要槽位。`,
       cards: '卡片',
       addCard: '添加一张卡片',
       addCardHere: '给这个阶段加一张卡片',
@@ -677,6 +708,10 @@ export const zh: Dict = {
       duplicateInput: (name) => `有两个问题都叫 ${name}。`,
       duplicateSlot: (card, name) => `${card}：有两个槽位都叫 ${name}。`,
       badInputName: (name) => `“${name}”不是名字 - 只能用字母、数字、- 和 _。`,
+      badItemName: (stage, name) => `${stage}：“${name}”不能当项的名字 - 只能用字母、数字、- 和 _。`,
+      noItemList: (stage) => `${stage}：没有说这是什么清单。`,
+      itemSlotClash: (card, name) => `${card}：槽位 ${name} 和阶段的项同名，而项是面板自己填的。`,
+      unusedItem: (stage, name) => `${stage}：没有哪段正文写 [[${name}]]，所以每一轮听到的都一样。`,
       badSlotName: (card, name) => `${card}：“${name}”不是名字 - 只能用字母、数字、- 和 _。`,
     },
   },
@@ -704,6 +739,47 @@ export const zh: Dict = {
     enterSub: 'Shift+Enter 换行',
     modEnter: (mod: string): string => `${mod}+Enter`,
     modEnterSub: 'Enter 换行',
+  },
+
+  keys: {
+    note: '焦点在面板中时这些键才起作用。切换标签页的键与 IDE 键位映射中切换、关闭编辑器标签页的键相同。',
+    notSet: '未设置',
+    keymapNote: '标签页的键、排队和打开面板是 IDE 操作 - 可在 Settings | Keymap 中重新设置。',
+    openKeymap: '在 Keymap 中修改',
+    groups: { tabs: '标签页', message: '消息输入框', agent: '智能体', panel: '面板' },
+    rows: {
+      nextTab: '下一个标签页',
+      previousTab: '上一个标签页',
+      newTab: '新建标签页',
+      closeTab: '关闭标签页',
+      searchTabsWhen: '在搜索窗口中切换其标签',
+      closeTabWhen: '智能体工作时会先询问',
+      reopenTab: '重新打开已关闭的标签页',
+      reopenTabWhen: '最近 20 个，也在历史记录中',
+      openPanel: '打开面板',
+      openPanelWhen: '在 IDE 的任何位置',
+      send: '发送',
+      newLine: '换行',
+      queue: '排队',
+      queueWhen: '智能体完成后发送',
+      history: '浏览已发送的消息',
+      historyWhen: '输入框为空时',
+      commands: '命令',
+      files: '文件',
+      shell: 'Shell 命令',
+      shellWhen: '在消息开头',
+      deleteWord: '删除一个词',
+      undo: '撤销',
+      redo: '重做',
+      stop: '停止',
+      stopWhen: '智能体工作时',
+      mode: '下一个权限模式',
+      answer: '按数字回答',
+      answerWhen: '回答权限请求或问题，输入框为空时',
+      search: '搜索对话',
+      fork: '从所选内容分叉',
+      forkWhen: '在消息流中选中文本时',
+    },
   },
 
   improvePrompt: {
@@ -841,6 +917,32 @@ export const zh: Dict = {
     addSub: 'Codex 没有的那种',
   },
 
+  fast: {
+    label: '快速模式',
+    offSub: '关 · 回答更快，额度消耗也更快',
+    offSubTier: (tier) => `关 · Codex 快速档：${tier}`,
+    waitingSub: '下一条消息起开启 · 额度消耗更快',
+    onSub: '开 · 额度消耗更快',
+    fromSettingsSub: '已在 Codex 设置中开启 · 可为此对话关闭',
+    unavailableSub: (reason) => `不可用。${reason}`,
+    chipOn: '快速模式已开启',
+    chipFromSettings: '快速模式已在 Codex 设置中开启',
+    chipWaiting: '快速模式将在下一条消息开启',
+    chipUnavailable: (reason) => `快速模式不可用。${reason}`,
+    row: { label: '快速', title: '快速模式未能开启', hint: '本对话继续以标准速度进行。' },
+    reasons: {
+      notServed: 'Codex 没有用快速档运行这一回合。',
+      modelNotAllowed: '此模型没有快速档。',
+      unknown: '暂时不可用。',
+    },
+    phone: {
+      on: '开',
+      off: '关',
+      note: '回答更快，额度消耗也更快 - 仅限此对话。',
+      noteTier: (tier) => `Codex 快速档：${tier} - 仅限此对话。`,
+    },
+  },
+
   composer: {
     placeholder: '提问，或者描述要改什么…',
     placeholderPlan: '说说要规划什么…',
@@ -865,8 +967,19 @@ export const zh: Dict = {
     voice: '语音输入',
     voiceStop: '结束听写',
     editor: {
-      on: (place) => `Codex 会随这条消息看到 ${place} · 点击不附带`,
-      off: (place) => `${place} 不会随这条消息发出 · 点击附带`,
+      on: (place) => `Codex 会随这条消息看到 ${place} · 点击选择`,
+      off: (place) => `${place} 不会随这条消息发出 · 点击选择`,
+      muted: (place) => `${place} 不会发出：附带编辑器已关闭 · 点击选择`,
+      menu: {
+        always: '每条消息都附带',
+        alwaysSub: '打开的文件和选中的行，所有标签页',
+        skip: '这条消息不附带',
+        skipSub: '下一条消息会再次附带',
+        only: '仅这条消息附带',
+        onlySub: '下一条又会不附带',
+        never: '从不附带',
+        neverSub: '所有标签页，直到重新打开。与设置里的是同一个开关',
+      },
     },
   },
 
@@ -881,6 +994,7 @@ export const zh: Dict = {
     scenarios: '场景',
     closeScenarios: '关闭场景',
     closeRun: '关闭这次运行',
+    closeHint: (close, reopen) => `${close} · ${reopen} 可重新打开`,
     conversations: '对话',
     newSession: '新建对话',
     fork: '分叉此对话：新标签页从这里接着聊，当前这个保持不变',
@@ -974,6 +1088,19 @@ export const zh: Dict = {
   feed: {
     empty: { title: '问问 Codex 这个项目', hint: '@ 找文件 · / 用命令' },
     you: '你',
+    auto: {
+      label: '面板',
+      why: {
+        accountSwitch: '这不是你写的：切换账号打断了这一回合，面板自动让它继续',
+        limit: '这不是你写的：用量上限让这一回合停下了，一能继续，面板就自动让它继续',
+        restart: '这不是你写的：Codex 在对话下重启，后台代理丢失了，面板让它继续',
+      },
+    },
+    carryOn: {
+      planned: (clock: string): string => `将在 ${clock} 上限重置后自动继续这个对话`,
+      guessed: (clock: string): string => `将在 ${clock} 尝试自动继续这个对话，上限没有说明何时重置`,
+      cancel: '不要继续',
+    },
     jumpToLatest: '回到最新',
     copyBlock: '复制这段代码',
     copyReply: '复制整条回复',
@@ -1009,6 +1136,11 @@ export const zh: Dict = {
     copyPaste: '复制粘贴的文本',
     pasteShown: (shown, total) => `共 ${total} 行，显示前 ${shown} 行 · 复制的是全部`,
     fromOutput: '来自输出',
+    imagePreview: {
+      missing: '无法读取图片：文件已不存在，或消息中已不再保存它',
+      opens: '点击打开',
+      unopened: '无法打开，点击重试',
+    },
 
     think: { chip: '思考', thoughts: (n) => `${n} 段思考` },
 
@@ -1132,6 +1264,19 @@ export const zh: Dict = {
       textWithCode: (code) => `Codex 意外退出了（退出码 ${code}）。`,
     },
 
+    session: {
+      label: '会话',
+      id: '会话 ID',
+      terminal: '在终端中',
+      copyId: '复制会话 ID',
+      terminalNote: '在项目文件夹中打开的终端里继续这个会话',
+      terminalNoteOn: (account: string): string =>
+        `在项目文件夹中打开的终端里，以 ${account} 继续这个会话`,
+      terminalNoteDefault: (account: string): string =>
+        `在项目文件夹中打开的终端里继续这个会话，但使用的是 Codex 的默认登录，而不是 ${account}`,
+      unnamedAccount: '此标签页的账号',
+      none: '还没有 ID，会话在第一条消息时获得',
+    },
     outranked: {
       account: {
         label: '登录',
@@ -1195,7 +1340,23 @@ export const zh: Dict = {
       unconfirmed: '未确认',
     },
 
-    copy: { copied: '已复制', click: '点击复制', openFile: '在编辑器中打开', openFolder: '显示文件夹' },
+    copy: { copied: '已复制', click: '点击复制', openFile: '在编辑器中打开', openFolder: '显示文件夹', missing: '磁盘上没有这个文件 - 点击重新查找' },
+    changes: {
+      all: (n) => `全部显示（${n}）`,
+      fewer: '收起',
+      revert: '撤销此文件的改动',
+      revertAll: '全部撤销',
+      reverting: '正在撤销…',
+      restore: '恢复这些改动',
+      restoreAll: '全部恢复',
+      restoring: '正在恢复…',
+      reverted: '已撤销',
+      changed: '之后又被改过，保持原样',
+      missing: '文件已不存在',
+      failed: '无法写入文件',
+      deleted: '已删除',
+      movedFrom: (from) => `从 ${from} 移来`,
+    },
   },
 
   chrome: {
@@ -1209,6 +1370,7 @@ export const zh: Dict = {
     queue: {
       label: '排队中',
       hint: (n) => `${n} 条会在本轮结束后按顺序发出 · 拖动可调整顺序`,
+      held: (n) => `${n} 条会在你发出下一条消息后按顺序发出（它们等待的那一轮已停止） · 拖动可调整顺序`,
       edit: '在输入框中编辑',
       editing: (key, button) => `正在输入框中编辑 · 按 ${key} 或点「${button}」放回这里`,
     },
@@ -1262,7 +1424,16 @@ export const zh: Dict = {
       stopCommand: '停止这条命令',
       stopCommandTitle: '停止这条命令？',
     },
-    confirm: { cancel: '取消', stop: '停止' },
+    confirm: {
+      cancel: '取消',
+      stop: '停止',
+      close: '关闭',
+      closeWorking: '关闭仍在工作的标签页？',
+      closeWorkingNote: (key) =>
+        key
+          ? `智能体会停止。按 ${key} 可重新打开标签页，队列会等到你发出下一条消息。`
+          : '智能体会停止。可以从历史记录重新打开标签页，队列会等到你发出下一条消息。',
+    },
     noChats: { title: '很高兴和你一起工作！', button: '开始吧' },
     crash: {
       title: '面板出错了',
@@ -1295,6 +1466,7 @@ export const zh: Dict = {
     fiveHour: '5 小时',
     weekly: '每周',
     spending: '消费',
+    usableAgainIn: (left) => `已达上限 · ${left} 后可再次使用`,
     row: {
       one: '只有一个账号',
       adding: '登录中…',
@@ -1801,6 +1973,7 @@ export const zh: Dict = {
     weeklyApps: '每周应用',
     weeklyFable: '每周 Fable',
     extra: '额外计费',
+    spending: '消费',
   },
 
   permission: {
@@ -1878,6 +2051,8 @@ export const zh: Dict = {
     config: 'Codex 设置 - 在菜单中打开',
     btw: '顺便问个问题 - 不打断当前工作',
     btwArgument: '<问题>',
+    fast: '切换快速模式 - 回答更快，额度消耗也更快',
+    status: '这个会话的 ID，以及在终端中继续它的命令',
     model: '切换本次会话使用的模型',
     effort: '设置 Codex 动手前思考多久',
     codeReview: '用 Codex 自带的审查器审查更改',

@@ -42,7 +42,9 @@ export const ja: Dict = {
       newChatMode: { title: 'デフォルトのモード', hint: '新しいタブが始まるモード' },
       composerLayout: { title: '入力欄のレイアウト', hint: '入力欄を置く場所' },
       pasteCollapse: { title: '貼り付けたテキスト', hint: '貼り付けをチップにまとめる条件' },
+      spellcheck: { title: 'スペルチェック', hint: '綴りの誤りに下線を引く' },
       sendKey: { title: 'メッセージの送信', hint: 'どのキーで送るか' },
+      keys: { title: 'キーボードショートカット', hint: 'パネルが反応するすべてのキー' },
       codexConfig: { title: 'CODEX の設定', hint: '本体の config.toml - /config で変わるもの' },
       improvePrompt: { title: 'プロンプトの改善', hint: '星ボタンが出す指示' },
       voice: { title: '音声入力', hint: '打つかわりに話す' },
@@ -88,7 +90,9 @@ export const ja: Dict = {
       shareEditor: { label: '開いているファイルと選択範囲', sub: 'メッセージごとに一緒に送るもの' },
       composerLayout: { label: '入力欄のレイアウト', sub: '入力欄を置く場所' },
       pasteCollapse: { label: '貼り付けたテキスト', sub: '貼り付けをチップにまとめる条件' },
+      spellcheck: { label: 'スペルチェック', sub: '綴りの誤りに下線を引く' },
       sendKey: { label: 'メッセージの送信', sub: 'どのキーで送るか' },
+      keys: { label: 'キーボードショートカット', sub: 'タブ、キュー、検索ほか' },
       codexConfig: { label: 'Codex の設定', sub: '本体の config.toml と、このプロジェクトの信頼' },
       improvePrompt: { label: 'プロンプトの改善', sub: '星ボタンが出す指示' },
       voice: { label: '音声入力', sub: '自分の Deepgram キーで口述する' },
@@ -176,7 +180,15 @@ export const ja: Dict = {
   shareEditor: {
     label: 'エディターの内容を一緒に送る',
     hint: '各メッセージに、エディターで開いているファイルとその中で選択した行を添えます。ターミナルで Codex の /ide がするのと同じです',
-    note: 'このパネルからのみ：スマホで書いたメッセージにはエディターの内容は付きません。1 通だけ外すこともできます - 入力欄のファイルのチップを押してください。',
+    note: 'このパネルからのみ：スマホで書いたメッセージにはエディターの内容は付きません。入力欄のファイルのチップにも同じスイッチがあり、1 通だけ外したり、逆に 1 通だけ付けたりもできます。',
+    on: 'オン',
+    off: 'オフ',
+  },
+
+  spellcheck: {
+    label: 'スペルをチェックする',
+    hint: 'チェッカーが知らない単語に赤い下線が引かれます。メッセージ欄とパネルのほかのテキスト欄が対象です',
+    note: '複数の言語で書いていて、ほかの言語の単語に下線が付く場合はオフにしてください。スマホで書いたメッセージはスマホのキーボードがチェックし、このスイッチでは変わりません。',
     on: 'オン',
     off: 'オフ',
   },
@@ -255,6 +267,9 @@ export const ja: Dict = {
     empty: 'このプロジェクトにはまだ過去の会話がありません。',
     today: '今日',
     earlier: 'それ以前',
+    closed: '最近閉じたタブ',
+    reopen: (key) => (key ? `元の位置で開き直す · ${key}` : '元の位置で開き直す'),
+    fork: 'フォーク',
     messages: (n) => `${n} 件のメッセージ`,
   },
 
@@ -494,6 +509,7 @@ export const ja: Dict = {
       stopped: 'あなたが中断',
       undone: '未完了',
       headGaveUp: 'メインスレッドも終えられませんでした',
+      longList: 'リストが長すぎました',
     },
     outcomes: {
       scenarioBroken: 'このシナリオはこのままでは実行できません。開いて何が足りないか確認してください。',
@@ -544,6 +560,14 @@ export const ja: Dict = {
       tokens: 'トークン',
       passOf: (pass, passes) => `${passes} 周のうち ${pass} 周目`,
       passOfUpTo: (pass, passes) => `最大 ${passes} 周のうち ${pass} 周目`,
+      itemOf: (index, count) => `${count} 件中 ${index} 件目`,
+      secondGo: '2 回目',
+      listPending: 'リスト待ち',
+      listEmpty: 'リストは空',
+      putOff: '残りの後でもう一度',
+      itemsShort: (n) => `${n} 件`,
+      listAheadShort: 'リストはまだ',
+      listEmptyShort: '空のリスト',
       headSaid: 'メインスレッド',
       sentBack: (n) => `${n} 回やり直させました`,
       takenOver: (why) => `メインスレッドが引き継ぎました: ${why}`,
@@ -646,6 +670,13 @@ export const ja: Dict = {
       roundsShort: (n: number): string => `×${n}`,
       roundsUntilShort: (n: number): string => `×${n}、終わるまで`,
       untilDone: 'メインスレッドが完了と判断すればそれより少なくても可',
+      perItem: 'リストの項目ごとに 1 回',
+      perItemShort: '項目ごと',
+      listLabel: 'リスト',
+      itemName: '名前',
+      listHint:
+        'どんなリストか、項目ひとつがどんな形か。ステージが始まるとメインスレッドがリスト全体を出し、ステージは項目ごとに 1 回ずつ回ります。',
+      itemNote: (name) => `本文の [[${name}]] の所に、周ごとにその周の項目が入ります - 枠は要りません。`,
       cards: 'カード',
       addCard: 'カードを追加',
       addCardHere: 'この段階にカードを追加',
@@ -679,6 +710,10 @@ export const ja: Dict = {
       duplicateInput: (name) => `二つの質問がどちらも ${name} という名前です。`,
       duplicateSlot: (card, name) => `${card}: 二つの枠がどちらも ${name} という名前です。`,
       badInputName: (name) => `「${name}」は名前として使えません - 英数字と - と _ を使ってください。`,
+      badItemName: (stage, name) => `${stage}: 「${name}」は項目の名前として使えません - 英数字と - と _ を使ってください。`,
+      noItemList: (stage) => `${stage}: どんなリストかが書かれていません。`,
+      itemSlotClash: (card, name) => `${card}: 枠 ${name} がステージの項目と同じ名前です。項目はパネルが自分で入れます。`,
+      unusedItem: (stage, name) => `${stage}: どの本文にも [[${name}]] がないので、どの周にも同じことが伝わります。`,
       badSlotName: (card, name) => `${card}: 「${name}」は名前として使えません - 英数字と - と _ を使ってください。`,
     },
   },
@@ -706,6 +741,47 @@ export const ja: Dict = {
     enterSub: 'Shift+Enter で改行',
     modEnter: (mod: string): string => `${mod}+Enter`,
     modEnterSub: 'Enter で改行',
+  },
+
+  keys: {
+    note: 'キーはフォーカスがパネルにあるあいだ働きます。タブのキーは、IDE のキーマップでエディターのタブを切り替え・閉じるのと同じキーです。',
+    notSet: '未設定',
+    keymapNote: 'タブのキー、順番待ち、パネルを開くキーは IDE のアクションです。Settings | Keymap で割り当てを変えられます。',
+    openKeymap: 'Keymap で変更',
+    groups: { tabs: 'タブ', message: 'メッセージ欄', agent: 'エージェント', panel: 'パネル' },
+    rows: {
+      nextTab: '次のタブ',
+      previousTab: '前のタブ',
+      newTab: '新しいタブ',
+      closeTab: 'タブを閉じる',
+      searchTabsWhen: '検索ウィンドウではそのタブ',
+      closeTabWhen: 'エージェントが作業中なら確認します',
+      reopenTab: '閉じたタブを開き直す',
+      reopenTabWhen: '直近 20 件、履歴にも表示',
+      openPanel: 'パネルを開く',
+      openPanelWhen: 'IDE のどこからでも',
+      send: '送信',
+      newLine: '改行',
+      queue: '順番待ちに入れる',
+      queueWhen: 'エージェントが終わったら送ります',
+      history: '送ったメッセージをたどる',
+      historyWhen: '欄が空のとき',
+      commands: 'コマンド',
+      files: 'ファイル',
+      shell: 'シェルコマンド',
+      shellWhen: 'メッセージの先頭で',
+      deleteWord: '単語を削除',
+      undo: '元に戻す',
+      redo: 'やり直す',
+      stop: '停止',
+      stopWhen: 'エージェントの作業中',
+      mode: '次の権限モード',
+      answer: '数字で答える',
+      answerWhen: '許可や質問に、欄が空のとき',
+      search: '会話を検索',
+      fork: '選択範囲からフォーク',
+      forkWhen: 'フィードでテキストを選択しているとき',
+    },
   },
 
   improvePrompt: {
@@ -843,6 +919,32 @@ export const ja: Dict = {
     addSub: 'Codex にないもの',
   },
 
+  fast: {
+    label: '高速モード',
+    offSub: 'オフ · 応答が速くなり、利用上限を早く消費します',
+    offSubTier: (tier) => `オフ · Codex の高速ティア: ${tier}`,
+    waitingSub: '次のメッセージからオン · 利用上限を早く消費します',
+    onSub: 'オン · 利用上限を早く消費します',
+    fromSettingsSub: 'Codex の設定でオン · この会話ではオフにできます',
+    unavailableSub: (reason) => `使用できません。${reason}`,
+    chipOn: '高速モードはオンです',
+    chipFromSettings: '高速モードは Codex の設定でオンです',
+    chipWaiting: '高速モードは次のメッセージからオンになります',
+    chipUnavailable: (reason) => `高速モードは使用できません。${reason}`,
+    row: { label: '高速', title: '高速モードがオンになりませんでした', hint: 'この会話は通常の速度で続きます。' },
+    reasons: {
+      notServed: 'Codex は高速ティアなしでターンを実行しました。',
+      modelNotAllowed: 'このモデルには高速ティアがありません。',
+      unknown: '現在は使用できません。',
+    },
+    phone: {
+      on: 'オン',
+      off: 'オフ',
+      note: '応答が速くなり、利用上限を早く消費します - この会話のみ。',
+      noteTier: (tier) => `Codex の高速ティア: ${tier} - この会話のみ。`,
+    },
+  },
+
   composer: {
     placeholder: '質問するか、変えたいことを書いてください…',
     placeholderPlan: '何を計画するか書いてください…',
@@ -867,8 +969,19 @@ export const ja: Dict = {
     voice: '音声入力',
     voiceStop: '音声入力を終える',
     editor: {
-      on: (place) => `このメッセージで Codex に ${place} を見せます · クリックで外す`,
-      off: (place) => `${place} はこのメッセージに付きません · クリックで付ける`,
+      on: (place) => `このメッセージで Codex に ${place} を見せます · クリックで選ぶ`,
+      off: (place) => `${place} はこのメッセージに付きません · クリックで選ぶ`,
+      muted: (place) => `${place} は送られません（エディターの送信はオフ） · クリックで選ぶ`,
+      menu: {
+        always: '毎回のメッセージに付ける',
+        alwaysSub: '開いているファイルと選択した行を、すべてのタブで',
+        skip: 'このメッセージには付けない',
+        skipSub: '次のメッセージからはまた付きます',
+        only: 'このメッセージだけに付ける',
+        onlySub: '次からはまた付けずに送ります',
+        never: '付けない',
+        neverSub: 'すべてのタブで、オンに戻すまで。設定と同じスイッチです',
+      },
     },
   },
 
@@ -883,6 +996,7 @@ export const ja: Dict = {
     scenarios: 'シナリオ',
     closeScenarios: 'シナリオを閉じる',
     closeRun: 'この実行を閉じる',
+    closeHint: (close, reopen) => `${close} · ${reopen} で開き直せます`,
     conversations: '会話',
     newSession: '新しい会話',
     fork: 'この会話をフォーク：ここから続く新しいタブを開き、このタブはそのまま残します',
@@ -976,6 +1090,19 @@ export const ja: Dict = {
   feed: {
     empty: { title: 'このプロジェクトについて Codex に聞く', hint: '@ でファイル · / でコマンド' },
     you: 'あなた',
+    auto: {
+      label: 'パネル',
+      why: {
+        accountSwitch: 'あなたが書いたものではありません。アカウントの切り替えでターンが途中で止まったため、パネルが自動で続けました',
+        limit: 'あなたが書いたものではありません。利用上限でターンが止まったため、続けられるようになった時点でパネルが自動で続けました',
+        restart: 'あなたが書いたものではありません。会話の下で Codex が再起動してバックグラウンドのエージェントが失われたため、パネルが続けるよう伝えました',
+      },
+    },
+    carryOn: {
+      planned: (clock: string): string => `制限がリセットされる ${clock} に、この会話を自動で続けます`,
+      guessed: (clock: string): string => `${clock} に、この会話を自動で続けてみます（制限のリセット時刻は分かっていません）`,
+      cancel: '続けない',
+    },
     jumpToLatest: '最新へ移動',
     copyBlock: 'このブロックをコピー',
     copyReply: '返信全体をコピー',
@@ -1011,6 +1138,11 @@ export const ja: Dict = {
     copyPaste: '貼り付けたテキストをコピー',
     pasteShown: (shown, total) => `全 ${total} 行のうち最初の ${shown} 行 · コピーはすべて`,
     fromOutput: '出力から',
+    imagePreview: {
+      missing: '画像を読み込めませんでした。ファイルが削除されたか、メッセージにもう保存されていません',
+      opens: 'クリックで開く',
+      unopened: '開けませんでした。クリックで再試行',
+    },
 
     think: { chip: '思考', thoughts: (n) => `${n} 件の考え` },
 
@@ -1134,6 +1266,19 @@ export const ja: Dict = {
       textWithCode: (code) => `Codex が予期せず終了しました（終了コード ${code}）。`,
     },
 
+    session: {
+      label: 'セッション',
+      id: 'セッション ID',
+      terminal: 'ターミナルで',
+      copyId: 'セッション ID をコピー',
+      terminalNote: 'プロジェクトのフォルダーで開いたターミナルで、この会話を続けます',
+      terminalNoteOn: (account: string): string =>
+        `プロジェクトのフォルダーで開いたターミナルで、${account} のままこの会話を続けます`,
+      terminalNoteDefault: (account: string): string =>
+        `プロジェクトのフォルダーで開いたターミナルで、この会話を続けます。使われるのは ${account} ではなく、Codex の既定のサインインです`,
+      unnamedAccount: 'このタブのアカウント',
+      none: 'まだ ID はありません。最初のメッセージで付きます',
+    },
     outranked: {
       account: {
         label: 'サインイン',
@@ -1197,7 +1342,23 @@ export const ja: Dict = {
       unconfirmed: '未確認',
     },
 
-    copy: { copied: 'コピーしました', click: 'クリックでコピー', openFile: 'エディタで開く', openFolder: 'フォルダーを表示' },
+    copy: { copied: 'コピーしました', click: 'クリックでコピー', openFile: 'エディタで開く', openFolder: 'フォルダーを表示', missing: 'そのファイルはディスクにありません - クリックで再確認' },
+    changes: {
+      all: (n) => `すべて表示（${n}）`,
+      fewer: '折りたたむ',
+      revert: 'このファイルを元に戻す',
+      revertAll: 'すべて元に戻す',
+      reverting: '元に戻しています…',
+      restore: '変更を戻す',
+      restoreAll: 'すべて戻す',
+      restoring: '戻しています…',
+      reverted: '元に戻しました',
+      changed: 'その後に変更されたため、そのままです',
+      missing: 'ファイルがもうありません',
+      failed: 'ファイルを書き込めませんでした',
+      deleted: '削除済み',
+      movedFrom: (from) => `${from} から移動`,
+    },
   },
 
   chrome: {
@@ -1211,6 +1372,7 @@ export const ja: Dict = {
     queue: {
       label: '待機中',
       hint: (n) => `${n} 件がこのターンの後に順番に送られます · ドラッグで並べ替え`,
+      held: (n) => `${n} 件は次のメッセージを送った後に順番に送られます（待っていたターンは停止済み） · ドラッグで並べ替え`,
       edit: '入力欄で編集',
       editing: (key, button) => `入力欄で編集中 · ${key} か「${button}」でここに戻ります`,
     },
@@ -1264,7 +1426,16 @@ export const ja: Dict = {
       stopCommand: 'このコマンドを止める',
       stopCommandTitle: 'このコマンドを止めますか？',
     },
-    confirm: { cancel: 'キャンセル', stop: '停止' },
+    confirm: {
+      cancel: 'キャンセル',
+      stop: '停止',
+      close: '閉じる',
+      closeWorking: '作業中のタブを閉じますか？',
+      closeWorkingNote: (key) =>
+        key
+          ? `エージェントは停止します。${key} でタブを開き直せます。キューは次のメッセージまで待機します。`
+          : 'エージェントは停止します。タブは履歴から開き直せます。キューは次のメッセージまで待機します。',
+    },
     noChats: { title: '一緒に作業できるのが楽しみです！', button: 'はじめる' },
     crash: {
       title: 'パネルでエラーが起きました',
@@ -1303,6 +1474,7 @@ export const ja: Dict = {
     fiveHour: '5時間',
     weekly: '週',
     spending: '利用額',
+    usableAgainIn: (left) => `上限に達しました · あと ${left} で再び使えます`,
     row: {
       /** The value on the menu row when there is nothing to switch between. */
       one: 'アカウント 1 つ',
@@ -1810,6 +1982,7 @@ export const ja: Dict = {
     weeklyApps: '週のアプリ',
     weeklyFable: '週の Fable',
     extra: '追加利用',
+    spending: '利用額',
   },
 
   permission: {
@@ -1887,6 +2060,8 @@ export const ja: Dict = {
     config: 'Codex の設定 - メニューで開く',
     btw: '作業を止めずにちょっと質問する',
     btwArgument: '<質問>',
+    fast: '高速モードの切り替え - 応答が速くなり、利用上限を早く消費',
+    status: 'この会話の ID と、ターミナルで続けるためのコマンド',
     model: 'このセッションのモデルを切り替える',
     effort: 'Codex が動く前にどれだけ考えるかを決める',
     codeReview: 'Codex 自身のレビュアーで変更をレビューする',

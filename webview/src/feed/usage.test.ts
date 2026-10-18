@@ -14,6 +14,7 @@ import {
   ringDash,
   spendingWindow,
   timeLeft,
+  usableAgainIn,
   usageOf,
   type UsageFacts,
 } from './usage'
@@ -213,5 +214,124 @@ describe('the spending cap of a Codex business seat', () => {
     expect(spendingWindow({ active: false, enabled: false, percent: 40 })).toBeNull()
     expect(spendingWindow({ active: false, enabled: true })).toBeNull()
     expect(spendingWindow(undefined)).toBeNull()
+  })
+})
+
+/**
+ * The accounts screen answering "when can I use account A again" without switching to it - asked for in a
+ * report from 0.13.36 (account A at 100%, the work moved to B).
+ */
+describe('usableAgainIn', () => {
+  const now = Date.parse('2026-10-17T12:00:00Z')
+  const inHours = (hours: number) => new Date(now + hours * 3_600_000).toISOString()
+
+  it('says nothing about an account with room', () => {
+    expect(usableAgainIn({ session: { percent: 40, resets: inHours(2) }, week: { percent: 99, resets: inHours(48) } }, now)).toBeNull()
+    expect(usableAgainIn({}, now)).toBeNull()
+  })
+
+  it('counts to the reset of the window that is full', () => {
+    expect(usableAgainIn({ session: { percent: 100, resets: inHours(2.25) }, week: { percent: 30, resets: inHours(48) } }, now)).toBe('2h 15m')
+  })
+
+  // The earlier reset opens nothing while the other window still refuses.
+  it('counts to the later reset when both windows are full', () => {
+    expect(usableAgainIn({ session: { percent: 100, resets: inHours(2) }, week: { percent: 100, resets: inHours(50) } }, now)).toBe('2d 2h')
+  })
+
+  // Extra usage carries the work on, billed on top: nothing is waited for.
+  it('says nothing while extra usage carries the account past its limit', () => {
+    expect(usableAgainIn({ session: { percent: 100, resets: inHours(2) }, extra: { active: true } }, now)).toBeNull()
+  })
+
+  // A model's own week (Fable) refuses that model alone, and a full window without a named reset has no answer.
+  it('counts only the windows the whole plan is measured by, and only to a reset it was told', () => {
+    expect(
+      usableAgainIn({ session: { percent: 10, resets: inHours(1) }, models: [{ label: 'Fable', percent: 100, resets: inHours(30) }] }, now),
+    ).toBeNull()
+    expect(usableAgainIn({ session: { percent: 100, resets: '' } }, now)).toBeNull()
+  })
+
+  it('measures against the clock it is given', () => {
+    expect(timeLeft(inHours(1), now)).toBe('1h 0m')
+    expect(timeLeft(inHours(-1), now)).toBeNull()
+  })
+})
+
+/**
+ * A Codex business seat has no window of the plan, only the workspace's spending cap, which starts over with its
+ * month - and the accounts screen said nothing about a seat at 100% of it, as if it had room.
+ */
+describe('usableAgainIn on a business seat', () => {
+  const now = Date.parse('2026-10-17T12:00:00Z')
+  const inDays = (days: number) => new Date(now + days * 86_400_000).toISOString()
+
+  it('counts to the start of the next budget when the cap is spent', () => {
+    expect(usableAgainIn({ extra: { active: false, enabled: true, percent: 100, resets: inDays(14.5) } }, now)).toBe('14d 12h')
+  })
+
+  // The share is `100 - remainingPercent` in whole percent; Codex's own word on the cap goes over it both ways.
+  it('takes Codex’s word on the cap over its share', () => {
+    expect(usableAgainIn({ extra: { active: false, enabled: true, percent: 99, resets: inDays(3), reached: true } }, now)).toBe('3d 0h')
+    expect(usableAgainIn({ extra: { active: false, enabled: true, percent: 100, resets: inDays(3), reached: false } }, now)).toBeNull()
+  })
+
+  it('says nothing about a cap with room, a cap switched off, or a spent cap with no start-over', () => {
+    expect(usableAgainIn({ extra: { active: false, enabled: true, percent: 85, resets: inDays(3) } }, now)).toBeNull()
+    expect(usableAgainIn({ extra: { active: false, enabled: false, percent: 100, resets: inDays(3) } }, now)).toBeNull()
+    expect(usableAgainIn({ extra: { active: false, enabled: true, percent: 100 } }, now)).toBeNull()
+  })
+
+  // Beside the plan's windows a cap only bounds the spending past them: the windows decide.
+  it('leaves a cap beside the plan’s windows to them', () => {
+    const facts: UsageFacts = {
+      session: { percent: 30, resets: inDays(0.1) },
+      week: { percent: 40, resets: inDays(4) },
+      extra: { active: false, enabled: true, percent: 100, resets: inDays(14) },
+    }
+    expect(usableAgainIn(facts, now)).toBeNull()
+  })
+})
+
+/**
+ * `ordinaryUsageAllowed` - the backend saying the account may work - is the one recovery signal Codex documents,
+ * and it beats a share in whole percent.
+ */
+describe('the backend’s word on the plan’s usage', () => {
+  const now = Date.parse('2026-10-17T12:00:00Z')
+  const inHours = (hours: number) => new Date(now + hours * 3_600_000).toISOString()
+  const spent: UsageFacts = { session: { percent: 100, resets: inHours(2) }, week: { percent: 40, resets: inHours(48) } }
+
+  it('takes the "at the limit" line away when the account may work', () => {
+    expect(usableAgainIn({ ...spent, ordinaryUsage: true }, now)).toBeNull()
+    expect(usableAgainIn({ ...spent, ordinaryUsage: false }, now)).toBe('2h 0m')
+    expect(usableAgainIn(spent, now)).toBe('2h 0m')
+  })
+
+  // The plugin says null on every picture when it has no word, or took a "yes" back: absent is another message.
+  it('is merged as said: null clears it, absence keeps it', () => {
+    const allowed = mergeUsage({}, { type: 'usage', account: 'work', ordinaryUsage: true })
+    expect(allowed.ordinaryUsage).toBe(true)
+    expect(mergeUsage(allowed, { type: 'usage', account: 'work', todayTokens: '1M' }).ordinaryUsage).toBe(true)
+    expect(mergeUsage(allowed, { type: 'usage', account: 'work', ordinaryUsage: null }).ordinaryUsage).toBeUndefined()
+    expect(mergeUsage(allowed, { type: 'usage', reset: true }).ordinaryUsage).toBeUndefined()
+  })
+
+  // usageOf copies its fields by hand - the very place a new figure is easy to lose on the way to the screen.
+  it('reaches the account’s screen', () => {
+    const book = mergeUsageBook(emptyUsageBook(), { type: 'usage', account: 'work', ordinaryUsage: false })
+    expect(usageOf(book, 'work').ordinaryUsage).toBe(false)
+  })
+})
+
+describe('the spending cap in the feed', () => {
+  it('is named as such when Codex says the cap stopped the work', () => {
+    expect(limitWindowName(en, 'workspace_member_usage_limit_reached')).toBe('spending')
+    expect(limitWindowName(en, 'workspace_owner_usage_limit_reached')).toBe('spending')
+  })
+
+  // Out of credits is over when somebody adds credits - "the credits limit, waiting for it to reset" would lie.
+  it('leaves the workspace out of credits unnamed', () => {
+    expect(limitWindowName(en, 'workspace_member_credits_depleted')).toBe('')
   })
 })

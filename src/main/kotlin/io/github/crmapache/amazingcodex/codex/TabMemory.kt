@@ -10,15 +10,19 @@ import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.addJsonObject
+import kotlinx.serialization.json.JsonUnquotedLiteral
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 
@@ -74,14 +78,41 @@ internal class TabMemory(
         val effort: String,
         val mode: String,
         val contextMode: String = "",
+        /** What it asked of the fast tier, if anything - it comes back asking the same (see SessionLaunch.fast). */
+        val fast: Boolean? = null,
         /** What was being written in its input field, as the panel sent it (see draftMemory.ts). */
         val draft: JsonObject?,
     )
+
+    /**
+     * A tab closed by hand, kept so that it can be opened again where it stood (see ClosedTabs) - and kept
+     * here too, so that the tab closed by mistake a minute before the IDE went down is not lost with it.
+     */
+    data class Closed(
+        val tab: Tab,
+        /** The group it stood in - a fork goes back into it while it still stands (see SessionRegistry.reopen). */
+        val groupId: String,
+        val depth: Int,
+        /** The groups that stood to its left on the strip, its own not counted. */
+        val groupsLeft: List<String>,
+        /** The tabs of its own group that stood to its left. */
+        val tabsLeft: List<String>,
+        val closedAt: Long,
+    ) {
+        /**
+         * The record as it goes into the file, made once. A closed tab never changes - it is taken back or let go -
+         * while the file is written on every pause in typing, every tab switched and every turn ended, and twenty
+         * drafts of up to a million characters were serialised again each time (see [encode]).
+         */
+        internal val encoded: String by lazy { closedJson(this).toString() }
+    }
 
     data class State(
         /** The tab the panel had on screen - it comes back on screen. */
         val active: String?,
         val tabs: List<Tab>,
+        /** The tabs closed by hand, the latest first - see [Closed]. */
+        val closed: List<Closed> = emptyList(),
     )
 
     private val alarm = Alarm(Alarm.ThreadToUse.POOLED_THREAD, this)
@@ -194,28 +225,40 @@ internal class TabMemory(
             return File(root, "$name-$hash.json")
         }
 
+        @OptIn(ExperimentalSerializationApi::class)
         fun encode(state: State): String = buildJsonObject {
             put("version", VERSION)
             state.active?.let { put("active", it) }
             putJsonArray("tabs") {
-                for (tab in state.tabs) {
-                    addJsonObject {
-                        put("id", tab.id)
-                        tab.parentId?.let { put("parentId", it) }
-                        tab.forkOrigin?.let { put("forkOrigin", it.json()) }
-                        tab.forkBefore?.let { put("forkBefore", it) }
-                        put("title", tab.title)
-                        put("titleSource", tab.titleSource)
-                        tab.conversationId?.let { put("conversationId", it) }
-                        if (tab.model.isNotEmpty()) put("model", tab.model)
-                        if (tab.effort.isNotEmpty()) put("effort", tab.effort)
-                        if (tab.mode.isNotEmpty()) put("mode", tab.mode)
-                        if (tab.contextMode.isNotEmpty()) put("contextMode", tab.contextMode)
-                        tab.draft?.takeIf { it.toString().length <= MAX_DRAFT_CHARS }?.let { put("draft", it) }
-                    }
-                }
+                for (tab in state.tabs) add(tabJson(tab))
             }
+            if (state.closed.isNotEmpty()) put("closed", JsonUnquotedLiteral(state.closed.joinToString(",", "[", "]") { it.encoded }))
         }.toString()
+
+        private fun closedJson(closed: Closed): JsonObject = buildJsonObject {
+            tabJson(closed.tab).forEach { (key, value) -> put(key, value) }
+            put("groupId", closed.groupId)
+            put("depth", closed.depth)
+            putJsonArray("groupsLeft") { closed.groupsLeft.forEach { add(JsonPrimitive(it)) } }
+            putJsonArray("tabsLeft") { closed.tabsLeft.forEach { add(JsonPrimitive(it)) } }
+            put("closedAt", closed.closedAt)
+        }
+
+        private fun tabJson(tab: Tab): JsonObject = buildJsonObject {
+            put("id", tab.id)
+            tab.parentId?.let { put("parentId", it) }
+            tab.forkOrigin?.let { put("forkOrigin", it.json()) }
+            tab.forkBefore?.let { put("forkBefore", it) }
+            put("title", tab.title)
+            put("titleSource", tab.titleSource)
+            tab.conversationId?.let { put("conversationId", it) }
+            if (tab.model.isNotEmpty()) put("model", tab.model)
+            if (tab.effort.isNotEmpty()) put("effort", tab.effort)
+            if (tab.mode.isNotEmpty()) put("mode", tab.mode)
+            if (tab.contextMode.isNotEmpty()) put("contextMode", tab.contextMode)
+            tab.fast?.let { put("fast", it) }
+            tab.draft?.takeIf { it.toString().length <= MAX_DRAFT_CHARS }?.let { put("draft", it) }
+        }
 
         /**
          * The file read back - leniently. A field this version does not know is skipped, a tab without an
@@ -224,27 +267,43 @@ internal class TabMemory(
          */
         fun decode(text: String): State? {
             val root = runCatching { Json.parseToJsonElement(text).jsonObject }.getOrNull() ?: return null
-            val tabs = (root["tabs"] as? JsonArray).orEmpty().mapNotNull { element ->
-                val tab = element as? JsonObject ?: return@mapNotNull null
-                val id = tab.string("id").takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+            val tabs = (root["tabs"] as? JsonArray).orEmpty().mapNotNull { element -> (element as? JsonObject)?.let(::tabOf) }
+            val closed = (root["closed"] as? JsonArray).orEmpty().mapNotNull { element ->
+                val body = element as? JsonObject ?: return@mapNotNull null
+                val tab = tabOf(body) ?: return@mapNotNull null
 
-                Tab(
-                    id = id,
-                    parentId = tab.string("parentId").takeIf { it.isNotEmpty() },
-                    forkOrigin = ForkOrigin.decode(tab["forkOrigin"] as? JsonObject),
-                    forkBefore = tab.string("forkBefore").takeIf { it.isNotEmpty() },
-                    title = tab.string("title"),
-                    titleSource = tab.string("titleSource").ifEmpty { SessionSnapshot.TITLE_DEFAULT },
-                    conversationId = tab.string("conversationId").takeIf { it.isNotEmpty() },
-                    model = tab.string("model"),
-                    effort = tab.string("effort"),
-                    mode = tab.string("mode"),
-                    contextMode = tab.string("contextMode"),
-                    draft = tab["draft"] as? JsonObject,
+                Closed(
+                    tab = tab,
+                    groupId = body.string("groupId").ifEmpty { tab.id },
+                    depth = (body["depth"] as? JsonPrimitive)?.intOrNull ?: 0,
+                    groupsLeft = body.strings("groupsLeft"),
+                    tabsLeft = body.strings("tabsLeft"),
+                    closedAt = (body["closedAt"] as? JsonPrimitive)?.longOrNull ?: 0,
                 )
             }
 
-            return State(active = root.string("active").takeIf { it.isNotEmpty() }, tabs = tabs)
+            return State(active = root.string("active").takeIf { it.isNotEmpty() }, tabs = tabs, closed = closed)
+        }
+
+        /** One tab read back, or null for one without an identifier - see [decode]. */
+        private fun tabOf(tab: JsonObject): Tab? {
+            val id = tab.string("id").takeIf { it.isNotEmpty() } ?: return null
+
+            return Tab(
+                id = id,
+                parentId = tab.string("parentId").takeIf { it.isNotEmpty() },
+                forkOrigin = ForkOrigin.decode(tab["forkOrigin"] as? JsonObject),
+                forkBefore = tab.string("forkBefore").takeIf { it.isNotEmpty() },
+                title = tab.string("title"),
+                titleSource = tab.string("titleSource").ifEmpty { SessionSnapshot.TITLE_DEFAULT },
+                conversationId = tab.string("conversationId").takeIf { it.isNotEmpty() },
+                model = tab.string("model"),
+                effort = tab.string("effort"),
+                mode = tab.string("mode"),
+                contextMode = tab.string("contextMode"),
+                fast = (tab["fast"] as? JsonPrimitive)?.booleanOrNull,
+                draft = tab["draft"] as? JsonObject,
+            )
         }
 
         /**
@@ -277,7 +336,11 @@ internal class TabMemory(
                 kept += tab.copy(parentId = parent, forkBefore = tab.forkBefore.takeIf { parent != null })
             }
 
-            return State(active = state.active?.takeIf { active -> kept.any { it.id == active } }, tabs = kept)
+            return State(
+                active = state.active?.takeIf { active -> kept.any { it.id == active } },
+                tabs = kept,
+                closed = state.closed,
+            )
         }
 
         /** Whether a draft holds anything at all - a word, an attachment or a quote. */
@@ -295,5 +358,8 @@ internal class TabMemory(
 
         private fun JsonObject.string(key: String): String =
             (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content.orEmpty()
+
+        private fun JsonObject.strings(key: String): List<String> =
+            (this[key] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.takeIf { value -> value.isString }?.content }
     }
 }

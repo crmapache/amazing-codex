@@ -93,6 +93,36 @@ const Glyph = ({ glyph }: { glyph: KeyGlyph }) => {
         </Sign>
       )
 
+    // The arrows as they are printed on the keys - a shaft and a head. ← and → as characters fall out of
+    // the panel's font the same way ⌘ does, and "Left" in a cap is a word where the eye looks for a sign.
+    case 'left':
+      return (
+        <Sign label="Left">
+          <path d="M19 12H5M11 6l-6 6 6 6" />
+        </Sign>
+      )
+
+    case 'right':
+      return (
+        <Sign label="Right">
+          <path d="M5 12h14M13 6l6 6-6 6" />
+        </Sign>
+      )
+
+    case 'up':
+      return (
+        <Sign label="Up">
+          <path d="M12 19V5M6 11l6-6 6 6" />
+        </Sign>
+      )
+
+    case 'down':
+      return (
+        <Sign label="Down">
+          <path d="M12 5v14M6 13l6 6 6-6" />
+        </Sign>
+      )
+
     default:
       return null
   }

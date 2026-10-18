@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  EDITOR_CHIP_MUTED,
   droppableTools,
   endPairFits,
   firstLetter,
@@ -104,10 +105,10 @@ describe('toolsDropped', () => {
 describe('the name on the editor chip', () => {
   /** A row with the editor's chip, its name `name` pixels wide with the gap before it. */
   const dropNamed = (short: number, dropped = 0, name = 120) =>
-    toolsDropped(ALL, droppableTools(ALL, false, true), dropped, { short, ...SIZES, name })
+    toolsDropped(ALL, droppableTools(ALL, false, 'named'), dropped, { short, ...SIZES, name })
 
   it('steps out before any square leaves', () => {
-    expect(droppableTools(ALL, false, true)[0]).toBe('editorName')
+    expect(droppableTools(ALL, false, 'named')[0]).toBe('editorName')
     expect(dropNamed(1)).toBe(1)
     expect(dropNamed(120)).toBe(1)
   })
@@ -127,6 +128,25 @@ describe('the name on the editor chip', () => {
 
   it('is not a step at all without a chip', () => {
     expect(droppableTools(ALL, false)).not.toContain('editorName')
+  })
+})
+
+describe('the muted editor chip', () => {
+  /** A row with the chip of a switched-off setting: the drawing alone, EDITOR_CHIP_MUTED wide with its gap. */
+  const dropMuted = (short: number, dropped = 0) =>
+    toolsDropped(ALL, droppableTools(ALL, false, 'muted'), dropped, { short, ...SIZES })
+
+  it('goes whole before any square, having no name to give up', () => {
+    expect(droppableTools(ALL, false, 'muted')[0]).toBe('editorChip')
+    expect(droppableTools(ALL, false, 'muted')).not.toContain('editorName')
+    expect(dropMuted(1)).toBe(1)
+    expect(dropMuted(EDITOR_CHIP_MUTED)).toBe(1)
+    expect(dropMuted(EDITOR_CHIP_MUTED + 1)).toBe(2)
+  })
+
+  it('comes back last, and only with the room for all of it', () => {
+    expect(dropMuted(-(EDITOR_CHIP_MUTED - 1), 1)).toBe(1)
+    expect(dropMuted(-(EDITOR_CHIP_MUTED + 1), 1)).toBe(0)
   })
 })
 

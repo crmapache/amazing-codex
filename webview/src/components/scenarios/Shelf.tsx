@@ -11,7 +11,7 @@ import type {
   ScenarioScope,
 } from '../../protocol'
 import { rowKey } from '../../scenarios/arrange'
-import { cardRuns, passesOf, problemsOf, blocking } from '../../scenarios/rules'
+import { cardRuns, loops, problemsOf, blocking } from '../../scenarios/rules'
 import { queuedFor } from '../../scenarios/queue'
 import { nextNote, schedulesOf, whenLabel } from '../../scenarios/schedule'
 import { runMarks, runsOf } from '../../scenarios/runs'
@@ -342,7 +342,7 @@ const ShelfRow = ({
               <span>{t.scenarios.stages(scenario.stages.length)}</span>
               <span className={s.factDot}>·</span>
               <span>{t.scenarios.cards(cardRuns(scenario))}</span>
-              {scenario.stages.some((stage) => passesOf(stage) > 1) ? (
+              {scenario.stages.some(loops) ? (
                 <>
                   <span className={s.factDot}>·</span>
                   <span className={s.factChip}>{t.scenarios.hasLoop}</span>

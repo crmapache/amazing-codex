@@ -89,4 +89,23 @@ class PastedFilesTest {
 
     private fun createTempDir(): File =
         File(System.getProperty("java.io.tmpdir"), "acc-pasted-${System.nanoTime()}").also { it.mkdirs() }
+
+    /* A picture opened from a chip twice is one file - named by what is in it, not by when it was clicked. */
+    @Test
+    fun `a picture kept to be opened is one file however often it is opened`() {
+        val folder = java.nio.file.Files.createTempDirectory("pasted").toFile()
+        try {
+            val first = PastedFiles.keep(byteArrayOf(1, 2, 3), "image/png", folder)!!
+            val again = PastedFiles.keep(byteArrayOf(1, 2, 3), "image/png", folder)!!
+            val other = PastedFiles.keep(byteArrayOf(4, 5), "image/jpeg", folder)!!
+
+            assertEquals(first, again)
+            assertTrue(first.name.startsWith("picture-") && first.name.endsWith(".png"))
+            assertTrue(other.name.endsWith(".jpg"))
+            assertTrue(first != other)
+            assertTrue(byteArrayOf(1, 2, 3).contentEquals(first.readBytes()))
+        } finally {
+            folder.deleteRecursively()
+        }
+    }
 }

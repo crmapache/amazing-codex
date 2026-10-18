@@ -35,7 +35,9 @@ export type MenuScreen =
   | 'newChatMode'
   | 'composerLayout'
   | 'pasteCollapse'
+  | 'spellcheck'
   | 'sendKey'
+  | 'keys'
   | 'codexConfig'
   | 'improvePrompt'
   | 'voice'
@@ -89,6 +91,8 @@ export interface MenuSummary {
   composerLayout: string
   /** From how many lines a pasted text folds into a chip, or that it never does. */
   pasteCollapse: string
+  /** Whether the text fields underline misspelled words - "On" or "Off". */
+  spellcheck: string
   /** Which key sends a message - the key itself ("Enter", "Cmd+Enter"), not a sentence about it. */
   sendKey: string
   /** Whether the improve button asks by a text of one's own - "Default" or "Custom". */
@@ -160,7 +164,9 @@ const SETTINGS_SCREENS: MenuScreen[] = [
   'shareEditor',
   'composerLayout',
   'pasteCollapse',
+  'spellcheck',
   'sendKey',
+  'keys',
   'codexConfig',
   'improvePrompt',
   'voice',
@@ -385,6 +391,14 @@ const ICONS: Record<string, ReactNode> = {
       <path d="M5.9 8h4.2M5.9 10.6h2.6" />
     </svg>
   ),
+  /* A letter over a wavy line - the underline the checker draws under a word it does not know, which is the
+     one thing everybody recognises it by. */
+  spellcheck: (
+    <svg viewBox="0 0 16 16" aria-hidden="true" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5.2 9L8 2.8 10.8 9M6.2 6.9h3.6" />
+      <path d="M2.4 12.4q1.4-1.4 2.8 0t2.8 0 2.8 0 2.8 0" />
+    </svg>
+  ),
   /* A key with a corner arrow on it - the Enter key itself, which is what the row is about. Drawn rather
      than lettered: the row has to say "a key" at a glance, and ⏎ is not in the panel's font. */
   sendKey: (
@@ -392,6 +406,14 @@ const ICONS: Record<string, ReactNode> = {
       <rect x="2" y="3.4" width="12" height="9.2" rx="1.6" />
       <path d="M11 6.2v2.2a0.9 0.9 0 0 1-0.9 0.9H5.4" />
       <path d="M6.9 7.9L5.2 9.3l1.7 1.4" />
+    </svg>
+  ),
+  /* A keyboard: two rows of keys and the space bar under them - the row is every key the panel answers to,
+     and a single key drawn here would read as the send key's row above it. */
+  keys: (
+    <svg viewBox="0 0 16 16" aria-hidden="true" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="1.8" y="3.6" width="12.4" height="8.8" rx="1.6" />
+      <path d="M4.4 6.4h0.01M6.8 6.4h0.01M9.2 6.4h0.01M11.6 6.4h0.01M5.6 8.4h0.01M8 8.4h0.01M10.4 8.4h0.01M5.6 10.4h4.8" />
     </svg>
   ),
   /* A terminal's prompt: the row is about the CLI's own settings - the ones /config changes in a terminal -
@@ -824,6 +846,15 @@ export const SettingsScreen = ({
           value={summary.pasteCollapse}
           onClick={() => onPick('pasteCollapse')}
         />
+        {/* In the run about the input field: it is about what the field does with the words typed into it. */}
+        <Row
+          icon="spellcheck"
+          iconClass={s.rowIconSpellcheck}
+          label={t.settings.rows.spellcheck.label}
+          sub={t.settings.rows.spellcheck.sub}
+          value={summary.spellcheck}
+          onClick={() => onPick('spellcheck')}
+        />
         <Row
           icon="sendKey"
           iconClass={s.rowIconSend}
@@ -831,6 +862,16 @@ export const SettingsScreen = ({
           sub={t.settings.rows.sendKey.sub}
           value={summary.sendKey}
           onClick={() => onPick('sendKey')}
+        />
+        {/* Beside the send key: both are about the keyboard. No value - twenty keys do not fold into one
+            word, and naming one of them would say the rest are not there. */}
+        <Row
+          icon="keys"
+          iconClass={s.rowIconKeys}
+          label={t.settings.rows.keys.label}
+          sub={t.settings.rows.keys.sub}
+          value=""
+          onClick={() => onPick('keys')}
         />
         {/* No value beside it: forty settings do not fold into one word. */}
         <Row

@@ -87,7 +87,10 @@ const PinnedRow = memo(({
       >
         {/* The same shape as the button that made this line - that is what ties the two together. */}
         <PinIcon filled size={11} className={s.pinMark} />
-        <span className={s.pinWho}>{item.kind === 'user' ? t.feed.you : CLAUDE}</span>
+        {/* The same word the card itself wears - a pinned "carry on" the panel said is not the person's. */}
+        <span className={s.pinWho}>
+          {item.kind === 'user' ? (item.auto ? t.feed.auto.label : t.feed.you) : CLAUDE}
+        </span>
         <span className={s.pinText}>{line}</span>
       </button>
 

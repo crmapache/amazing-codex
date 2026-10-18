@@ -1,4 +1,4 @@
-import type { AchievementState, StatisticsDay } from '../../protocol'
+import type { AchievementState, StatisticsData, StatisticsDay } from '../../protocol'
 import { ACHIEVEMENTS } from '../../stats/catalogue'
 import { addDays, dayOf, weekday } from '../../stats/dates'
 import { bootstrap, checkpoint, scenario, shell } from '../events'
@@ -113,6 +113,22 @@ const day = (offset: number): StatisticsDay | null => {
 }
 
 const days = Array.from({ length: DAYS }, (_, offset) => day(offset)).filter((entry): entry is StatisticsDay => entry !== null)
+
+/**
+ * The tokens of the same days, hour by hour - a few million for every minute in the panel, and on some
+ * nights a scenario run grinding on with nobody at the keyboard, the way the real figures look.
+ */
+const tokensOf = (entry: StatisticsDay, offset: number): number[] =>
+  entry.hours.map((minutes, hour) => {
+    const atWork = minutes * (4_000_000 + noise(offset * 31 + hour) * 9_000_000)
+    const running = hour < 6 && noise(offset * 17 + hour + 400) > 0.8
+    const overnight = running ? 60_000_000 + noise(offset + hour) * 140_000_000 : 0
+    return Math.round(atWork + overnight)
+  })
+
+const tokens: Record<string, number[]> = Object.fromEntries(
+  days.map((entry, offset) => [entry.date, tokensOf(entry, offset)]),
+)
 
 const OTHER_PROJECTS = [
   { key: 'p-api', name: 'nimbus-api', share: 0.55 },
@@ -246,12 +262,12 @@ export const statisticsFigures: ScenarioStep = shell({
   project: { key: 'p-this', name: 'nimbus-checkout' },
   projects,
   days,
+  tokens,
   achievements,
 })
 
 /** The same tab on a fresh install: a day and a half of figures and nearly nothing earned. */
-const fresh: ScenarioStep = shell({
-  type: 'statistics',
+const freshFigures: StatisticsData = {
   now: Date.now(),
   since: Date.now() - 30 * 60 * 60 * 1000,
   today,
@@ -306,6 +322,10 @@ const fresh: ScenarioStep = shell({
       cost: 4.1,
     },
   ],
+  tokens: {
+    [addDays(today, -1)]: hoursOf(18, 3).map((minutes) => minutes * 2_000_000),
+    [today]: hoursOf(42, 5).map((minutes) => minutes * 3_000_000),
+  },
   achievements: ACHIEVEMENTS.map((spec): AchievementState => {
     const steps = spec.milestone ? 1 : (spec.steps ?? 5)
     const done = spec.id === 'first-diff' ? [5, 1, undefined] : null
@@ -318,7 +338,15 @@ const fresh: ScenarioStep = shell({
     if (spec.id === 'shell') return { id: spec.id, tier: 0, steps, value: 9, target: 25, earned: {} }
     return { id: spec.id, tier: 0, steps, value: 0, target: 1, earned: {} }
   }),
-})
+}
+
+const fresh: ScenarioStep = shell({ type: 'statistics', ...freshFigures })
+
+/**
+ * The same, a moment after the update: the IDE is still on its first reading of the transcripts, so
+ * there are no tokens yet and the tokens card says it is counting rather than "nothing spent".
+ */
+const freshCounting: ScenarioStep = shell({ type: 'statistics', ...freshFigures, tokens: {}, tokensReading: true })
 
 export const scenariosStatistics: Scenario[] = [
   scenario('statistics-summer', 'Statistics: a summer of work', 'system', [
@@ -326,7 +354,8 @@ export const scenariosStatistics: Scenario[] = [
     checkpoint('The achievements screen', [{ kind: 'openStatistics', view: 'achievements' }]),
   ]),
   scenario('statistics-fresh', 'Statistics: the second day', 'system', [
-    checkpoint('A fresh install with a day and a half behind it', [...bootstrap, fresh, { kind: 'openStatistics' }]),
+    checkpoint('The tokens still being counted', [...bootstrap, freshCounting, { kind: 'openStatistics' }]),
+    checkpoint('A fresh install with a day and a half behind it', [fresh, { kind: 'openStatistics' }]),
     checkpoint('Its achievements, nearly all locked', [{ kind: 'openStatistics', view: 'achievements' }]),
   ]),
 ]

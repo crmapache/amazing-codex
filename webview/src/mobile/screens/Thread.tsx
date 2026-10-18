@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { AgentStreamView } from '../../components/AgentStreamView'
+import { fastModeShown } from '../../feed/fastMode'
 import { Feed } from '../../components/Feed'
 import { WorkflowAgentView } from '../../components/items/WorkflowAgentView'
 import { StreamSwitcher } from '../../components/StreamSwitcher'
@@ -27,7 +28,8 @@ import type { PhoneDictation } from '../useDictation'
 import m from '../mobile.module.css'
 import { useT } from '../../i18n'
 import type { Dict } from '../../i18n/en'
-import type { PaintedTerm } from '../../protocol'
+import type { ModelInfo, PaintedTerm } from '../../protocol'
+import { DEFAULT_MODEL, contextWindowOf, resolvePanelModel } from '../../catalog'
 
 /** Mobile has no "clear finished agents" action, so every task the session ever ran stays on the strip. */
 const NO_HIDDEN_TASKS: ReadonlySet<string> = new Set()
@@ -65,6 +67,11 @@ interface ThreadProps {
   sessionId: string
   /** What this phone knows about the project the conversation is in - see mobile/facts. */
   facts: ProjectFacts
+  /**
+   * That machine's model catalogue, as its inventory last carried it: what the gauge measures by until Codex has
+   * counted - the window of the conversation's model in its mode, as the desk's CTX chip names it (see contextOf).
+   */
+  models?: ModelInfo[] | null
   /** How big this machine lets a photo be - see PhotoRoad. */
   photos: PhotoRoad
   connected: boolean
@@ -72,6 +79,8 @@ interface ThreadProps {
   loading: boolean
   /** Dictation, held by the application because the token for it arrives there - see useDictation. */
   voice: PhoneDictation
+  /** What the machine says about voice input - see the composer's prop of the same name. */
+  dictates?: boolean
   onSend: (prompt: OutgoingPrompt) => void
   /** Said when the agent comes free. It waits in the IDE, not here - see SessionQueue.kt. */
   onQueue: (prompt: OutgoingPrompt) => void
@@ -88,6 +97,8 @@ interface ThreadProps {
   onDiscard: (id: string) => void
   /** The cross on a queued message. */
   onUnqueue: (id: string) => void
+  /** "Don't carry on" under a limit's wait - the same "no" as at the desk (see CarryOnRow). */
+  onCancelCarryOn: () => void
   /** Quoted out of the feed and waiting above the field - see the message sheet. */
   quotes: string[]
   onDropQuote: (index: number) => void
@@ -167,10 +178,12 @@ export const Thread = ({
   siblings,
   sessionId,
   facts,
+  models = null,
   photos,
   connected,
   loading,
   voice,
+  dictates,
   quotes,
   onDropQuote,
   onSend,
@@ -183,6 +196,7 @@ export const Thread = ({
   onRetry,
   onDiscard,
   onUnqueue,
+  onCancelCarryOn,
   onStop,
   onStopTask,
   onLoadEarlier,
@@ -275,10 +289,15 @@ export const Thread = ({
   const shownAgent = openedAgentOf(feed.items, openedAgent?.session === chat ? openedAgent : undefined)
 
   /**
-   * The context this conversation has taken, by the panel's own arithmetic: the figure the CLI reports
-   * when it has one, and the fallback of the model's window size when it does not (see contextOf).
+   * The context this conversation has taken, by the panel's own arithmetic: the figure Codex reports when it
+   * has one, and the window the catalogue names for the conversation's model and mode when it does not - the
+   * desk's rule, with the desk's numbers (see contextOf).
    */
-  const context = useMemo(() => contextOf(feed, facts.contextWindow), [feed, facts.contextWindow])
+  const context = useMemo(() => {
+    const model = resolvePanelModel(feed, models, feed.ownModel ?? DEFAULT_MODEL)
+    const mode = feed.pendingContextMode ?? feed.contextMode ?? 'standard'
+    return contextOf(feed, facts.contextWindow, contextWindowOf(models, model, mode))
+  }, [feed, facts.contextWindow, models])
 
   /**
    * How many images have already gone into this conversation - from this phone, from another, from the
@@ -413,6 +432,8 @@ export const Thread = ({
             focus={focus}
             onFocused={onFocused}
             paint={paint}
+            carryOn={feed.carryOn}
+            onCancelCarryOn={onCancelCarryOn}
           />
         )}
       </div>
@@ -457,6 +478,7 @@ export const Thread = ({
             model: feed.model ?? '',
             effort: feed.effort ?? '',
             mode: feed.permissionMode ?? '',
+            fast: fastModeShown(feed.fastMode, feed.fastReport),
           }}
           running={feed.status === 'running'}
           since={feed.turnStartedAt ?? 0}
@@ -477,6 +499,7 @@ export const Thread = ({
           onStop={onStop}
           onRun={onRun}
           voice={voice}
+          dictates={dictates}
         />
       </footer>
     </OpenAgentContext.Provider>

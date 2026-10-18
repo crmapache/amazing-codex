@@ -55,6 +55,50 @@ class CodexShapesTest {
         assertEquals(0, (mini["efforts"] as JsonArray).size)
     }
 
+    /**
+     * Fast mode is a fast tier among the model's `serviceTiers` - Codex's "Fast", `priority` - said in the word the
+     * rest of the plugin reads, with Codex's own line about it. A model listing no tiers has none; a model that says
+     * nothing about speeds says nothing here, and a Codex from before `serviceTiers` is read by its older list.
+     */
+    @Test
+    fun `the model list says which model has the fast tier`() {
+        val models = CodexShapes.models(
+            json(
+                """{"data":[
+                  {"id":"gpt-5.6-terra","model":"gpt-5.6-terra","isDefault":true,
+                   "serviceTiers":[{"id":"priority","name":"Fast","description":"1.5x speed, increased usage"}]},
+                  {"id":"gpt-5.5","model":"gpt-5.5","serviceTiers":[]},
+                  {"id":"gpt-flex","model":"gpt-flex","serviceTiers":[{"id":"flex","name":"Flex","description":"Slower, cheaper"}]},
+                  {"id":"gpt-older","model":"gpt-older","additionalSpeedTiers":["fast"]},
+                  {"id":"gpt-silent","model":"gpt-silent"}
+                ]}""",
+            ),
+        )["models"]!!.jsonArray.map { it.jsonObject }
+        val byId = models.associateBy { it.text("value") }
+
+        assertEquals("true", byId["gpt-5.6-terra"]!!.text(CodexShapes.SUPPORTS_FAST_MODE))
+        assertEquals("1.5x speed, increased usage", byId["gpt-5.6-terra"]!!.text(CodexShapes.FAST_MODE_DESCRIPTION))
+        assertEquals("false", byId["gpt-5.5"]!!.text(CodexShapes.SUPPORTS_FAST_MODE))
+        assertEquals("false", byId["gpt-flex"]!!.text(CodexShapes.SUPPORTS_FAST_MODE))
+        assertNull(byId["gpt-flex"]!![CodexShapes.FAST_MODE_DESCRIPTION])
+        assertEquals("true", byId["gpt-older"]!!.text(CodexShapes.SUPPORTS_FAST_MODE))
+        assertNull(byId["gpt-silent"]!![CodexShapes.SUPPORTS_FAST_MODE])
+
+        // For the account's memory: every row, and "default" as the model it comes to.
+        val fast = CodexShapes.fastModels(JsonArray(models))!!
+        assertEquals(Triple("gpt-5.6-terra", "gpt-5.6-terra", true), fast.first())
+        assertEquals(Triple("gpt-silent", "gpt-silent", false), fast.first { it.first == "gpt-silent" })
+        assertEquals(Triple(ModelNames.DEFAULT, "", true), fast.last())
+    }
+
+    /** A list where no model says anything about speeds is silence - a Codex older than the tiers - not "none". */
+    @Test
+    fun `a list that says nothing of speeds says nothing of fast mode`() {
+        val models = CodexShapes.models(json("""{"data":[{"id":"gpt-5.5","model":"gpt-5.5","isDefault":true}]}"""))["models"]!!.jsonArray
+
+        assertNull(CodexShapes.fastModels(models))
+    }
+
     @Test
     fun `no answer is an empty list, not a failure`() {
         assertEquals(0, CodexShapes.models(null)["models"]!!.jsonArray.size)
@@ -149,6 +193,64 @@ class CodexShapesTest {
         assertNull(CodexShapes.reachedWindow(open))
         assertNull(CodexShapes.resetOf(open))
         assertNull(CodexShapes.resetOf(null))
+    }
+
+    /**
+     * A business seat has no window of the plan: when its spending cap stops the work, the cap's own start-over is
+     * when it opens again. Without it the reset was unknown, a tab tried again every quarter hour and a scenario run
+     * went back to the seat each time, refused, until the end of the month.
+     */
+    @Test
+    fun `a spending cap that stopped the work opens again with its budget`() {
+        val cap = """"individualLimit":{"limit":"100","used":"100","remainingPercent":0,"resetsAt":1790812800}"""
+
+        assertEquals(1_790_812_800L, CodexShapes.resetOf(json("""{"rateLimitReachedType":"workspace_member_usage_limit_reached",$cap}""")))
+        assertEquals(1_790_812_800L, CodexShapes.resetOf(json("""{"rateLimitReachedType":"workspace_owner_usage_limit_reached",$cap}""")))
+        assertEquals("workspace_member_usage_limit_reached", CodexShapes.stoppedWindow(json("""{"rateLimitReachedType":"workspace_member_usage_limit_reached",$cap}""")))
+
+        // Out of credits ends when somebody adds credits: the cap's month would be a wrong reset.
+        assertNull(CodexShapes.resetOf(json("""{"rateLimitReachedType":"workspace_member_credits_depleted",$cap}""")))
+
+        // A full window of the plan, where there is one, is still what stopped the work.
+        val both = json(
+            """{"rateLimitReachedType":"workspace_member_usage_limit_reached",$cap,
+                "primary":{"usedPercent":100,"windowDurationMins":300,"resetsAt":1789820000}}""",
+        )
+        assertEquals(1_789_820_000L, CodexShapes.resetOf(both))
+        assertEquals("five_hour", CodexShapes.stoppedWindow(both))
+    }
+
+    /** `spendControlReached` rides beside the cap's share - only when Codex said it ("None is unavailable"). */
+    @Test
+    fun `Codex's word on the cap rides beside its share`() {
+        val cap = """"individualLimit":{"limit":"100","used":"99.6","remainingPercent":1,"resetsAt":1790812800}"""
+
+        val reached = CodexShapes.usage(json("""{$cap,"spendControlReached":true}"""))["rate_limits"]!!.jsonObject
+        assertEquals("true", reached["extra_usage"]!!.jsonObject.text("reached"))
+
+        val unsaid = CodexShapes.usage(json("""{$cap,"spendControlReached":null}"""))["rate_limits"]!!.jsonObject
+        assertNull(unsaid["extra_usage"]!!.jsonObject["reached"])
+    }
+
+    /**
+     * Codex marks neither of its two shapes, so the translation marks the whole answer to the read - the one that may
+     * take a share down within a window - and carries the backend's permission with it, only when it was given.
+     */
+    @Test
+    fun `only the whole answer is marked, with the permission it gave`() {
+        val limits = """{"primary":{"usedPercent":12,"windowDurationMins":300,"resetsAt":1790000000}}"""
+
+        val whole = CodexShapes.usageAnswer(json("""{"rateLimits":$limits,"ordinaryUsageAllowed":false}"""))["rate_limits"]!!.jsonObject
+        assertEquals("true", whole.text(CodexUsage.FULL_ANSWER))
+        assertEquals("false", whole.text(CodexUsage.ORDINARY_USAGE))
+
+        val unsaid = CodexShapes.usageAnswer(json("""{"rateLimits":$limits}"""))["rate_limits"]!!.jsonObject
+        assertEquals("true", unsaid.text(CodexUsage.FULL_ANSWER))
+        assertNull(unsaid[CodexUsage.ORDINARY_USAGE])
+
+        val rolling = CodexShapes.usage(json(limits))["rate_limits"]!!.jsonObject
+        assertNull(rolling[CodexUsage.FULL_ANSWER])
+        assertNull(CodexShapes.usageAnswer(null)["rate_limits"]!!.jsonObject[CodexUsage.FULL_ANSWER])
     }
 
     // --- MCP servers --------------------------------------------------------------------
@@ -246,5 +348,21 @@ class CodexShapesTest {
         // Reasoning is optional, and never takes the count below nothing.
         assertEquals(5 to 100, CodexShapes.contextOf(json("""{"last":{"totalTokens":5},"modelContextWindow":100}""")))
         assertEquals(0 to 100, CodexShapes.contextOf(json("""{"last":{"totalTokens":5,"reasoningOutputTokens":9},"modelContextWindow":100}""")))
+    }
+
+    /**
+     * A count kept across a switch to Long (or to a model with another window) is still what the conversation holds,
+     * but its window is the one the process before had: measured against that, the switch was undone by the next
+     * figure. The window the conversation has now replaces it, and nothing else about the count changes.
+     */
+    @Test
+    fun `a count made under another window is measured against the window now`() {
+        val usage = json("""{"last":{"totalTokens":120000,"reasoningOutputTokens":2000},"modelContextWindow":258400}""")
+
+        assertEquals(118_000 to 828_400, CodexShapes.contextOf(usage, windowNow = 828_400))
+        // No window known now - a model the cache does not name was given none, so Codex's own still holds.
+        assertEquals(118_000 to 258_400, CodexShapes.contextOf(usage, windowNow = null))
+        assertEquals(118_000 to 258_400, CodexShapes.contextOf(usage, windowNow = 0))
+        assertNull(CodexShapes.contextOf(null, windowNow = 828_400))
     }
 }

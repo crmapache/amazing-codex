@@ -85,6 +85,43 @@ class CodexRolloutTest {
         assertEquals(listOf("after"), CodexRollout.useLines(last) { it.toList() })
     }
 
+    private val fork = "01a11f09-f1e8-7b61-9862-689c3d83b906"
+
+    /** A fork's first line as Codex 0.163 writes it: the base names the source's file, and where the source stood. */
+    private fun forkMeta(base: String, offset: Long): String =
+        """{"type":"session_meta","payload":{"id":"$fork","forked_from_id":"$thread","forked_from_ordinal_exclusive":3,""" +
+            """"history_base":{"thread_id":"$base","end_ordinal_exclusive":3,"end_byte_offset":$offset}}}"""
+
+    // Measured on 0.163: the fork's file holds nothing it inherited - it is the source's up to the fork, then its own.
+    @Test
+    fun `a fork made on 0_163 reads its source up to the fork and then its own words`() {
+        val sourceLines = listOf(meta(), "turn-1", "turn-2")
+        write("rollout-2026-10-09T01-52-06-$thread.jsonl", sourceLines + "turn-3")
+        File(root, "2026/10/10").mkdirs()
+        val forked = File(root, "2026/10/10/rollout-2026-10-10T09-00-00-$fork.jsonl").apply {
+            writeText(listOf(forkMeta(thread, offsetAfter(sourceLines, 3)), "fork-1").joinToString("") { "$it\n" })
+        }
+
+        assertEquals(listOf(meta(), "turn-1", "turn-2", "fork-1"), CodexRollout.useLines(forked) { it.toList() })
+    }
+
+    // A source reverted before the fork: the base names the segment it went on in, and the climb goes on from there.
+    @Test
+    fun `a fork of a reverted thread reads the source as it stood`() {
+        val rootLines = listOf(meta(), "turn-1", "turn-2")
+        write("rollout-2026-10-09T01-52-06-$thread.jsonl", rootLines)
+        val segmentLines = listOf(meta(thread, offsetAfter(rootLines, 2)), "turn-3")
+        write("rollout-2026-10-09T01-52-20-${thread}_$first.jsonl", segmentLines)
+        val forked = write(
+            "rollout-2026-10-09T02-00-00-$fork.jsonl",
+            listOf(forkMeta(first, offsetAfter(segmentLines, 2)), "fork-1"),
+        )
+
+        assertEquals(listOf(meta(), "turn-1", "turn-3", "fork-1"), CodexRollout.useLines(forked) { it.toList() })
+        assertEquals(thread, CodexRollout.nameOf(CodexRollout.fileByKey(root, fork, thread)!!)?.thread)
+        assertNull(CodexRollout.fileByKey(root, fork, "01a11f0a-0000-7000-8000-000000000404"))
+    }
+
     @Test
     fun `the files of a thread are found across folders`() {
         write("rollout-2026-10-09T01-52-06-$thread.jsonl", listOf(meta()))

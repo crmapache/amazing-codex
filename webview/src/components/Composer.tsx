@@ -40,15 +40,16 @@ import {
 import { clipboardHtml, clipboardTextOf, clipboardTokens, tokensText } from '../feed/tokens'
 import type { Chip, DraftEdit, UserToken } from '../feed/types'
 import { isSideComposerLayout, type ComposerLayout } from '../composerLayout'
-import { droppableTools, firstLetter, type FitStep, type WritingTool } from '../composerFit'
+import { droppableTools, firstLetter, type EditorFit, type FitStep, type WritingTool } from '../composerFit'
 import { fitMark, useToolsFit } from '../hooks/useToolsFit'
 import { enterAction, sendKeyCap, type SendKey } from '../sendKey'
 import type { EditorRef, ModelInfo } from '../protocol'
 import { EditorChip } from './EditorChip'
 import { editorLabel } from '../feed/editorContext'
 import { SlashSuggest } from './SlashSuggest'
-import { collapsesPaste } from '../feed/reference'
+import { collapsesPaste, kindOfPath } from '../feed/reference'
 import { contextColor } from '../feed/usage'
+import type { FastModeShown } from '../feed/fastMode'
 import {
   atQueryAt,
   caretRect,
@@ -58,9 +59,11 @@ import {
   chipNodeIn,
   currentRange,
   droppedPaths,
+  dropEmptyText,
   extractTokens,
   hasFiles,
   headText,
+  insertAtRange,
   needsLeadingSpace,
   needsTrailingSpace,
   notePastedPath,
@@ -73,6 +76,7 @@ import {
   removeChip,
   scrollCaretIntoView,
   splitTokens,
+  takeKeyboard,
   wrappedLineCount,
 } from './composerDom'
 import { savePastedFile, savePastedFiles } from '../pasted'
@@ -84,15 +88,6 @@ import s from './composer.module.css'
 /* The pair of the bubble and the heart is drawn the same everywhere and lives with the status row it
    belongs to (see .endPair there) - the same borrowing Feedback.tsx already makes of this file. */
 import shell from './shell.module.css'
-
-/**
- * What a pasted file's chip is called - the same split the IDE makes for a chosen file (see
- * FilePicker.kindOf). Only the icon and the colour hang on it: the path travels to the agent either way.
- */
-const kindOfPath = (path: string): 'img' | 'file' =>
-  IMAGE_EXTENSIONS.has(path.substring(path.lastIndexOf('.') + 1).toLowerCase()) ? 'img' : 'file'
-
-const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'])
 
 /** Ticks at every fifth - unrelated to the colour thresholds, purely the scale's ruler. */
 const CONTEXT_METER_TICKS = [20, 40, 60, 80]
@@ -345,7 +340,10 @@ interface ComposerProps {
   files: string[]
   /** How many images have already gone out in this session - the new ones are numbered on from here. */
   imageBaseCount: number
-  /** The panel asks for the field to be focused, after a reference from the editor for instance. */
+  /**
+   * The panel asks for the field to be focused - after a reference from the editor, a tab the person
+   * switched to (see pickTab in App) - with the caret kept where it stood or put at the end (takeKeyboard).
+   */
   focusToken: number
   /**
    * The field's contents changed - and where the change came from, which the panel needs in order to tell
@@ -442,12 +440,20 @@ interface ComposerProps {
    */
   keyQueues?: boolean
   /**
-   * What the editor beside the panel shows, and whether it goes with this message (see EditorChip). Null
-   * with nothing to show, or with the setting off - then there is no chip at all.
+   * The panel's queue key was pressed (Alt+Enter unless rebound, see PanelKeys.kt). The IDE catches it
+   * before the browser does, so it arrives as a count going up rather than as a key - see pressQueueKey.
    */
-  editor?: { ref: EditorRef; on: boolean } | null
-  /** The chip pressed: this message goes without it, or with it again. */
-  onToggleEditor?: () => void
+  queueToken?: number
+  /** That key as a hint names it - "Option+Enter" - or empty while the IDE has not said (see keyText). */
+  queueKey?: string
+  /**
+   * What the editor beside the panel shows, whether it goes with this message, whether sending it is
+   * switched off with no exception for this message (`muted`), and whether the chip's menu is open - see
+   * EditorChip. Null with nothing to show.
+   */
+  editor?: { ref: EditorRef; on: boolean; muted: boolean; open: boolean } | null
+  /** The chip pressed: its menu opens over it (see editorMenu). */
+  onEditorMenu?: (anchor: Anchor) => void
   /** Whether there is anything to send - text, an attachment or a quote. */
   canSubmit: boolean
   onStop: () => void
@@ -472,6 +478,8 @@ interface ComposerProps {
   switchedFrom?: string
   /** The choice that never came into force, while that holds - see Selectors. */
   stuckPick?: string
+  /** Fast mode for this conversation - see Selectors. */
+  fast?: FastModeShown
   effort?: string
   contextMode?: 'standard' | 'long'
   contextMax?: number
@@ -551,8 +559,10 @@ export const Composer = ({
   onSubmit,
   onQueue,
   keyQueues = false,
+  queueToken = 0,
+  queueKey = '',
   editor = null,
-  onToggleEditor,
+  onEditorMenu,
   canSubmit,
   onStop,
   stopStalled,
@@ -561,6 +571,7 @@ export const Composer = ({
   model,
   switchedFrom,
   stuckPick,
+  fast,
   effort,
   contextMode = 'standard',
   contextMax,
@@ -712,7 +723,7 @@ export const Composer = ({
   }, [sessionId])
 
   useEffect(() => {
-    if (focusToken > 0) input.current?.focus()
+    if (focusToken > 0 && input.current) takeKeyboard(input.current)
   }, [focusToken])
 
   // Any edit opens the hint again and puts the choice back at the top. Unconditional on purpose, and
@@ -1165,16 +1176,13 @@ export const Composer = ({
 
     const chip: Chip = { kind: path.endsWith('/') ? 'dir' : 'file', value: path }
     const node = chipNodeIn(root, chip)
-    range.insertNode(node)
-    range.setStartAfter(node)
-    range.collapse(true)
+    insertAtRange(range, node)
 
     // The caret has somewhere to type on without sticking to the chip - as after an attachment from the
     // clipboard.
     const space = document.createTextNode(' ')
-    range.insertNode(space)
-    range.setStartAfter(space)
-    range.collapse(true)
+    insertAtRange(range, space)
+    dropEmptyText(root)
 
     const selection = window.getSelection()
     selection?.removeAllRanges()
@@ -1192,9 +1200,8 @@ export const Composer = ({
     range.deleteContents()
 
     const node = document.createTextNode(text)
-    range.insertNode(node)
-    range.setStartAfter(node)
-    range.collapse(true)
+    insertAtRange(range, node)
+    dropEmptyText(root)
 
     // What was pasted may end in a line break - a line copied from a terminal usually does. The caret
     // needs room on that line.
@@ -1253,24 +1260,19 @@ export const Composer = ({
     // needs no space in front of it, there is nothing to add.
     if (needsLeadingSpace(charBefore(range))) {
       const space = document.createTextNode(' ')
-      range.insertNode(space)
-      range.setStartAfter(space)
-      range.collapse(true)
+      insertAtRange(range, space)
     }
 
     const node = chipNodeIn(root, chip)
-    range.insertNode(node)
-    range.setStartAfter(node)
-    range.collapse(true)
+    insertAtRange(range, node)
 
     // After it always: the caret needs something to stand on in order to type on without sticking to the
     // chip, even if the image landed at the very end of the field.
     if (needsTrailingSpace(charAfter(range))) {
       const space = document.createTextNode(' ')
-      range.insertNode(space)
-      range.setStartAfter(space)
-      range.collapse(true)
+      insertAtRange(range, space)
     }
+    dropEmptyText(root)
 
     const selection = window.getSelection()
     selection?.removeAllRanges()
@@ -1296,19 +1298,11 @@ export const Composer = ({
     let tail: Node | null = null
 
     for (const token of next) {
-      if (token.kind === 'text') {
-        const text = document.createTextNode(token.value)
-        range.insertNode(text)
-        range.setStartAfter(text)
-        tail = text
-      } else {
-        const node = chipNodeIn(root, token.chip)
-        range.insertNode(node)
-        range.setStartAfter(node)
-        tail = node
-      }
-      range.collapse(true)
+      const node = token.kind === 'text' ? document.createTextNode(token.value) : chipNodeIn(root, token.chip)
+      insertAtRange(range, node)
+      tail = node
     }
+    dropEmptyText(root)
 
     // It came back at the field's end and ends in a break - the caret needs a line to stand on (see
     // padTrailingBreak).
@@ -1510,6 +1504,33 @@ export const Composer = ({
     historyDraft.current = null
     go()
   }
+
+  /**
+   * The queue key: Queue while there is one to press, and the field's ordinary Send when there is not -
+   * with the agent free there is nothing to wait for, and a key that does nothing then would only teach
+   * people not to press it. A shell command and a side question have no queue, and their Send is what
+   * the key presses too.
+   *
+   * Not while another field has the focus: the IDE takes the key from anywhere in the panel, and Alt+Enter
+   * typed into the search or into an answer to the agent's question must not send this field's draft.
+   * Held in a ref, so the effect below runs on the count alone and finds the draft as it stands.
+   */
+  const pressQueueKey = useRef(() => {})
+  pressQueueKey.current = () => {
+    const focused = document.activeElement as HTMLElement | null
+    const typing = focused && (focused.tagName === 'INPUT' || focused.tagName === 'TEXTAREA' || focused.isContentEditable)
+    if (typing && focused !== input.current) return
+    letGo(!bash && !aside && forConversation && streaming ? onQueue : onSubmit)
+  }
+
+  // A new press, never the count the field was born with: the field is built anew for another tab or a
+  // run, and a press made before that must not send the draft that tab happens to hold.
+  const seenQueueToken = useRef(queueToken)
+  useEffect(() => {
+    if (queueToken === seenQueueToken.current) return
+    seenQueueToken.current = queueToken
+    pressQueueKey.current()
+  }, [queueToken])
 
   /**
    * A file or a folder dropped into the field we take for ourselves: without that the embedded browser
@@ -1933,8 +1954,10 @@ export const Composer = ({
       className={`${s.send} ${s.sendQueued}`}
       onClick={() => letGo(onQueue)}
       disabled={!canSubmit || !streaming}
-      /* The key follows the button it presses: while a queued message is being edited that is this one. */
-      data-tooltip={keyQueues ? sendKeyCap(sendKey) : t.composer.queueHint}
+      /* The key follows the button it presses: while a queued message is being edited that is this one.
+         Otherwise the hint says what Queue does, and the panel's queue key beside it when the IDE has
+         named one (see PanelKeys.kt). */
+      data-tooltip={keyQueues ? sendKeyCap(sendKey) : queueKey ? `${t.composer.queueHint} (${queueKey})` : t.composer.queueHint}
       data-tooltip-at="top"
       aria-label={t.composer.queue}
     >
@@ -2043,10 +2066,14 @@ export const Composer = ({
   }, [hasVoice, hasSearch, hasScenarios, forConversation])
 
   const dictating = listening || finishing
-  // The editor's chip has a name to give up only in the ordinary layout - beside a narrow field it is drawn
-  // without one from the start (see EditorChip's `bare`).
-  const named = editor !== null && !compact && !rail
-  const droppable = useMemo(() => droppableTools(presentTools, dictating, named), [presentTools, dictating, named])
+  // The editor's chip gives way only in the ordinary layout - beside a narrow field it is drawn without a
+  // name from the start (see EditorChip's `bare`), and there the column is sized by what stands in it. There
+  // it gives up its name, or itself when muted: the drawing alone of a switched-off setting.
+  const editorFit: EditorFit = editor === null || compact || rail ? null : editor.muted ? 'muted' : 'named'
+  const droppable = useMemo(
+    () => droppableTools(presentTools, dictating, editorFit),
+    [presentTools, dictating, editorFit],
+  )
 
   const tools = useRef<HTMLDivElement>(null)
   // Everything else that changes what the row holds: Stop for the length of a turn, Force stop, Queue
@@ -2064,7 +2091,7 @@ export const Composer = ({
     t.composer.forceStop,
     [...presentTools].join(),
     droppable.join(),
-    editor ? `${editorLabel(editor.ref)}:${editor.on}` : '',
+    editor ? `${editorLabel(editor.ref)}:${editor.on}:${editor.muted}` : '',
   ].join('|')
   const droppedCount = useToolsFit(tools, presentTools, droppable, !compact && !rail, rowContent)
   const droppedTools = new Set<FitStep>(droppable.slice(0, droppedCount))
@@ -2107,15 +2134,18 @@ export const Composer = ({
    * and Send keeps the edge it stands on. In the other layouts the usage stands beside the heart - under
    * the field in the ordinary layout (see StatusBar), in a row of its own in the side rail.
    */
-  const editorChip = editor ? (
-    <EditorChip
-      editor={editor.ref}
-      on={editor.on}
-      bare={compact || rail}
-      nameGone={droppedTools.has('editorName')}
-      onToggle={() => onToggleEditor?.()}
-    />
-  ) : null
+  const editorChip =
+    editor && !droppedTools.has('editorChip') ? (
+      <EditorChip
+        editor={editor.ref}
+        on={editor.on}
+        muted={editor.muted}
+        bare={compact || rail}
+        nameGone={droppedTools.has('editorName')}
+        open={editor.open}
+        onOpen={(anchor) => onEditorMenu?.(anchor)}
+      />
+    ) : null
 
   const toolsRow = compact ? (
     <>
@@ -2280,6 +2310,7 @@ export const Composer = ({
                 model={model}
                 switchedFrom={switchedFrom}
                 stuckPick={stuckPick}
+                fast={fast}
                 effort={effort ?? ''}
                 contextMode={contextMode}
                 contextMax={contextMax}
@@ -2360,6 +2391,7 @@ export const Composer = ({
                     model={model}
                     switchedFrom={switchedFrom}
                     stuckPick={stuckPick}
+                    fast={fast}
                     effort={effort ?? ''}
                     contextMode={contextMode}
                     contextMax={contextMax}

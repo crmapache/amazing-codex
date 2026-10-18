@@ -59,6 +59,9 @@ internal class ScenarioEngine(
         /** Nothing yet: the head is coming up and has been told what the run is for. */
         OPENING,
 
+        /** A stage that runs once per item of a list has begun, and the head is giving the list (see StageList). */
+        LIST,
+
         /** The head is choosing what to put in the current card's slots. */
         SLOTS,
 
@@ -468,8 +471,16 @@ internal class ScenarioEngine(
                         // as the goes it may be sent back for (see below); one the head was finishing stays its.
                         takeOver = if (headWasFinishing) step.takeOver else "",
                     )
-                    // Everything after it never had its go: back to the plan, as [begin] wrote it.
-                    else -> RunStep(key = step.key, cardId = step.cardId, stageId = step.stageId, pass = step.pass, title = step.title)
+                    // Everything after it never had its go: back to the plan, as [begin] wrote it - or as a list
+                    // given since wrote it, which is part of the plan now (see StageList.expand).
+                    else -> RunStep(
+                        key = step.key,
+                        cardId = step.cardId,
+                        stageId = step.stageId,
+                        pass = step.pass,
+                        title = step.title,
+                        item = step.item,
+                    )
                 }
             },
         )
@@ -612,7 +623,8 @@ internal class ScenarioEngine(
             effort = definition.effort.ifBlank { scenario.head.effort }.ifBlank { defaultEffort },
             permissionMode = definition.permissionMode.ifBlank { scenario.head.permissionMode },
             accountId = accountId,
-            briefing = HeadTalk.CARD_BRIEFING,
+            // Raised for a second go at an item of a list, it is told what the first ran into (see HeadTalk.cardBriefing).
+            briefing = HeadTalk.cardBriefing(step.item?.again.orEmpty()),
             nameWanted = false,
             onEvent = { line ->
                 if (card === session) {
@@ -861,9 +873,15 @@ internal class ScenarioEngine(
 
         val reply = HeadTalk.read(headTurn.last)
         // The opening message is about the run rather than about any card, so its answer belongs above
-        // the first step rather than under it - the timeline reads the empty key exactly that way.
+        // the first step rather than under it - the timeline reads the empty key exactly that way. The
+        // list of a stage is about the whole stage, and goes at its head by a key of its own.
         if (reply.words.isNotBlank()) {
-            note(reply.words, if (phase == Phase.OPENING) "" else run.steps.getOrNull(at)?.key.orEmpty())
+            val about = when (phase) {
+                Phase.OPENING -> ""
+                Phase.LIST -> run.steps.getOrNull(at)?.stageId?.let(ScenarioRules::listKey).orEmpty()
+                else -> run.steps.getOrNull(at)?.key.orEmpty()
+            }
+            note(reply.words, about)
         }
 
         val body = reply.body
@@ -887,6 +905,7 @@ internal class ScenarioEngine(
 
         when (phase) {
             Phase.OPENING -> beginStep()
+            Phase.LIST -> takeList(body)
             Phase.SLOTS -> startCard(body)
             Phase.QUESTION -> answerCardQuestion(body)
             Phase.VERDICT -> takeVerdict(body)
@@ -1073,10 +1092,14 @@ internal class ScenarioEngine(
     private fun canPassOn(): Boolean =
         card != null && (phase in CARD_PHASES || (phase == Phase.PAUSED && resumeTo in CARD_PHASES))
 
-    /** The card the run stands at, by key - empty before the first one, which the timeline reads as "above them all". */
-    private fun boardKey(): String {
-        val opening = phase == Phase.OPENING || (phase == Phase.PAUSED && resumeTo == Phase.OPENING)
-        return if (opening) "" else run.steps.getOrNull(at)?.key.orEmpty()
+    /**
+     * The card the run stands at, by key - empty before the first one, which the timeline reads as "above them all",
+     * and the stage's own while its list is asked for: the pass standing there is a stand-in that the list replaces.
+     */
+    private fun boardKey(): String = when (if (phase == Phase.PAUSED) resumeTo else phase) {
+        Phase.OPENING -> ""
+        Phase.LIST -> run.steps.getOrNull(at)?.stageId?.let(ScenarioRules::listKey).orEmpty()
+        else -> run.steps.getOrNull(at)?.key.orEmpty()
     }
 
     /** Where the run stands, in a sentence for the head answering the person (see HeadTalk.toldRequest). */
@@ -1086,6 +1109,10 @@ internal class ScenarioEngine(
         val standing = if (phase == Phase.PAUSED) resumeTo else phase
         val where = when (standing) {
             Phase.OPENING -> "The run has only just begun: no card has been handed to you yet."
+            Phase.LIST -> step?.let { here ->
+                val title = scenario.stages.firstOrNull { it.id == here.stageId }?.title.orEmpty().ifBlank { "Untitled" }
+                "The run is going: the stage \"$title\" has begun, and you are being asked for its list."
+            }
             Phase.CARD -> named?.let { "The run is going: $it is at work right now." }
             Phase.BLOCKED -> named?.let { "The run is going: $it has stopped on a question, and it waits for the person to answer it." }
             Phase.TAKEOVER -> named?.let { "You were finishing $it yourself." }
@@ -1109,6 +1136,11 @@ internal class ScenarioEngine(
             return end(RunState.FAILED, RunFailure.CRASHED, "a step of this run points at a card that is not in it")
         }
 
+        // A stage that runs once per item, reached before its list was given: the pass standing here holds
+        // the place the list is asked for, and turns into the list's passes once it is answered.
+        val each = stage.each
+        if (each != null && step.item == null) return askForList(stage, each, step)
+
         nudges = 0
         tookOver = false
         freshCardTurn()
@@ -1126,12 +1158,91 @@ internal class ScenarioEngine(
                 total = run.total,
                 pass = step.pass,
                 passes = ScenarioRules.passesOf(stage),
-                prompt = ScenarioRules.fillInputs(definition.prompt, run.inputs),
+                prompt = ScenarioRules.fillSlots(ScenarioRules.fillInputs(definition.prompt, run.inputs), itemSlot(stage, step)),
                 retries = scenario.head.retries,
                 handsOver = TakeOver.wanted(scenario.head, alreadyTaken = false, stopAsked = false),
+                item = step.item,
             ),
         )
         changed()
+    }
+
+    /** What the item of a pass writes into its prompts, by name - nothing outside a stage that runs once per item. */
+    private fun itemSlot(stage: Stage, step: RunStep): Map<String, String> {
+        val name = stage.each?.name ?: return emptyMap()
+        val item = step.item ?: return emptyMap()
+        return mapOf(name to item.value)
+    }
+
+    /**
+     * Ask the head for the list a stage runs once per item of, as the stage begins (see Stage.each).
+     *
+     * The pass standing in for the list is the step on the board meanwhile, and it reads as the head at work:
+     * the row is there from the first second, and what replaces it is the stage's real passes.
+     */
+    private fun askForList(stage: Stage, each: StageEach, step: RunStep) {
+        editStep(step.key) { it.copy(state = StepState.JUDGING, startedAt = System.currentTimeMillis()) }
+        phase = Phase.LIST
+        askHead(
+            HeadTalk.listRequest(
+                stage = stage,
+                each = each.copy(description = ScenarioRules.fillInputs(each.description, run.inputs)),
+                number = scenario.stages.indexOfFirst { it.id == stage.id } + 1,
+                stages = scenario.stages.size,
+                prompts = stage.cards.map { card -> card to ScenarioRules.fillInputs(card.prompt, run.inputs) },
+            ),
+        )
+        changed()
+    }
+
+    /**
+     * The head has given the list: the stage is written out as one pass per item, and the first begins.
+     *
+     * A list that cannot be read is asked for once more and then given up on, the way an empty slot is. A list
+     * longer than a stage takes ends the run instead, and is not asked again: asked again, a head shortens it to
+     * fit, and a list cut short without a word is what this kind of stage was made to put an end to.
+     */
+    private fun takeList(body: JsonObject) {
+        val step = run.steps.getOrNull(at) ?: return
+        val stage = scenario.stages.firstOrNull { it.id == step.stageId } ?: return
+        val named = "the stage \"${stage.title.ifBlank { "Untitled" }}\""
+
+        val items = when (val reading = StageList.read(body)) {
+            is StageList.Reading.Items -> reading.items
+            is StageList.Reading.TooLong -> return failOnList(
+                RunFailure.LONG_LIST,
+                "the list of $named has ${reading.count} items, and a stage takes at most $MAX_STAGE_ITEMS",
+            )
+            is StageList.Reading.Unusable -> return askForListAgain(
+                named,
+                "Item ${reading.places.joinToString(", ")} of the list had no value to write into the prompts.",
+            )
+            StageList.Reading.Missing -> return askForListAgain(named, "No list came back.")
+        }
+
+        val steps = StageList.expand(run.steps, stage, items, System.currentTimeMillis())
+        run = run.copy(steps = steps, total = steps.size)
+        // Nothing on the list: the stage is skipped, and the run goes on past it.
+        if (items.isEmpty()) at = StageList.afterPass(steps, at)
+        beginStep()
+    }
+
+    /**
+     * The run ended on the list itself. The pass standing in for it says why, as the run does: left to [end], a
+     * begun step is put down as a process that went away, and its row would contradict the run's own banner.
+     */
+    private fun failOnList(failure: String, error: String) {
+        run.steps.getOrNull(at)?.let { step -> editStep(step.key) { it.copy(failure = failure) } }
+        end(RunState.FAILED, failure, error)
+    }
+
+    private fun askForListAgain(named: String, what: String) {
+        if (reasked) return failOnList(RunFailure.NO_VERDICT, "the head would not give the list of $named")
+        reasked = true
+        askAgain(
+            "$what Answer again with the whole `items` list, every item an object with a `value` to write into " +
+                "the prompts and a `label` for the screen.",
+        )
     }
 
     /** The head has chosen the slots: fill the prompt in and let the card start. */
@@ -1141,7 +1252,7 @@ internal class ScenarioEngine(
         val definition = stage.cards.firstOrNull { it.id == step.cardId } ?: return
 
         val given = (body["slots"] as? JsonObject) ?: JsonObject(emptyMap())
-        val wanted = ScenarioRules.declaredSlots(definition).map { it.name }
+        val wanted = ScenarioRules.slotsToFill(stage, definition).map { it.name }
         // Read forgivingly: a value of the wrong shape is a slot nobody filled, and that is asked
         // again for and then given up on - not thrown from the thread reading the CLI (see HeadAnswer).
         val filled = wanted.associateWith { HeadAnswer.text(given, it) }
@@ -1170,8 +1281,10 @@ internal class ScenarioEngine(
             return
         }
 
-        val prompt = ScenarioRules.fillSlots(ScenarioRules.fillInputs(definition.prompt, run.inputs), filled)
-        editStep(step.key) { it.copy(slots = filled, prompt = prompt, state = StepState.RUNNING, said = "") }
+        // The item of a pass first: it is what tells this pass from the others, and the row draws the slots in order.
+        val slots = itemSlot(stage, step) + filled
+        val prompt = ScenarioRules.fillSlots(ScenarioRules.fillInputs(definition.prompt, run.inputs), slots)
+        editStep(step.key) { it.copy(slots = slots, prompt = prompt, state = StepState.RUNNING, said = "") }
 
         card = openCard(step, definition)
         phase = Phase.CARD
@@ -1400,6 +1513,7 @@ internal class ScenarioEngine(
                 ok = answer.isNotBlank(),
                 nudgesLeft = (scenario.head.retries - nudges).coerceAtLeast(0),
                 handsOver = canTakeOver(stopAsked = false),
+                putOff = StageList.canPutOff(step),
             ),
         )
         changed()
@@ -1409,6 +1523,7 @@ internal class ScenarioEngine(
         val step = run.steps.getOrNull(at) ?: return
         val retry = HeadAnswer.text(body, "retry")
         val reason = HeadAnswer.text(body, "reason")
+        val later = HeadAnswer.text(body, "later")
 
         if (retry.isNotBlank() && nudges < scenario.head.retries) {
             nudges += 1
@@ -1422,7 +1537,22 @@ internal class ScenarioEngine(
             return
         }
 
-        val done = HeadAnswer.flag(body, "done") ?: retry.isBlank()
+        if (later.isNotBlank()) {
+            if (StageList.canPutOff(step)) return putOff(step, later, body)
+            // Not open here - a second go, or a card that is not an item of a list at all - and the offer was not
+            // made: asked once to say done or not, rather than read as done. An answer that wants to come back to
+            // a card is not one that says it is finished.
+            if (!reasked) {
+                reasked = true
+                askAgain(
+                    "This card cannot be put off: only the first go at an item of a list can. Answer with " +
+                        "`{\"done\": true}` or `{\"done\": false}`, and a `reason`.",
+                )
+                return
+            }
+        }
+
+        val done = HeadAnswer.flag(body, "done") ?: (retry.isBlank() && later.isBlank())
         if (!done && canTakeOver(stopAsked = HeadAnswer.flag(body, "stop") ?: false)) {
             return takeOver(step, why = reason.ifBlank { "the main thread judged it not done" }, said = null)
         }
@@ -1458,6 +1588,33 @@ internal class ScenarioEngine(
         nextStep()
     }
 
+    /**
+     * The head put this pass's item off until the rest of the list is done (see StageList.putOff).
+     *
+     * The card is finished with as far as this pass goes - done, under a verdict of its own, so that a run picked
+     * up later reads it as something that happened rather than as a card cut short (see CarryOn). The rest of its
+     * pass is skipped, the second go is written at the end of the stage where the screen shows it, and the run
+     * goes on with the next pass.
+     */
+    private fun putOff(step: RunStep, reason: String, body: JsonObject) {
+        closeCard()
+        val now = System.currentTimeMillis()
+        editStep(step.key) {
+            it.copy(
+                state = StepState.DONE,
+                verdict = "later",
+                verdictReason = reason,
+                handoff = HeadAnswer.text(body, "handoff"),
+                finishedAt = now,
+            )
+        }
+
+        val steps = StageList.putOff(run.steps, at, shorten(reason, HeadTalk.AGAIN_CHARS), now)
+        run = run.copy(steps = steps, total = steps.size)
+        at = StageList.afterPass(steps, at)
+        beginStep()
+    }
+
     /** Past this card - and, at the end of a pass that may be the last, ask the head whether to go again. */
     private fun nextStep() {
         val finished = run.steps.getOrNull(at) ?: return end(RunState.DONE, "", "")
@@ -1467,7 +1624,7 @@ internal class ScenarioEngine(
         val passEnded = next == null || next.stageId != finished.stageId || next.pass != finished.pass
         val moreToCome = next != null && next.stageId == finished.stageId && next.pass > finished.pass
 
-        if (stage != null && stage.untilDone && passEnded && moreToCome) {
+        if (stage != null && ScenarioRules.loopsUntilDone(stage) && passEnded && moreToCome) {
             phase = Phase.AGAIN
             askHead(HeadTalk.anotherPassRequest(stage, finished.pass, ScenarioRules.passesOf(stage)))
             return
@@ -2053,7 +2210,7 @@ internal class ScenarioEngine(
                 askAgain(HeadTalk.TAKE_OVER_CARRY_ON)
             }
 
-            Phase.OPENING, Phase.SLOTS, Phase.QUESTION, Phase.VERDICT, Phase.AGAIN -> {
+            Phase.OPENING, Phase.LIST, Phase.SLOTS, Phase.QUESTION, Phase.VERDICT, Phase.AGAIN -> {
                 run.steps.getOrNull(at)?.let { step -> editStep(step.key) { it.copy(state = StepState.JUDGING) } }
                 // The same question again, not a new one: a pause taken in the middle of a re-ask must not
                 // hand the head a fresh allowance to answer wrongly.
@@ -2359,7 +2516,7 @@ internal class ScenarioEngine(
         restClock?.cancel(false)
         restClock = AppExecutorUtil.getAppScheduledExecutorService().schedule(
             { runCatching { wake() }.onFailure { thisLogger().warn("A scenario run could not wake from its limit", it) } },
-            (at - System.currentTimeMillis()).coerceAtLeast(0) + REST_SLACK_MS,
+            (at - System.currentTimeMillis()).coerceAtLeast(0) + LimitRelief.RESET_SLACK_MS,
             TimeUnit.MILLISECONDS,
         )
     }
@@ -2383,7 +2540,7 @@ internal class ScenarioEngine(
                     }
                 }.onFailure { thisLogger().warn("A scenario run could not pass on the person's words", it) }
             },
-            (until - System.currentTimeMillis()).coerceAtLeast(0) + REST_SLACK_MS,
+            (until - System.currentTimeMillis()).coerceAtLeast(0) + LimitRelief.RESET_SLACK_MS,
             TimeUnit.MILLISECONDS,
         )
     }
@@ -2856,7 +3013,7 @@ internal class ScenarioEngine(
         const val HEAD_CEILING_MS = 30L * 60 * 1000
 
         /** The phases in which the run is waiting on the head and on nothing else. */
-        val HEAD_PHASES = setOf(Phase.OPENING, Phase.SLOTS, Phase.QUESTION, Phase.VERDICT, Phase.AGAIN)
+        val HEAD_PHASES = setOf(Phase.OPENING, Phase.LIST, Phase.SLOTS, Phase.QUESTION, Phase.VERDICT, Phase.AGAIN)
 
         /** The phases in which the card's own turn is open - working, or standing on a question. */
         val CARD_PHASES = setOf(Phase.CARD, Phase.QUESTION, Phase.BLOCKED)
@@ -2871,12 +3028,6 @@ internal class ScenarioEngine(
 
         /** How long a move to another account waits for the turns it interrupted to close - a tab's eight seconds. */
         const val SWAP_GRACE_MS = 8_000L
-
-        /**
-         * How long after a limit's reset a resting run looks again. The reset is the server's clock, not ours, and a
-         * request a few seconds early is refused and puts the run back to waiting for nothing.
-         */
-        const val REST_SLACK_MS = 30_000L
 
         /**
          * How long an account the run moved to by itself, and found unable to take it, is left alone - long

@@ -7,7 +7,9 @@ import type { Dict } from '../i18n/en'
 import { useFieldHistory } from '../hooks/useFieldHistory'
 import { useResting } from '../hooks/useResting'
 import type { TitleSource } from '../protocol'
+import { splitTabTitle } from '../feed/title'
 import type { TabCall } from '../sounds'
+import { beforeOf, placeOn, rowFor, shotOf, SWAP_GAP_PX, type Point, type Shot, type TabRect } from '../tabDrag'
 
 /**
  * What is happening in a tab: nothing, work under way, work finished, or someone being waited for. The
@@ -175,6 +177,14 @@ interface HeaderProps {
   onPickPanelTab?: (id: string) => void
   onClosePanelTab?: (id: string) => void
   /**
+   * The panel's keys for a new tab and for closing the open one, as hover hints name them (see keyText) -
+   * empty while the IDE has not said, and then the hints say only what they always said. The close key's hint
+   * names the key that opens the tab again as well (see closeTabHint in App): a close made by mistake is
+   * undone from where it was made.
+   */
+  newTabKey?: string
+  closeTabKey?: string
+  /**
    * The conversations that called the person with a sound and have not been opened since, by tab. Each
    * glows in the colour of what it called about until it is opened (see TabGlow): the sound says that
    * something happened, and with a dozen tabs open only this says where.
@@ -294,6 +304,118 @@ const TabNameField = ({
   )
 }
 
+const ELLIPSIS = '…'
+
+/** The ellipsis's width in a font, measured once per font: the one glyph the name does not hold. */
+const ellipsisWidths = new Map<string, number>()
+
+const ellipsisWidth = (font: string): number => {
+  const known = ellipsisWidths.get(font)
+  if (known !== undefined) return known
+
+  const context = document.createElement('canvas').getContext('2d')
+  if (!context) return 0
+  context.font = font
+  const width = context.measureText(ELLIPSIS).width
+  ellipsisWidths.set(font, width)
+  return width
+}
+
+/**
+ * The name as it fits [room] pixels: whole if it does, otherwise cut in the middle - the head down to the
+ * ellipsis, then the last word (see splitTabTitle). Measured on the name itself as the tab lays it out (the
+ * hidden copy in TabTitle), so the font, its fallbacks and the kerning are the tab's own. A tail that leaves
+ * the head less than a couple of letters is given up, and the name is cut at the end.
+ */
+const fitTitle = (title: string, text: Text, room: number, font: string): string => {
+  const range = document.createRange()
+  const width = (to: number, from = 0) => {
+    range.setStart(text, from)
+    range.setEnd(text, to)
+    return range.getBoundingClientRect().width
+  }
+
+  if (width(title.length) <= room + 0.5) return title
+
+  /** The head's longest start, letters whole, that fits [budget]; null when not even [least] letters do. */
+  const headIn = (head: string, budget: number, least: number): string | null => {
+    const stops = [0]
+    for (const letter of head) stops.push(stops.at(-1)! + letter.length)
+
+    let low = 0
+    let high = stops.length - 1
+    while (low < high) {
+      const middle = Math.ceil((low + high) / 2)
+      if (width(stops[middle]!) <= budget) low = middle
+      else high = middle - 1
+    }
+    return low < least ? null : head.slice(0, stops[low]).trimEnd()
+  }
+
+  const dots = ellipsisWidth(font)
+  const { head, tail } = splitTabTitle(title)
+  if (tail) {
+    const kept = headIn(head, room - dots - width(title.length, head.length), 2)
+    if (kept !== null) return `${kept}${ELLIPSIS}${tail}`
+  }
+
+  return `${headIn(title, room - dots, 0) ?? ''}${ELLIPSIS}`
+}
+
+/**
+ * A tab's name, for a strip of conversations that often begin alike: "Refactor auth module" and "Refactor
+ * auth tests" cut at the end were the same tab twice (asked from IntelliJ IDEA, 0.13.20).
+ *
+ * So the name is cut in the middle: the head gives way to an ellipsis and the last word stays (see
+ * splitTabTitle, fitTitle). The cut is worked out rather than left to `text-overflow`: a box cut by the
+ * browser ends its ellipsis wherever the last whole letter did, and in the middle of a name that left a
+ * gap of up to a letter before the tail - "Refactor …   documentation".
+ *
+ * Two copies of the name, for the two jobs it has. The hidden one is the whole name in the flow: it is what
+ * the tab is as wide as (the tab grows into its row's room up to its whole name, see .tab in the styles),
+ * what is measured, what a screen reader reads, and what the hint checks for a cut. The visible one lies
+ * over it, as it fits. Cut or not, the name is whole a hover away - the hint comes up only when something
+ * is cut (`data-tooltip-clipped`, see Tooltips), and not on the tab being dragged, where it would ride along.
+ */
+const TabTitle = ({ title, hint }: { title: string; hint: boolean }) => {
+  const box = useRef<HTMLSpanElement>(null)
+  const whole = useRef<HTMLSpanElement>(null)
+  const [shown, setShown] = useState(title)
+
+  useLayoutEffect(() => {
+    const element = box.current
+    const text = whole.current?.firstChild
+    if (!element || !(text instanceof Text)) return
+
+    const fit = () =>
+      setShown(fitTitle(title, text, element.getBoundingClientRect().width, getComputedStyle(element).font))
+
+    fit()
+    // The tab's width changes with everything around it - a tab opened or closed in its row, the panel
+    // resized - and the webfont may arrive after the first measure.
+    const observer = new ResizeObserver(fit)
+    observer.observe(element)
+    let live = true
+    void document.fonts?.ready.then(() => live && fit())
+
+    return () => {
+      live = false
+      observer.disconnect()
+    }
+  }, [title])
+
+  return (
+    <span ref={box} className={s.tabTitle} data-tooltip={hint ? title : undefined} data-tooltip-clipped="">
+      <span ref={whole} className={s.tabTitleWhole}>
+        {title}
+      </span>
+      <span className={s.tabTitleShown} aria-hidden="true">
+        {shown}
+      </span>
+    </span>
+  )
+}
+
 /**
  * The sparks over a calling tab: where each twinkles, how big, on what rhythm.
  *
@@ -399,15 +521,6 @@ interface Drag {
   groupId: string
 }
 
-/** Where a unit of the row stands and how wide it is - see unitRow. */
-interface Unit {
-  id: string
-  left: number
-  right: number
-  top: number
-  bottom: number
-}
-
 /**
  * Which unit of the row a tab belongs to, for the gesture at hand - and nothing at all when it stands
  * outside it: a fork being dragged inside its group has no business with anybody else's tabs, and they
@@ -421,10 +534,10 @@ const unitIdOf = (node: HTMLElement, drag: Drag): string | undefined => {
 }
 
 /**
- * The margin a change of place is checked against: a hand on the boundary trembles, and without it the
- * neighbours would tremble along with it (see startDrag).
+ * What stands in the strip under its own name: a tab - its conversation, or the panel tab it is (see
+ * sessionTab and panelTab) - and the "+" after them, which is no tab but moves with the row all the same.
  */
-const SWAP_GAP_PX = 8
+const keyOf = (node: HTMLElement): string | undefined => node.dataset.tab ?? node.dataset.group ?? node.dataset.strip
 
 /** How long a dropped tab's landing lasts. The same as the transition in shell.module.css. */
 const LANDING_MS = 160
@@ -497,6 +610,8 @@ export const Header = ({
   onPickPanelTab,
   onClosePanelTab,
   calls = NO_CALLS,
+  newTabKey = '',
+  closeTabKey = '',
 }: HeaderProps) => {
   const t = useT()
   const compact = layout === 'compact' || isSideComposerLayout(layout)
@@ -525,18 +640,29 @@ export const Header = ({
    * what counts as a unit of the row - everything below works over units and asks no further questions.
    */
   const [dragging, setDragging] = useState<Drag | null>(null)
-  /** How far to shift it: as far as the hand has travelled from where it pressed. */
-  const [offset, setOffset] = useState(0)
   /**
-   * How far to move each of the other groups to make room.
+   * How far to shift it: as far as the hand has travelled from where it pressed - along the strip and, when
+   * the strip has wrapped, up and down its rows.
+   */
+  const [offset, setOffset] = useState<Point>({ x: 0, y: 0 })
+  /**
+   * How far to move each of the other tabs to make room, by the tab (see keyOf).
    *
    * We move them by an offset rather than by rearranging the row: while the gesture lasts, the order in
    * the state does not change at all. Rearranging on the fly created a feedback loop - a neighbour moved
    * away, the geometry changed, the condition fired again, and the tabs started darting about. Here the
    * whole calculation runs off one snapshot taken at the gesture's start, and there is nothing to dart
    * about.
+   *
+   * By the tab rather than by the group: on a wrapped strip one group's tabs can go different ways - the
+   * head stays at the end of a row while its fork wraps onto the next one.
    */
-  const [shifts, setShifts] = useState<Record<string, number>>({})
+  const [shifts, setShifts] = useState<Record<string, Point>>({})
+  /**
+   * How tall the strip stands while a gesture lasts, when the drop is going to need more rows than it has
+   * now (see projectionFor) - otherwise nothing, and the strip is as tall as its tabs.
+   */
+  const [reach, setReach] = useState<number | null>(null)
 
   /**
    * The two reorder callbacks as they stand when the tab is dropped rather than when it was pressed. A
@@ -555,7 +681,8 @@ export const Header = ({
   }
 
   /**
-   * Where the groups stood on screen at the moment the tab was released.
+   * Where everything in the strip stood on screen at the moment the tab was released, and whether it was
+   * drawn away from its place in the layout then (see the landing below).
    *
    * Without this snapshot the landing jerked: rearranging the row and dropping the offsets happen in one
    * frame, and the browser saw only the final layout. The tab teleported from under the hand into its
@@ -563,66 +690,127 @@ export const Header = ({
    * jump by a tab's width and a slow return. With the snapshot that same frame starts from the previous
    * picture and travels to the new one.
    */
-  const landing = useRef<{ drag: Drag; places: Map<string, { x: number; y: number }> } | null>(null)
+  const landing = useRef<Map<string, Point & { shifted: boolean }> | null>(null)
+
+  /** Everything in the strip under its own name (see keyOf), in the order it is drawn. */
+  const stripNodes = (): HTMLElement[] =>
+    Array.from(tabs.current?.children ?? []).filter(
+      (node): node is HTMLElement => node instanceof HTMLElement && keyOf(node) !== undefined,
+    )
+
+  /** Where everything in the strip stands in the layout - the offsets a gesture draws it with left out. */
+  const layoutOf = (): Map<string, Point> =>
+    new Map(stripNodes().map((node) => [keyOf(node)!, { x: node.offsetLeft, y: node.offsetTop }]))
 
   /**
-   * A snapshot of the row in the units this gesture moves: where each stands and how wide it is.
+   * A snapshot of the strip for the gesture at hand: every tab, where it stands, and which unit of the
+   * gesture it belongs to (see Shot).
    *
    * It is taken once, at the gesture's start, and does not change after that - which is exactly why the
    * pushing apart comes out calm: every decision is made from a motionless picture rather than from the
    * one we are moving ourselves.
    *
    * A group drag sees the whole strip, group by group; a fork dragged inside its group sees that group's
-   * tabs and nothing else - the rest of the strip is not part of the gesture and does not budge.
+   * tabs and nothing else.
    */
-  const unitRow = (drag: Drag): Unit[] => {
-    const root = tabs.current
-    if (!root) return []
-
-    const units: Unit[] = []
-
-    for (const node of Array.from(root.querySelectorAll<HTMLElement>('[data-group]'))) {
-      const id = unitIdOf(node, drag)
-      if (!id) continue
-
-      const left = node.offsetLeft
-      const right = left + node.offsetWidth
-      const top = node.offsetTop
-      const bottom = top + node.offsetHeight
-      const last = units.at(-1)
-
-      // Only a group spans several tabs; inside one group every tab is a unit of its own, so this arm
-      // never fires there.
-      if (last?.id === id) {
-        last.left = Math.min(last.left, left)
-        last.right = Math.max(last.right, right)
-        last.top = Math.min(last.top, top)
-        last.bottom = Math.max(last.bottom, bottom)
-        continue
-      }
-
-      units.push({ id, left, right, top, bottom })
+  const stripShot = (drag: Drag): Shot => {
+    const rects: TabRect[] = []
+    for (const node of stripNodes()) {
+      const key = keyOf(node)
+      if (!key || !node.dataset.group) continue
+      rects.push({
+        key,
+        unit: unitIdOf(node, drag),
+        left: node.offsetLeft,
+        right: node.offsetLeft + node.offsetWidth,
+        top: node.offsetTop,
+      })
     }
-
-    return units
+    return shotOf(rects)
   }
 
-  /** The tabs by unit: a group holds as many as the conversation has forks, a single tab holds one. */
-  const unitNodes = (kind: DragKind): Map<string, HTMLElement[]> => {
+  /**
+   * Where every other tab goes to make room, with the carried unit put before `before` (null - the end),
+   * measured against `laid` - the strip as it stood when the gesture began.
+   *
+   * Not reckoned but asked of the browser: the strip is laid out once more in the order the drop is going
+   * to give it, measured, and put back - all inside one task, so no frame ever sees it. On a wrapped strip
+   * nothing else gives the truth: a tab carried into a row pushes that row's last tab onto the next one,
+   * which pushes the next row's last, and a narrower tab leaving a row lets the start of the following row
+   * climb into it. A shift by the carried tab's width, which was enough while the strip was one row,
+   * cannot say any of that.
+   *
+   * By the flex `order` of the strip's own children rather than by moving nodes: React owns those nodes,
+   * and the "+" at the end gets its number like everybody else and stays at the end. It moves with the
+   * rest, too: left where it stood, it lay over the tab that came to the end of its row.
+   *
+   * The height comes along: a drop that folds the strip onto one more row pushes a tab onto a row that is
+   * not there yet, and that tab hid under the panel until the hand let go. The strip grows for it while
+   * the gesture lasts - by exactly the row the drop is going to add anyway.
+   */
+  const projectionFor = (
+    drag: Drag,
+    laid: Map<string, Point>,
+    before: string | null,
+  ): { shifts: Record<string, Point>; height: number | null } => {
     const root = tabs.current
-    const nodes = new Map<string, HTMLElement[]>()
-    if (!root) return nodes
+    if (!root) return { shifts: {}, height: null }
 
-    for (const node of Array.from(root.querySelectorAll<HTMLElement>('[data-group]'))) {
-      const id = kind === 'tab' ? node.dataset.tab : node.dataset.group
-      if (!id) continue
+    const children = Array.from(root.children).filter((node): node is HTMLElement => node instanceof HTMLElement)
+    const carried = children.filter((node) => unitIdOf(node, drag) === drag.id)
+    const rest = children.filter((node) => unitIdOf(node, drag) !== drag.id)
 
-      const list = nodes.get(id)
-      if (list) list.push(node)
-      else nodes.set(id, [node])
+    let at = -1
+    if (before === null) {
+      // The end of the gesture's row rather than of the strip: the "+" stays last, and a fork carried to
+      // the end of its group stops at the group's end.
+      rest.forEach((node, index) => {
+        if (unitIdOf(node, drag) !== undefined) at = index + 1
+      })
+    } else {
+      at = rest.findIndex((node) => unitIdOf(node, drag) === before)
     }
+    if (at < 0) return { shifts: {}, height: null }
 
-    return nodes
+    // Measured without the height a previous place of the gesture asked for, or the strip would only grow.
+    const asked = root.style.minHeight
+    root.style.minHeight = ''
+    const height = root.offsetHeight
+
+    const sequence = [...rest.slice(0, at), ...carried, ...rest.slice(at)]
+    sequence.forEach((node, order) => {
+      node.style.order = String(order)
+    })
+    // The strip's first tab stands flush with its edge, and the rule saying so (.tabGroupStart:first-child)
+    // goes by the markup rather than by `order`. So the edge is handed to the tab the drop puts first, and
+    // the one first in the markup takes a group's gap - or every row after it came out six pixels off.
+    const leader = sequence.find((node) => node.dataset.group)
+    const marked = children[0]
+    const handOver = leader !== undefined && marked !== undefined && leader !== marked
+    if (handOver) {
+      leader.style.marginLeft = '0px'
+      marked.style.marginLeft = 'var(--acc-group-gap)'
+    }
+    const projected = layoutOf()
+    const projectedHeight = root.offsetHeight
+    for (const node of sequence) node.style.order = ''
+    if (handOver) {
+      leader.style.marginLeft = ''
+      marked.style.marginLeft = ''
+    }
+    root.style.minHeight = asked
+
+    const next: Record<string, Point> = {}
+    // The carried ones travel with the hand instead (see dragStyle).
+    const travelling = new Set(carried.map(keyOf))
+    for (const [key, to] of projected) {
+      const was = laid.get(key)
+      if (!was || travelling.has(key)) continue
+      const x = to.x - was.x
+      const y = to.y - was.y
+      if (x || y) next[key] = { x, y }
+    }
+    return { shifts: next, height: projectedHeight > height ? projectedHeight : null }
   }
 
   /**
@@ -632,7 +820,7 @@ export const Header = ({
    * moment, this gives its real position halfway there rather than where it is only about to arrive.
    * Otherwise a drop in the middle of someone else's move would snap that neighbour to its end point.
    */
-  const liveShift = (node: HTMLElement): { x: number; y: number } => {
+  const liveShift = (node: HTMLElement): Point => {
     const transform = getComputedStyle(node).transform
     if (!transform || transform === 'none') return { x: 0, y: 0 }
 
@@ -642,36 +830,6 @@ export const Header = ({
     } catch {
       return { x: 0, y: 0 }
     }
-  }
-
-  /**
-   * Where a tab is asking to go at such an offset: its place number in the row.
-   *
-   * A neighbour gives way when the tab has covered more than half of it - that is, when its edge has
-   * passed the neighbour's middle. The answer depends only on the hand's position and the motionless
-   * snapshot of the row: one and the same hand gives one and the same answer, however many times it is
-   * asked.
-   */
-  const placeFor = (row: Unit[], from: number, shift: number): number => {
-    const own = row[from]
-    if (!own) return from
-
-    const left = own.left + shift
-    const right = own.right + shift
-    let place = from
-
-    for (const [index, group] of row.entries()) {
-      if (index === from) continue
-      // Neighbours from other rows do not step aside: a horizontal offset is meaningless for them, and
-      // the row wraps when there is not enough space.
-      if (group.bottom <= own.top || group.top >= own.bottom) continue
-
-      const middle = (group.left + group.right) / 2
-      if (index < from && left < middle) place = Math.min(place, index)
-      if (index > from && right > middle) place = Math.max(place, index)
-    }
-
-    return place
   }
 
   /**
@@ -705,9 +863,42 @@ export const Header = ({
 
     event.preventDefault()
 
-    const row = unitRow(drag)
-    const from = row.findIndex((unit) => unit.id === drag.id)
-    if (from < 0) return
+    const gripKey = keyOf(event.currentTarget)
+    const startX = event.clientX
+    const startY = event.clientY
+
+    /**
+     * The picture the whole gesture is answered from, taken on the first move of the hand rather than on
+     * the press. The press puts down a name being typed into a tab (see above), and the strip redraws with
+     * the field gone a moment later: a picture taken under the press had the field's width in it, and the
+     * neighbours stood aside for places twenty pixels off the ones the drop then gave them.
+     */
+    const begin = () => {
+      const shot = stripShot(drag)
+      const from = shot.units.indexOf(drag.id)
+      const grip = shot.tabs.find((tab) => tab.key === gripKey)
+      // The run of the carried unit on the row the hand took it by: a group wrapped onto two rows is
+      // carried by the part under the hand, and its other part simply travels along.
+      const carried = shot.boxes.find((box) => box.index === from && box.line === grip?.line)
+      if (from < 0 || !grip || !carried) return null
+
+      return {
+        shot,
+        laid: layoutOf(),
+        from,
+        carried,
+        /**
+         * Up and down only as far as the gesture's own rows. A strip of one row keeps the tab on it exactly
+         * as before - lifted off it, the tab would read as being carried out of the strip somewhere - and a
+         * fork goes no higher or lower than its group reaches.
+         */
+        rowTop: grip.top,
+        highest: (shot.lines[0] ?? grip.top) - grip.top,
+        lowest: (shot.lines.at(-1) ?? grip.top) - grip.top,
+      }
+    }
+
+    let gesture: ReturnType<typeof begin> | undefined
 
     /**
      * The head of a group stays the head: a fork may be dragged among the other forks and no further (see
@@ -716,69 +907,84 @@ export const Header = ({
      */
     const floor = drag.kind === 'tab' ? 1 : 0
 
-    const own = row[from]!
-    const width = own.right - own.left
-    const startX = event.clientX
     let started = false
-    let place = from
+    let place = 0
+    let row = 0
+    // The place the neighbours are standing aside for right now - they are measured anew only when it
+    // changes, not on every move of the hand.
+    let shown = 0
 
     const onMove = (move: MouseEvent) => {
+      if (gesture === undefined) {
+        gesture = begin()
+        if (gesture) {
+          place = gesture.from
+          shown = gesture.from
+          row = gesture.carried.line
+        }
+      }
+      // Nothing to carry: the tab is gone from the strip, or never was part of it.
+      if (!gesture) {
+        onUp()
+        return
+      }
+
+      const { shot, laid, from, carried, rowTop, highest, lowest } = gesture
+      const dx = move.clientX - startX
+      const dy = Math.min(Math.max(move.clientY - startY, highest), lowest)
+
       if (!started) {
         // Below the threshold this is still an ordinary click on a tab rather than a drag.
-        if (Math.abs(move.clientX - startX) < DRAG_THRESHOLD_PX) return
+        if (Math.abs(dx) < DRAG_THRESHOLD_PX && Math.abs(dy) < DRAG_THRESHOLD_PX) return
         started = true
         setDragging(drag)
       }
 
-      const shift = move.clientX - startX
-      setOffset(shift)
+      setOffset({ x: dx, y: dy })
 
       /**
        * A new place is accepted only if it holds at a slightly smaller offset too: right on the
        * boundary a hand trembles by a couple of pixels, and without this check the neighbours started
-       * trembling back and forth along with it.
+       * trembling back and forth along with it. The row has a margin of its own (see rowFor).
        */
-      const wanted = Math.max(floor, placeFor(row, from, shift))
+      row = rowFor(shot.lines, rowTop + dy, row)
+      const wanted = Math.max(floor, placeOn(shot.boxes, from, carried, row, dx))
       if (wanted !== place) {
         const backOff = wanted > place ? -SWAP_GAP_PX : SWAP_GAP_PX
-        if (Math.max(floor, placeFor(row, from, shift + backOff)) === wanted) place = wanted
+        if (Math.max(floor, placeOn(shot.boxes, from, carried, row, dx + backOff)) === wanted) place = wanted
       }
 
       /**
-       * The neighbours between the old place and the new one move aside by a tab's width - exactly
-       * enough to make room for it. They move by an offset while the row itself stays as it is: the
+       * The other tabs move to where the drop is going to put them - along the row and, on a wrapped
+       * strip, from one row to the next. They move by an offset while the row itself stays as it is: the
        * order changes once, when the tab is released.
        */
-      const next: Record<string, number> = {}
-      for (const [index, unit] of row.entries()) {
-        if (index === from) continue
-        if (index > from && index <= place) next[unit.id] = -width
-        if (index < from && index >= place) next[unit.id] = width
+      if (place !== shown) {
+        shown = place
+        const projection = place === from ? null : projectionFor(drag, laid, beforeOf(shot.units, from, place))
+        setShifts(projection?.shifts ?? {})
+        setReach(projection?.height ?? null)
       }
-      setShifts(next)
     }
 
     const onUp = () => {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
 
-      if (started) {
-        // The picture on screen before the drop - the landing starts from it. The layout did not change
-        // during the gesture, so it is enough to add to the snapshot's places the offset each group is
-        // currently drawn with.
-        const nodes = unitNodes(drag.kind)
-        const rendered = new Map<string, { x: number; y: number }>()
-        for (const unit of row) {
-          const node = nodes.get(unit.id)?.[0]
-          const live = node ? liveShift(node) : { x: 0, y: 0 }
-          rendered.set(unit.id, { x: unit.left + live.x, y: unit.top + live.y })
+      if (started && gesture) {
+        // The picture on screen before the drop - the landing starts from it: each tab's place in the
+        // layout plus the offset it is drawn with right now.
+        const rendered = new Map<string, Point & { shifted: boolean }>()
+        for (const node of stripNodes()) {
+          const key = keyOf(node)
+          if (!key) continue
+          const live = liveShift(node)
+          rendered.set(key, { x: node.offsetLeft + live.x, y: node.offsetTop + live.y, shifted: !!(live.x || live.y) })
         }
-        landing.current = { drag, places: rendered }
+        landing.current = rendered
 
-        // The destination in the original row: having travelled to the right, we stand before the unit
-        // that came after the last one to step aside.
-        const before = place > from ? (row[place + 1]?.id ?? null) : row[place]?.id ?? null
-        if (place !== from) {
+        if (place !== gesture.from) {
+          const before = beforeOf(gesture.shot.units, gesture.from, place)
           if (drag.kind === 'tab') reorder.current.onReorderTabs(drag.id, before)
           else reorder.current.onReorderGroups(drag.id, before)
         }
@@ -789,8 +995,9 @@ export const Header = ({
       }
 
       setDragging(null)
-      setOffset(0)
+      setOffset({ x: 0, y: 0 })
       setShifts({})
+      setReach(null)
     }
 
     window.addEventListener('mousemove', onMove)
@@ -800,7 +1007,7 @@ export const Header = ({
   /**
    * The landing after a drop.
    *
-   * The frame in which the order changes starts from the previous picture: every group gets a short
+   * The frame in which the order changes starts from the previous picture: every tab gets a short
    * journey from where it stood under the hand to its new place. The neighbours meanwhile stand rooted
    * (they have nowhere to travel - they are already where they belong), while the dropped tab calmly
    * travels from under the hand into the freed slot.
@@ -809,29 +1016,27 @@ export const Header = ({
    * the new places - that is, after the jerk itself.
    */
   useLayoutEffect(() => {
-    const before = landing.current
-    if (!before) return
+    const was = landing.current
+    if (!was) return
     landing.current = null
 
-    const nodes = unitNodes(before.drag.kind)
+    for (const node of stripNodes()) {
+      const from = was.get(keyOf(node) ?? '')
+      if (!from) continue
 
-    for (const unit of unitRow(before.drag)) {
-      const was = before.places.get(unit.id)
-      if (!was) continue
+      const dx = from.x - node.offsetLeft
+      const dy = from.y - node.offsetTop
+      // A tab that neither stood aside nor has anywhere to go is left alone.
+      if (!dx && !dy && !from.shifted) continue
 
-      const dx = was.x - unit.left
-      const dy = was.y - unit.top
-
-      for (const node of nodes.get(unit.id) ?? []) {
-        // The journey goes as an animation rather than a transition: for the neighbours the offset comes
-        // out zero, and without one they would play out a cancelled transition - a jump by a tab's width
-        // and a slow return. An animation stands above a transition in the cascade and holds them in
-        // place while that one plays out for nothing.
-        node.animate?.([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }], {
-          duration: LANDING_MS,
-          easing: 'ease',
-        })
-      }
+      // The journey goes as an animation rather than a transition: for the neighbours the offset comes
+      // out zero, and without one they would play out a cancelled transition - a jump by a tab's width
+      // and a slow return. An animation stands above a transition in the cascade and holds them in
+      // place while that one plays out for nothing.
+      node.animate?.([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }], {
+        duration: LANDING_MS,
+        easing: 'ease',
+      })
     }
   })
 
@@ -861,14 +1066,14 @@ export const Header = ({
    * thing.
    */
   const dragStyle = (groupId: string, tabId?: string) => {
-    // The gesture in progress decides what the row is made of: while a fork travels inside its group, the
-    // units are that group's tabs, and every other tab in the strip stands perfectly still.
-    const key = dragging?.kind === 'tab' ? tabId : groupId
-    if (!key) return {}
+    if (!dragging) return {}
 
-    if (dragging?.id === key) return { transform: `translateX(${offset}px)` }
-    const shift = shifts[key]
-    return shift ? { transform: `translateX(${shift}px)` } : {}
+    // The gesture in progress decides what travels with the hand: a whole group, or one fork inside its
+    // group. Everybody else goes where the drop will put them - usually nowhere for a fork's gesture, but a
+    // fork of another width rearranged on a wrapped strip can move a row's end onto the next row.
+    const carried = dragging.kind === 'tab' ? tabId === dragging.id : groupId === dragging.id
+    const shift = carried ? offset : shifts[tabId ?? groupId]
+    return shift ? { transform: `translate(${shift.x}px, ${shift.y}px)` } : {}
   }
 
   /**
@@ -955,7 +1160,7 @@ export const Header = ({
             onDone={(name, byKey) => finishNaming(session, name, byKey)}
           />
         ) : (
-          <span className={s.tabTitle}>{session.title}</span>
+          <TabTitle title={session.title} hint={!dragging} />
         )}
         {/* On the tab it forks, beside the cross: both are things done to this conversation. On every tab and
             always: shown on the open tab alone, it widened the tab it came to and narrowed the one it left,
@@ -980,6 +1185,9 @@ export const Header = ({
           type="button"
           className={s.tabClose}
           aria-label={`Close ${session.title}`}
+          /* The key and nothing else, as on Send: the cross says "close" by itself. Only on the open tab -
+             the key closes that one, and named on another tab's cross it would promise to close that. */
+          data-tooltip={session.id === activeSession && closeTabKey ? closeTabKey : undefined}
           onClick={(event) => {
             event.stopPropagation()
             onCloseSession(session.id)
@@ -1030,11 +1238,12 @@ export const Header = ({
         className={`${s.dot} ${DOT_CLASS[tab.state ?? 'idle']}`}
         data-tooltip={tab.hint || undefined}
       />
-      <span className={s.tabTitle}>{tab.title}</span>
+      <TabTitle title={tab.title} hint={!dragging} />
       <button
         type="button"
         className={s.tabClose}
         aria-label={tab.closeLabel}
+        data-tooltip={tab.active && closeTabKey ? closeTabKey : undefined}
         onClick={(event) => {
           event.stopPropagation()
           onClosePanelTab?.(tab.id)
@@ -1054,6 +1263,7 @@ export const Header = ({
           panel's own tabs beside them. */}
       <div
         className={s.tabs}
+        style={reach ? { minHeight: reach } : undefined}
         ref={tabs}
         role="tablist"
         aria-label={t.header.conversations}
@@ -1069,7 +1279,15 @@ export const Header = ({
         ))}
         {panels.filter((tab) => tab.at >= groups.length).map(panelTab)}
 
-        <button type="button" className={s.tabAdd} data-tooltip={t.header.newSession} onClick={onNewSession}>
+        {/* Named for the strip's drag arithmetic (see keyOf): it goes where the drop is going to put it. */}
+        <button
+          type="button"
+          className={s.tabAdd}
+          data-strip="add"
+          style={dragStyle('add')}
+          data-tooltip={newTabKey ? `${t.header.newSession} (${newTabKey})` : t.header.newSession}
+          onClick={onNewSession}
+        >
           +
         </button>
       </div>

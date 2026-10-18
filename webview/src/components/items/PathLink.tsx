@@ -1,5 +1,5 @@
 import { withFileRefs, type KnownFiles, type TextRun } from '../../feed/paths'
-import { useOpenFile } from '../../hooks/useOpenFile'
+import { useMissingFiles, useOpenFile } from '../../hooks/useOpenFile'
 import { useT } from '../../i18n'
 import s from '../feed.module.css'
 
@@ -18,6 +18,7 @@ import s from '../feed.module.css'
 export const PathLink = ({ run, children, fallback }: { run: TextRun; children?: React.ReactNode; fallback?: React.ReactNode }) => {
   const t = useT()
   const openFile = useOpenFile()
+  const missing = useMissingFiles()
   const ref = run.ref
 
   if (!ref || !openFile) return <>{fallback ?? children ?? run.text}</>
@@ -25,7 +26,8 @@ export const PathLink = ({ run, children, fallback }: { run: TextRun; children?:
   // What the click does, in the words of the thing it does it to - the hover on a path is the one place
   // that says so before it happens. The flag itself stays here: the IDE asks the disk rather than us.
   const { folder, ...request } = ref
-  const does = folder ? t.feed.copy.openFolder : t.feed.copy.openFile
+  // Pressed before and found nothing: the hover says so, and the next press asks the disk again.
+  const does = missing.has(request.path) ? t.feed.copy.missing : folder ? t.feed.copy.openFolder : t.feed.copy.openFile
 
   return (
     <button

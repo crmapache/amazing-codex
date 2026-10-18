@@ -81,6 +81,14 @@ internal class EditorContext(private val project: Project) : Disposable {
     fun now(): Snapshot? = current.get()
 
     /**
+     * What the editor shows, as a test stands it: the light test project's files live in memory, and a file the
+     * agent could not open is never named (see [snapshotOf]) - so no real editor there ever has a snapshot.
+     */
+    internal fun standIn(snapshot: Snapshot?) {
+        current.set(snapshot)
+    }
+
+    /**
      * Hear about every change for as long as [parent] lives, starting with the state right now. Called by a
      * panel as it opens: nothing is watched in a project nobody has a panel in.
      */
@@ -202,6 +210,14 @@ internal class EditorContext(private val project: Project) : Disposable {
          * message sent while it stays selected.
          */
         const val MAX_SELECTION_CHARS = 20_000
+
+        /**
+         * Whether a message carries what the editor shows: when it asked for it ([asked], the panel's flag), the
+         * setting allows it ([shared]) or the person chose it for this one message ([once], see
+         * CodexSessionHub.editorSeen), and it is no slash command ([command]).
+         */
+        fun goesWith(asked: Boolean, once: Boolean, shared: Boolean, command: Boolean): Boolean =
+            asked && (shared || once) && !command
 
         /**
          * The words the agent reads, in the block Codex's own terminal writes for the same thing - a model

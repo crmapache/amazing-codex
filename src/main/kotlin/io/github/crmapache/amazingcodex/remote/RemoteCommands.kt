@@ -35,6 +35,13 @@ internal object RemoteCommands {
         "queuePrompt",
         "unqueuePrompt",
         "reorderQueue",
+        /**
+         * "Don't carry on" under a limit's wait - narrower than everything above: it only takes back a message
+         * the panel itself was going to say into this conversation (see CodexSessionHub.cancelCarryOn). A
+         * limit running out at night is exactly what a phone sees first, and saying no to the morning's
+         * carry-on from it is the point.
+         */
+        "cancelCarryOn",
         "permissionDecision",
         "planDecision",
         "askAnswer",
@@ -143,6 +150,12 @@ internal object RemoteCommands {
          */
         "setModel",
         "setEffort",
+        /**
+         * Fast mode for the conversation on screen, on the same terms as the effort beside it: it is about what
+         * a turn costs and how soon it answers, it widens nothing the agent may touch, and it writes no setting
+         * at all - not even at the desk (see SessionLaunch.fast).
+         */
+        "setFastMode",
         /**
          * The MCP servers of the conversation on screen: which are up, which want a sign-in, which
          * failed and why - and adding and removing one.
@@ -435,6 +448,13 @@ internal object RemoteCommands {
         "tabShown",
         "setRestoreTabs",
         /**
+         * A closed tab opened again, and one of the desk panel's own tabs reported closed (see ClosedTabs).
+         * A phone cannot close a tab (`closeSession` above), so it has nothing to undo; and opening one again
+         * puts a tab on the desk's strip, with the draft that was in it, which is the desk's to decide.
+         */
+        "reopenTab",
+        "panelTabClosed",
+        /**
          * The pencil on a queued message: the whole message back into the asker's field (see
          * CodexSessionHub.takeQueued). Refused because the phone has no such button, not on principle -
          * the door is no wider than "unqueuePrompt", which is allowed. What stands in the way of the button
@@ -449,6 +469,18 @@ internal object RemoteCommands {
          * a phone's own message is ignored for the same reason (see SessionCommands).
          */
         "setShareEditor",
+        /**
+         * Whether the desk panel's text fields check spelling (see CodexPreferences.spellcheck) - a machine
+         * setting about the desk's keyboard. A phone's field is checked by the phone's own keyboard, which
+         * this switch does not reach and should not.
+         */
+        "setSpellcheck",
+        /**
+         * Putting back the files a turn changed. The phone draws the list and nothing on it to press: a revert
+         * is decided looking at the file, and the file is on the desk. The rows show there as put back all the
+         * same, because the outcome is said to every client.
+         */
+        "revertChanges",
         /**
          * The sparkle button beside the paperclip and the text it asks by.
          *
@@ -503,6 +535,8 @@ internal object RemoteCommands {
         "pick",
         "dropped",
         "openDevTools",
+        // The IDE's own settings dialog, raised over somebody's desk, about keys a phone has none of.
+        "openKeymap",
         "openExternal",
         /**
          * Opening a file in the editor at the desk. It reaches the machine's own surfaces exactly as
@@ -518,6 +552,11 @@ internal object RemoteCommands {
         // between this IDE and its own panel, and a device across the network has no such road to speak
         // about - it is handled by the window itself in any case (see CodexPanel).
         "channelLoss",
+        // The conversation on screen for the right-click menu, and `/status` asking about it: both answered by
+        // the window itself (see CodexPanel) - a menu only an IDE window has, and a card for its own feed. A phone's
+        // `/status` arrives as a message instead, and is answered at that door (see SessionCommands.statusAsked).
+        "sessionMenu",
+        "sessionInfo",
         // Writing a file onto the machine at the asking of whoever is on the line. The picture itself is
         // harmless; a message that makes the IDE write files is not, and the statistics tab it comes from
         // is the panel's alone anyway.
@@ -526,6 +565,12 @@ internal object RemoteCommands {
         // answers with names a folder on it. A phone attaches its pictures through its own screen and
         // needs no file of ours to point at.
         "savePastedFile",
+        // The picture behind a chip, read off this machine's disk by a path the request names - and a
+        // phone has no pointer to hover with, so it never shows one anyway (see ImagePreviews).
+        "previewImage",
+        // The same picture opened in the editor at the desk, after writing it to this machine's disk - the
+        // phone's editor is not this one, as with openFile.
+        "openPicture",
         /*
          * Feedback. Every one of these is refused, and for a different reason each:
          *

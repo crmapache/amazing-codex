@@ -635,17 +635,15 @@ describe('the model swapped by the CLI itself', () => {
   })
 
   /**
-   * Recorded live: Fable picked in the middle of a turn, every answer for the next hour signed by Opus,
-   * and nothing anywhere saying so - the silence about a pick of one's own covered a pick that never
-   * took. Judged only once a request that could have carried it has begun: a tool has come back, so the
-   * agent has gone to the model again (measured on CLI 2.1.263 - the next step after a tool result is
-   * signed by the new model, about 2.6s after the pick).
+   * Recorded live in the original: a model picked in the middle of a turn, every answer for the next hour
+   * signed by the old one, and nothing anywhere saying so - the silence about a pick of one's own covered a
+   * pick that never took. Judged only once a request that could have carried it has begun - with Codex, the
+   * next turn: it takes a pick with `turn/start`, so the turn the pick was made in is over first.
    */
   it('says so when the picked model never arrives', () => {
     let state = play([initEvent('gpt-5.6-sol'), signedTextEvent('gpt-5.6-sol', 'Looking.')])
     state = reducePanel(state, { kind: 'modelApplied', model: 'gpt-5.6-terra' })
-    state = play([toolUseEvent('t1', 'Read', { file_path: 'a.ts' })], state)
-    state = play([toolResultEvent('t1', 'line 1')], state)
+    state = play([resultEvent(400)], state)
     state = play([signedTextEvent('gpt-5.6-sol', 'Still here.')], state)
 
     expect(stuckPicks(state)).toEqual([
@@ -667,13 +665,33 @@ describe('the model swapped by the CLI itself', () => {
     expect(state.stuckPick).toBe('gpt-5.6-sol')
   })
 
-  // And says nothing when the pick simply takes a step to arrive: that is the ordinary way it happens.
-  it('keeps quiet when the picked model arrives after a step', () => {
+  /**
+   * Codex keeps a turn on the model it was started on, and a tool coming back goes on in it: the rest of the turn
+   * the pick was made in is signed by the model being left, and that is no verdict on the pick. Read as one - the
+   * original's rule, where Claude Code takes a pick at the next step - every answer after a tool announced that
+   * the pick had not arrived.
+   */
+  it('does not judge a pick by the rest of the turn it was made in', () => {
     let state = play([initEvent('gpt-5.6-sol'), signedTextEvent('gpt-5.6-sol', 'Looking.')])
     state = reducePanel(state, { kind: 'modelApplied', model: 'gpt-5.6-terra' })
     state = play([toolUseEvent('t1', 'Read', { file_path: 'a.ts' })], state)
     state = play([toolResultEvent('t1', 'line 1')], state)
-    state = play([signedTextEvent('gpt-5.6-terra', 'On Opus now.')], state)
+    state = play([signedTextEvent('gpt-5.6-sol', 'Still the turn it was picked in.')], state)
+
+    expect(stuckPicks(state)).toEqual([])
+    expect(state.stuckPick).toBeUndefined()
+    // The chip goes on naming the pick meanwhile.
+    expect(state.model).toBe('gpt-5.6-terra')
+  })
+
+  // And says nothing when the pick arrives with the next turn: that is the ordinary way it happens.
+  it('keeps quiet when the picked model arrives with the next turn', () => {
+    let state = play([initEvent('gpt-5.6-sol'), signedTextEvent('gpt-5.6-sol', 'Looking.')])
+    state = reducePanel(state, { kind: 'modelApplied', model: 'gpt-5.6-terra' })
+    state = play([toolUseEvent('t1', 'Read', { file_path: 'a.ts' })], state)
+    state = play([toolResultEvent('t1', 'line 1')], state)
+    state = play([signedTextEvent('gpt-5.6-sol', 'Finishing on the old one.'), resultEvent(400)], state)
+    state = play([signedTextEvent('gpt-5.6-terra', 'On the pick now.')], state)
 
     expect(stuckPicks(state)).toEqual([])
     expect(state.stuckPick).toBeUndefined()
@@ -699,7 +717,7 @@ describe('the model swapped by the CLI itself', () => {
   /**
    * Recorded from a live panel: "Opus 1M picked, but the answers keep coming on Opus 5 1M" - one and the
    * same model, named as a choice on one side and as a signature on the other. The wait was raised by a
-   * comparison that reads those two as different models (see picksAnother), and nothing could ever
+   * comparison that reads those two as different models (see expectingOwnSwap), and nothing could ever
    * answer it: what came next was that same model again.
    */
   it('keeps quiet when the model picked is the one already at work', () => {
@@ -716,11 +734,10 @@ describe('the model swapped by the CLI itself', () => {
 
   // The same on the other side of the pick: an unrecognisable choice may well BE the model answering.
   it('keeps quiet about a pick it cannot recognise when the model at work does not change', () => {
-    let state = play([initEvent('claude-opus-5'), signedTextEvent('claude-opus-5', 'Working.')])
+    let state = play([initEvent('gpt-6-astra'), signedTextEvent('gpt-6-astra', 'Working.')])
     state = reducePanel(state, { kind: 'modelApplied', model: 'default' })
-    state = play([toolUseEvent('t1', 'Read', { file_path: 'a.ts' })], state)
-    state = play([toolResultEvent('t1', 'line 1')], state)
-    state = play([signedTextEvent('claude-opus-5', 'Still here.')], state)
+    state = play([resultEvent(400)], state)
+    state = play([signedTextEvent('gpt-6-astra', 'Still here.')], state)
 
     expect(stuckPicks(state)).toEqual([])
     expect(state.stuckPick).toBeUndefined()
@@ -729,18 +746,19 @@ describe('the model swapped by the CLI itself', () => {
 
   /**
    * The shell names a tab's model to every client that joins it, not only at a birth (see the attach in
-   * ClaudeSessionHub), and it names the choice the process was launched on. Counted as a pick, that
-   * announcement put the row into the feed of a conversation nobody had touched - a re-attach after an
-   * idle nap was enough. The chip still has to be drawn by it: that is what the announcement is for.
+   * CodexSessionHub), and it names the choice the process was launched on - "default" for a tab that never
+   * picked one. Counted as a pick, that announcement put the row into the feed of a conversation nobody had
+   * touched - a re-attach after an idle nap was enough. The chip still has to be drawn by it: that is what the
+   * announcement is for.
    */
   it('does not judge the model a tab is merely told it runs on', () => {
-    let state = play([initEvent('claude-opus-5[1m]'), signedTextEvent('claude-opus-5[1m]', 'Working.')])
-    state = reducePanel(state, { kind: 'modelApplied', model: 'opus[1m]', born: true })
+    let state = play([initEvent('gpt-6-astra'), signedTextEvent('gpt-6-astra', 'Working.')])
+    state = reducePanel(state, { kind: 'modelApplied', model: 'gpt-6.1-sol', born: true })
 
-    expect(state.ownModel).toBe('opus[1m]')
+    expect(state.ownModel).toBe('gpt-6.1-sol')
 
     state = reducePanel(state, { kind: 'prompt', tokens: [], quotes: [] })
-    state = play([signedTextEvent('claude-opus-5[1m]', 'Carrying on.')], state)
+    state = play([signedTextEvent('gpt-6-astra', 'Carrying on.')], state)
 
     expect(stuckPicks(state)).toEqual([])
     expect(state.stuckPick).toBeUndefined()
@@ -750,33 +768,60 @@ describe('the model swapped by the CLI itself', () => {
   // says "you did not pick this" stays where it was.
   it('leaves an agent swap standing when the tab is told its model again', () => {
     let state = play([
-      initEvent('claude-fable-5'),
-      signedTextEvent('claude-fable-5', 'Looking.'),
-      signedTextEvent('claude-opus-4-8', 'Carrying on.'),
+      initEvent('gpt-6.1-sol'),
+      signedTextEvent('gpt-6.1-sol', 'Looking.'),
+      signedTextEvent('gpt-5.6-codex', 'Carrying on.'),
     ])
-    expect(state.switchedFrom).toBe('claude-fable-5')
+    expect(state.switchedFrom).toBe('gpt-6.1-sol')
 
-    state = reducePanel(state, { kind: 'modelApplied', model: 'fable', born: true })
+    state = reducePanel(state, { kind: 'modelApplied', model: 'gpt-6.1-sol', born: true })
     state = reducePanel(state, { kind: 'prompt', tokens: [], quotes: [] })
-    state = play([signedTextEvent('claude-opus-4-8', 'Still here.')], state)
+    state = play([signedTextEvent('gpt-5.6-codex', 'Still here.')], state)
 
-    expect(state.switchedFrom).toBe('claude-fable-5')
+    expect(state.switchedFrom).toBe('gpt-6.1-sol')
     expect(stuckPicks(state)).toEqual([])
   })
 
   /**
-   * And the wait that is never raised is a wait that cannot swallow anything. The CLI moves a
-   * conversation to another generation of the same family on its own - a guard's fallback from Opus 5 to
-   * Opus 4.8 - and that arrives as the picked family coming true, so a pick which changed nothing at all
-   * used to buy the next swap its silence.
+   * And the wait that is never raised is a wait that cannot swallow anything. Codex moves a conversation to
+   * another model on its own, and right after a pick of the model already at work that arrived as nothing
+   * to tell - a pick which changed nothing at all used to buy the next swap its silence.
    */
-  it('still announces a swap inside the family after a pick that changed nothing', () => {
-    let state = play([initEvent('claude-opus-5[1m]'), signedTextEvent('claude-opus-5[1m]', 'Working.')])
-    state = reducePanel(state, { kind: 'modelApplied', model: 'opus[1m]' })
-    state = play([signedTextEvent('claude-opus-4-8', 'Carrying on.')], state)
+  it('still announces a swap after a pick that changed nothing', () => {
+    let state = play([initEvent('gpt-6.1-sol'), signedTextEvent('gpt-6.1-sol', 'Working.')])
+    state = reducePanel(state, { kind: 'modelApplied', model: 'gpt-6.1-sol', resolved: 'gpt-6.1-sol' })
+    state = play([signedTextEvent('gpt-5.6-codex', 'Carrying on.')], state)
 
     expect(modelSwitches(state)).toEqual([
-      { id: expect.any(String), kind: 'model', from: 'claude-opus-5[1m]', to: 'claude-opus-4-8', reason: '' },
+      { id: expect.any(String), kind: 'model', from: 'gpt-6.1-sol', to: 'gpt-5.6-codex', reason: '' },
+    ])
+  })
+
+  /**
+   * Recorded live in the original: another version of the model at work picked by hand, and the feed said
+   * "switched by Claude Code, not by you". Judged by the line alone it looked like the model already at work,
+   * so nothing was waiting for it to arrive. With Codex another version is simply another model.
+   */
+  it('keeps quiet when another version of the model at work is picked', () => {
+    let state = play([initEvent('gpt-6.1-sol'), signedTextEvent('gpt-6.1-sol', 'Working.')])
+    state = reducePanel(state, { kind: 'modelApplied', model: 'gpt-6-sol' })
+    state = play([signedTextEvent('gpt-6-sol', 'On GPT-6 Sol now.')], state)
+
+    expect(state.model).toBe('gpt-6-sol')
+    expect(state.switchedFrom).toBeUndefined()
+    expect(modelSwitches(state)).toEqual([])
+  })
+
+  // And a pick of another version that never arrives is just as much news as a pick of another model.
+  it('says so when the picked version never arrives', () => {
+    let state = play([initEvent('gpt-6.1-sol'), signedTextEvent('gpt-6.1-sol', 'Looking.')])
+    state = reducePanel(state, { kind: 'modelApplied', model: 'gpt-6-sol' })
+    state = play([resultEvent(400)], state)
+    state = reducePanel(state, { kind: 'prompt', tokens: [], quotes: [] })
+    state = play([signedTextEvent('gpt-6.1-sol', 'Still here.')], state)
+
+    expect(stuckPicks(state)).toEqual([
+      { id: expect.any(String), kind: 'modelStuck', picked: 'gpt-6-sol', running: 'gpt-6.1-sol' },
     ])
   })
 
@@ -784,12 +829,11 @@ describe('the model swapped by the CLI itself', () => {
   it('forgets a stuck pick as soon as another model is picked', () => {
     let state = play([initEvent('gpt-5.6-sol'), signedTextEvent('gpt-5.6-sol', 'Looking.')])
     state = reducePanel(state, { kind: 'modelApplied', model: 'gpt-5.6-terra' })
-    state = play([toolUseEvent('t1', 'Read', { file_path: 'a.ts' })], state)
-    state = play([toolResultEvent('t1', 'line 1')], state)
+    state = play([resultEvent(400)], state)
     state = play([signedTextEvent('gpt-5.6-sol', 'Still here.')], state)
     expect(state.stuckPick).toBe('gpt-5.6-terra')
 
-    state = reducePanel(state, { kind: 'modelApplied', model: 'sonnet' })
+    state = reducePanel(state, { kind: 'modelApplied', model: 'gpt-5.6-luna' })
 
     expect(state.stuckPick).toBeUndefined()
   })
@@ -891,6 +935,48 @@ describe('the model swapped by the CLI itself', () => {
     state = reducePanel(state, { kind: 'modelApplied', model: 'gpt-5.6-terra' })
 
     expect(state.switchedFrom).toBeUndefined()
+  })
+
+  /**
+   * Codex reroutes turn by turn: a conversation it keeps flagging is moved again at every turn, and the stream is
+   * on the rerouted model already. Its row is in the feed and the accent is on - the same row again each turn
+   * would be a feed of nothing but that.
+   */
+  it('does not draw the same reroute again over a stream already on it', () => {
+    const state = play([
+      initEvent('gpt-5.6-sol'),
+      modelFallbackEvent('gpt-5.6-sol', 'gpt-5.5', reason),
+      signedTextEvent('gpt-5.5', 'Carrying on.'),
+      resultEvent(400),
+      modelFallbackEvent('gpt-5.6-sol', 'gpt-5.5', reason),
+      signedTextEvent('gpt-5.5', 'Again.'),
+    ])
+
+    expect(modelSwitches(state)).toHaveLength(1)
+    expect(state.switchedFrom).toBe('gpt-5.6-sol')
+  })
+
+  /**
+   * A reroute is about its turn, and the next turn is the thread's model again (see CodexStream.answeringModel in
+   * the plugin). That is a row - the feed's last word was the swap away - but no accent: the accent says "you did
+   * not pick this", and the model now at work is the one that was there before anything was moved.
+   */
+  it('takes the accent off once the conversation is back on the model the swap left', () => {
+    const state = play([
+      initEvent('gpt-5.6-sol'),
+      signedTextEvent('gpt-5.6-sol', 'Looking.'),
+      modelFallbackEvent('gpt-5.6-sol', 'gpt-5.5', reason),
+      signedTextEvent('gpt-5.5', 'Carrying on.'),
+      resultEvent(400),
+      signedTextEvent('gpt-5.6-sol', 'Back.'),
+    ])
+
+    expect(modelSwitches(state).map((item) => item.kind === 'model' && [item.from, item.to])).toEqual([
+      ['gpt-5.6-sol', 'gpt-5.5'],
+      ['gpt-5.5', 'gpt-5.6-sol'],
+    ])
+    expect(state.switchedFrom).toBeUndefined()
+    expect(state.model).toBe('gpt-5.6-sol')
   })
 
   it("leaves the conversation's model alone when it is a subagent that is being started", () => {
@@ -1064,6 +1150,51 @@ describe('building the feed out of the agent stream', () => {
   })
 
   /**
+   * And then the IDE carries the turn on by itself (see CodexSessionHub.carryOn): the message starts a turn
+   * like any other, and is the panel's - nobody typed it, so the card must not say YOU over it.
+   */
+  it('carries a turn cut short by an account switch on as the panel\'s', () => {
+    let state = reducePanel(initialPanelState, { kind: 'stoppedForAccount' }, 1_700_000_000_000)
+    state = reducePanel(state, { kind: 'agent', event: resultEvent(400) }, 1_700_000_000_400)
+    state = reducePanel(state, { kind: 'status', status: 'idle' }, 1_700_000_000_500)
+    state = reducePanel(
+      state,
+      { kind: 'prompt', tokens: [{ kind: 'text', value: 'Carry on from where you stopped.' }], quotes: [], auto: 'accountSwitch' },
+      1_700_000_000_600,
+    )
+
+    const carried = state.items.filter((item): item is UserItem => item.kind === 'user')
+    expect(carried.at(-1)?.auto).toBe('accountSwitch')
+    expect(state.status).toBe('running')
+    // A message of the person's carries no such mark.
+    state = reducePanel(state, { kind: 'prompt', tokens: [{ kind: 'text', value: 'and then?' }], quotes: [] }, 1_700_000_001_000)
+    expect(state.items.filter((item): item is UserItem => item.kind === 'user').at(-1)?.auto).toBeUndefined()
+  })
+
+  /**
+   * A limit refused the turn, and the IDE plans to carry it on at the reset (see CodexSessionHub.noteLimitRefusal).
+   * The plan stands while nothing happens, goes when the IDE says it no longer stands, and goes with the next turn
+   * too - whoever starts it - so the row never stands over work that is already under way.
+   */
+  it('keeps the plan to carry on after a limit until it is spent', () => {
+    let state = reducePanel(initialPanelState, { kind: 'carryOnWait', at: 1_700_000_900_000 }, 1_700_000_000_000)
+    expect(state.carryOn).toEqual({ at: 1_700_000_900_000, guess: false })
+
+    state = reducePanel(state, { kind: 'carryOnWait' }, 1_700_000_100_000)
+    expect(state.carryOn).toBeUndefined()
+
+    state = reducePanel(state, { kind: 'carryOnWait', at: 1_700_000_900_000, guess: true }, 1_700_000_200_000)
+    expect(state.carryOn).toEqual({ at: 1_700_000_900_000, guess: true })
+
+    state = reducePanel(
+      state,
+      { kind: 'prompt', tokens: [{ kind: 'text', value: 'The usage limit has reset.' }], quotes: [], auto: 'limit' },
+      1_700_000_900_000,
+    )
+    expect(state.carryOn).toBeUndefined()
+  })
+
+  /**
    * The quiet half of an account switch: the tab was saying nothing, so no turn is interrupted and none
    * of the machinery above fires - while the fleet a workflow launched an hour ago dies with the process
    * all the same. Before this its card ticked on for the rest of the day against a CLI that was gone.
@@ -1232,6 +1363,139 @@ describe('building the feed out of the agent stream', () => {
     )
 
     expect(contextOf(state, 200_000)).toEqual({ used: 200_000, limit: 1_000_000, percent: 20 })
+  })
+
+  /**
+   * The phone opened in the middle of a long turn after a compaction: the journal's end it was handed held
+   * the agent's answers and not one exact figure, so the estimate was divided by a window guessed from the
+   * model's name - two hundred thousand for Opus 5.5, whose window is a million. 287 thousand read as a red
+   * 100% beside a desk showing 29%. Every turn's result names the window the CLI gives the model.
+   */
+  it('divides the estimate by the window a turn named rather than by one guessed from the model', () => {
+    const answer = (input: number): AgentEvent => ({
+      type: 'assistant',
+      message: { model: 'claude-opus-5-5', content: [{ type: 'text', text: '…' }], usage: { input_tokens: input } },
+    })
+    const result: AgentEvent = {
+      type: 'result',
+      subtype: 'success',
+      num_turns: 1,
+      modelUsage: { 'claude-opus-5-5': { contextWindow: 1_000_000 }, 'claude-haiku-5-5': { contextWindow: 200_000 } },
+    }
+
+    let state = reducePanel(initialPanelState, { kind: 'agent', event: answer(287_000) }, 1_700_000_000_000)
+    expect(contextOf(state, 200_000).percent).toBe(100)
+
+    state = reducePanel(state, { kind: 'agent', event: result }, 1_700_000_000_100)
+    state = reducePanel(state, { kind: 'agent', event: answer(290_000) }, 1_700_000_000_200)
+
+    expect(contextOf(state, 200_000)).toEqual({ used: 290_000, limit: 1_000_000, percent: 29 })
+  })
+
+  it('finds the named window under the mark the CLI may keep on its key', () => {
+    const result: AgentEvent = {
+      type: 'result',
+      subtype: 'success',
+      modelUsage: { 'claude-opus-5[1m]': { contextWindow: 1_000_000 } },
+    }
+    let state = reducePanel(initialPanelState, { kind: 'agent', event: result, replay: true }, 1_700_000_000_000)
+    state = reducePanel(
+      state,
+      {
+        kind: 'agent',
+        event: {
+          type: 'assistant',
+          message: { model: 'claude-opus-5', content: [{ type: 'text', text: '…' }], usage: { input_tokens: 300_000 } },
+        },
+      },
+      1_700_000_000_100,
+    )
+
+    expect(contextOf(state, 200_000).limit).toBe(1_000_000)
+  })
+
+  /**
+   * The original learned a model's window from the CLI's `modelUsage` at a turn's end, and measured a pick on its
+   * way by the new model rather than by the window learned for the old one. Codex's turn has no `modelUsage`: the
+   * window comes with Codex's every count, and from the catalogue per model AND per mode. The same promise here -
+   * a pick of another model is not measured by the window of the model it replaces: the old count's window goes,
+   * what the window holds stays, and the pick is measured by its own window in the catalogue until Codex counts.
+   */
+  it('does not measure a picked model by the window of the model it replaces', () => {
+    let state = reducePanel(initialPanelState, { kind: 'modelApplied', model: 'gpt-6.1-sol', born: true }, 1_700_000_000_000)
+    state = reducePanel(state, { kind: 'context', used: 300_000, max: 475_000 }, 1_700_000_000_100)
+    expect(contextOf(state, 500_000, 475_000)).toEqual({ used: 300_000, limit: 475_000, percent: 63 })
+
+    state = reducePanel(state, { kind: 'modelApplied', model: 'gpt-6-astra' }, 1_700_000_000_200)
+    expect(contextOf(state, 500_000, 258_400)).toEqual({ used: 300_000, limit: 258_400, percent: 100 })
+
+    // Codex's own count in the new window beats the catalogue the moment it arrives.
+    state = reducePanel(state, { kind: 'context', used: 301_000, max: 258_400 }, 1_700_000_000_300)
+    expect(contextOf(state, 500_000, 258_400)).toEqual({ used: 301_000, limit: 258_400, percent: 100 })
+  })
+
+  // Never filled under Codex - its result carries no `modelUsage` - and the learned window of the original never
+  // outranks the catalogue's, which knows the window mode as well as the model.
+  it('measures by the catalogue before any window a turn could have named', () => {
+    const result: AgentEvent = {
+      type: 'result',
+      subtype: 'success',
+      modelUsage: { 'gpt-6.1-sol': { contextWindow: 475_000 } },
+    }
+    let state = play([signedTextEvent('gpt-6.1-sol', 'Working.'), result])
+    state = reducePanel(state, { kind: 'contextModeApplied', mode: 'long' }, 1_700_000_000_100)
+
+    expect(contextOf(state, 500_000, 828_400).limit).toBe(828_400)
+  })
+
+  /**
+   * A tab before its first step knows no count, and the window it is measured by is the one the CTX chip names:
+   * gpt-6.1-sol holds 475,000 in Std, not the 258,400 its name read as, and 828,400 in Long, which no name says.
+   */
+  it('sizes a fresh tab by the catalogue window of its model and mode', () => {
+    let state = reducePanel(initialPanelState, { kind: 'modelApplied', model: 'gpt-6.1-sol', born: true }, 1_700_000_000_000)
+    expect(contextOf(state, 200_000, 475_000).limit).toBe(475_000)
+
+    state = reducePanel(state, { kind: 'contextModeApplied', mode: 'long', born: true }, 1_700_000_000_100)
+    expect(contextOf(state, 200_000, 828_400).limit).toBe(828_400)
+
+    // Before the catalogue: the name says the standard window at best, and nothing at all about Long.
+    expect(contextOf(state, 200_000).limit).toBe(200_000)
+    state = reducePanel(state, { kind: 'contextModeApplied', mode: 'standard' }, 1_700_000_000_200)
+    expect(contextOf(state, 200_000).limit).toBe(258_400)
+  })
+
+  /**
+   * Reloaded in the middle of a conversation, the panel is handed the last exact figure before the journal's
+   * tail, and the window the conversation is in after it (see attach in the hub). Read as a change, that
+   * announcement threw the figure away, and the gauge measured by a guess until the next step.
+   */
+  it('keeps the exact figure through an announcement of the window', () => {
+    let state = reducePanel(initialPanelState, { kind: 'context', used: 400_000, max: 828_400 }, 1_700_000_000_000)
+    state = reducePanel(state, { kind: 'contextModeApplied', mode: 'long', born: true }, 1_700_000_000_100)
+
+    expect(state.context).toEqual({ used: 400_000, max: 828_400 })
+    expect(contextOf(state, 200_000, 828_400)).toEqual({ used: 400_000, limit: 828_400, percent: 48 })
+  })
+
+  /**
+   * Std switched to Long: Codex's last count is in the window that was left, and its maximum must not stand for
+   * the new one - but what the window holds is the same conversation. It stays, measured by the new window until
+   * Codex counts in it.
+   */
+  it('keeps what the window holds and drops its size when the window is switched', () => {
+    let state = reducePanel(initialPanelState, { kind: 'contextModeApplied', mode: 'standard', born: true }, 1_700_000_000_000)
+    state = reducePanel(state, { kind: 'context', used: 200_000, max: 258_400 }, 1_700_000_000_100)
+    state = reducePanel(state, { kind: 'contextModeRequested', mode: 'long' }, 1_700_000_000_200)
+    state = reducePanel(state, { kind: 'contextModeApplied', mode: 'long' }, 1_700_000_000_300)
+
+    expect(state.context).toBeUndefined()
+    expect(contextOf(state, 200_000, 828_400)).toEqual({ used: 200_000, limit: 828_400, percent: 24 })
+
+    // The same window said again is no switch.
+    state = reducePanel(state, { kind: 'context', used: 210_000, max: 828_400 }, 1_700_000_000_400)
+    state = reducePanel(state, { kind: 'contextModeApplied', mode: 'long' }, 1_700_000_000_500)
+    expect(state.context).toEqual({ used: 210_000, max: 828_400 })
   })
 
   it('does not zero the gauge on a service answer that never reached the model', () => {
@@ -3829,6 +4093,46 @@ describe('the person lines in a replay', () => {
     expect(users(task)).toHaveLength(0)
   })
 
+  /**
+   * The panel's own "carry on" (see CarryOnWords.kt). It is in the conversation - the agent read it and went on
+   * from it - so it stays a line of the feed, but read back off the disk it is drawn the way it was drawn live:
+   * the panel's, with its reason, and without the tag that says so.
+   */
+  it('reads the panel\'s own carry-on as the panel\'s', () => {
+    const words = 'Лимит, на котором ты остановился, сбросился. Продолжай с того места, где остановился.'
+    const state = replayUser(`<panel-carry-on reason="limit">${words}</panel-carry-on>`)
+
+    expect(users(state)).toHaveLength(1)
+    expect(users(state)[0]?.auto).toBe('limit')
+    expect(users(state)[0]?.tokens).toEqual([{ kind: 'text', value: words }])
+    expect(users(state)[0]?.quotes).toEqual([])
+  })
+
+  it('keeps each reason the carry-on was written with', () => {
+    expect(users(replayUser('<panel-carry-on reason="accountSwitch">go on</panel-carry-on>'))[0]?.auto).toBe('accountSwitch')
+    expect(users(replayUser('<panel-carry-on reason="restart">go on</panel-carry-on>'))[0]?.auto).toBe('restart')
+  })
+
+  // Written by a newer plugin and read by this one: still the panel's, and no reason it cannot vouch for.
+  it('says PANEL over a reason it does not know, and nothing more', () => {
+    expect(users(replayUser('<panel-carry-on reason="somethingNew">go on</panel-carry-on>'))[0]?.auto).toBe('unknown')
+  })
+
+  // A phone's frame can cut a long line, and the closing tag goes first (see SERVICE_BLOCK).
+  it('still knows the carry-on when its end was cut off', () => {
+    const state = replayUser('<panel-carry-on reason="accountSwitch">The interruption above was an automatic switch')
+
+    expect(users(state)[0]?.auto).toBe('accountSwitch')
+    expect(users(state)[0]?.tokens).toEqual([{ kind: 'text', value: 'The interruption above was an automatic switch' }])
+  })
+
+  // And only the tag makes it the panel's: the person writing about an account switch is still the person.
+  it('leaves a person\'s words about an account switch to the person', () => {
+    const state = replayUser('Switch the account and carry on')
+
+    expect(users(state)[0]?.auto).toBeUndefined()
+  })
+
   it('still parses the call results', () => {
     let state = reducePanel(
       initialPanelState,
@@ -4289,5 +4593,29 @@ describe('a fork\'s seam', () => {
       .filter((item) => item.kind === 'text' || (item.kind === 'checkpoint' && item.chip === 'FORK'))
       .map((item) => (item.kind === 'checkpoint' ? 'SEAM' : (item as TextItem).source))
     expect(order).toEqual(['inherited answer', 'SEAM', 'the fork\'s own answer'])
+  })
+})
+
+describe('the answer to /status', () => {
+  const rows = (state: PanelState) => state.items.filter((item) => item.kind === 'session')
+
+  it('stands in the feed with the id the IDE gave', () => {
+    const state = reducePanel(initialPanelState, { kind: 'sessionInfo', conversationId: 'abc-123' })
+
+    expect(rows(state)).toEqual([expect.objectContaining({ kind: 'session', conversationId: 'abc-123' })])
+  })
+
+  // An IDE that could not name it (an older one, a tab between processes) leaves the panel's own note of it.
+  it('falls back to the conversation the panel knows', () => {
+    const known: PanelState = { ...initialPanelState, sessionId: 'known-id' }
+    const state = reducePanel(known, { kind: 'sessionInfo' })
+
+    expect(rows(state)).toEqual([expect.objectContaining({ kind: 'session', conversationId: 'known-id' })])
+  })
+
+  it('says there is no id yet for a tab nobody has written in', () => {
+    const state = reducePanel(initialPanelState, { kind: 'sessionInfo' })
+
+    expect(rows(state)[0]).not.toHaveProperty('conversationId')
   })
 })

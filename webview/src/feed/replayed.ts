@@ -1,3 +1,4 @@
+import { kindOfPath } from './reference'
 import type { UserToken } from './types'
 
 /**
@@ -144,7 +145,9 @@ const attachmentTokens = (text: string): UserToken[] => {
     if (start > at) tokens.push({ kind: 'text', value: text.slice(at, start) })
     tokens.push({
       kind: 'chip',
-      chip: range ? { kind: 'ref', value: path, range: range[1] } : { kind: 'file', value: path },
+      // A picture by its extension, as the field named it when it was attached (see kindOfPath): the colour
+      // and the preview under the pointer come back with the conversation.
+      chip: range ? { kind: 'ref', value: path, range: range[1] } : { kind: kindOfPath(path), value: path },
     })
     at = start + 1 + path.length + (range ? range[0].length : 0)
   }

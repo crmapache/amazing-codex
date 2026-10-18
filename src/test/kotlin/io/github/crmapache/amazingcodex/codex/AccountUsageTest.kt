@@ -229,6 +229,281 @@ class AccountUsageTest {
         assertEquals(now + 15 * 60 * 1000L, usage.standing("work", now).refusedUntil)
     }
 
+    // --- A one-off reset of the limit (the gift reset on the account page) ------------------------------
+
+    /** One limit as Codex reports it: its share and when it resets, in milliseconds here and seconds there. */
+    private data class Limit(val percent: Int, val resets: Long)
+
+    private fun windowJson(limit: Limit, minutes: Int) =
+        """{"usedPercent":${limit.percent},"windowDurationMins":$minutes,"resetsAt":${limit.resets / 1000}}"""
+
+    /** A Codex limits snapshot: the plan's windows, a workspace's spending cap, and Codex's word on that cap. */
+    private fun limitsJson(session: Limit?, week: Limit?, cap: Limit?, reached: Boolean?): String = listOfNotNull(
+        session?.let { "\"primary\":" + windowJson(it, 300) },
+        week?.let { "\"secondary\":" + windowJson(it, 10080) },
+        cap?.let {
+            """"individualLimit":{"limit":"100","used":"${it.percent}","remainingPercent":${100 - it.percent},"resetsAt":${it.resets / 1000}}"""
+        },
+        reached?.let { "\"spendControlReached\":$it" },
+    ).joinToString(",", "{", "}")
+
+    private fun json(text: String) = Json.parseToJsonElement(text).jsonObject
+
+    /** A whole answer to `account/rateLimits/read`, through CodexShapes.usageAnswer as every route takes it. */
+    private fun read(
+        session: Limit? = null,
+        week: Limit? = null,
+        cap: Limit? = null,
+        reached: Boolean? = null,
+        ordinary: Boolean? = null,
+    ): CodexUsage.Snapshot {
+        val permission = ordinary?.let { ",\"ordinaryUsageAllowed\":$it" }.orEmpty()
+        return CodexUsage.parse(CodexShapes.usageAnswer(json("""{"rateLimits":${limitsJson(session, week, cap, reached)}$permission}""")))
+    }
+
+    /** A rolling `account/rateLimits/updated`, as a conversation passes it on (CodexShapes.usage alone). */
+    private fun rolling(session: Limit? = null, week: Limit? = null, cap: Limit? = null, reached: Boolean? = null) =
+        CodexUsage.parse(CodexShapes.usage(json(limitsJson(session, week, cap, reached))))
+
+    private fun weeklyStop(resets: Long) =
+        CodexRateLimit.Verdict(extraUsage = false, stopped = true, window = "seven_day", resetsAt = resets)
+
+    private fun hoursStop(resets: Long) =
+        CodexRateLimit.Verdict(extraUsage = false, stopped = true, window = "five_hour", resetsAt = resets)
+
+    /** A reset as Codex says it - in whole seconds. */
+    private fun seconds(ms: Long) = ms / 1000 * 1000
+
+    private val day = 24 * 60 * 60 * 1000L
+
+    /**
+     * The week ran out, a tab was refused, and the person reset the limit from the account page. The window's
+     * reset time does not move, so without the backend's word the account read as refused for the days left
+     * until it: a scenario run waited them out rather than go on it.
+     */
+    @Test
+    fun `a whole answer putting a refused window back under a hundred lifts the refusal`() {
+        val now = System.currentTimeMillis()
+        val reset = now + 2 * day
+        usage.noteRateLimit("work", weeklyStop(reset), now)
+        usage.fold("work", read(week = Limit(100, reset)), now)
+
+        val after = now + CodexUsage.SERVER_ANSWER_MAX_AGE_MS + 1
+        usage.fold("work", read(week = Limit(0, reset)), after)
+
+        assertNull(usage.standing("work", after).refusedUntil)
+        assertEquals(0, usage.standing("work", after).fullest)
+    }
+
+    // Inside the time a read can be in flight its answer may have been fetched before the refusal itself.
+    @Test
+    fun `a whole answer that may predate the refusal lifts nothing`() {
+        val now = System.currentTimeMillis()
+        val reset = now + 2 * day
+        usage.noteRateLimit("work", weeklyStop(reset), now)
+
+        usage.fold("work", read(week = Limit(97, reset)), now + 20_000)
+
+        assertEquals(reset, usage.standing("work", now + 20_000).refusedUntil)
+    }
+
+    // A rolling update is a figure the process last heard: the refusal may well be newer than it.
+    @Test
+    fun `a rolling update lifts nothing`() {
+        val now = System.currentTimeMillis()
+        val reset = now + 2 * day
+        usage.noteRateLimit("work", weeklyStop(reset), now)
+
+        val after = now + 10 * 60 * 1000L
+        usage.fold("work", rolling(week = Limit(0, reset)), after)
+
+        assertEquals(reset, usage.standing("work", after).refusedUntil)
+    }
+
+    // Room in the week says nothing about the five hours: each refusal is lifted by its own window.
+    @Test
+    fun `room in one window does not lift the other window's refusal`() {
+        val now = System.currentTimeMillis()
+        val weekly = now + 2 * day
+        val hours = now + 2 * 60 * 60 * 1000L
+        usage.noteRateLimit("work", weeklyStop(weekly), now)
+        usage.noteRateLimit("work", hoursStop(hours), now)
+
+        val after = now + 10 * 60 * 1000L
+        usage.fold("work", read(week = Limit(5, weekly)), after)
+
+        assertEquals(hours, usage.standing("work", after).refusedUntil)
+    }
+
+    // --- The backend's word on the plan's usage (`ordinaryUsageAllowed`) --------------------------------
+
+    /**
+     * "Clients must not infer recovery from percentages or reset times": the permission is the one signal Codex
+     * documents. It takes back every refusal heard before the answer, whichever window it was about, and the shares
+     * in whole percent beside it refuse nothing either.
+     */
+    @Test
+    fun `the backend allowing the plan's usage takes every earlier refusal back`() {
+        val now = System.currentTimeMillis()
+        val weekly = now + 2 * day
+        val hours = now + 2 * 60 * 60 * 1000L
+        usage.noteRateLimit("work", weeklyStop(weekly), now)
+        usage.noteRateLimit("work", hoursStop(hours), now)
+
+        val after = now + CodexUsage.SERVER_ANSWER_MAX_AGE_MS + 1
+        usage.fold("work", read(session = Limit(100, hours), week = Limit(100, weekly), ordinary = true), after)
+
+        assertNull(usage.standing("work", after).refusedUntil)
+        assertEquals(true, published.last()["ordinaryUsage"]?.jsonPrimitive?.booleanOrNull)
+    }
+
+    // The answer may have been fetched before the refusal: the permission it carries is about that moment.
+    @Test
+    fun `a permission that may predate the refusal takes nothing back`() {
+        val now = System.currentTimeMillis()
+        val reset = now + 2 * day
+        usage.noteRateLimit("work", weeklyStop(reset), now)
+
+        usage.fold("work", read(week = Limit(23, reset), ordinary = true), now + 20_000)
+
+        assertEquals(reset, usage.standing("work", now + 20_000).refusedUntil)
+    }
+
+    // A "no" from the backend is not overruled by a share in whole percent: the refusal holds to the reset it named.
+    @Test
+    fun `the backend refusing the plan's usage holds a refusal whose window reads as open`() {
+        val now = System.currentTimeMillis()
+        val hours = now + 2 * 60 * 60 * 1000L
+        usage.noteRateLimit("work", hoursStop(hours), now)
+
+        val after = now + 10 * 60 * 1000L
+        usage.fold("work", read(session = Limit(20, hours), ordinary = false), after)
+
+        assertEquals(hours, usage.standing("work", after).refusedUntil)
+        assertNull(usage.standing("work", hours + 1).refusedUntil)
+        assertEquals(false, published.last()["ordinaryUsage"]?.jsonPrimitive?.booleanOrNull)
+    }
+
+    /**
+     * The permission is about the moment of its answer. A rolling update that has put a window at the limit since
+     * takes the "yes" back - and says so to the panels, which merge field by field and would otherwise keep it.
+     */
+    @Test
+    fun `a window reaching the limit after the permission takes it back`() {
+        val now = System.currentTimeMillis()
+        val hours = now + 2 * 60 * 60 * 1000L
+        usage.fold("work", read(session = Limit(96, hours), ordinary = true), now)
+        assertNull(usage.standing("work", now).refusedUntil)
+
+        usage.fold("work", rolling(session = Limit(100, hours)), now + 60_000)
+
+        assertEquals(seconds(hours), usage.standing("work", now + 60_000).refusedUntil)
+        val picture = published.last()
+        assertTrue(picture.containsKey("ordinaryUsage"))
+        assertNull(picture["ordinaryUsage"]?.jsonPrimitive?.booleanOrNull)
+    }
+
+    // --- A business seat: no window of the plan, only the workspace's spending cap -------------------------
+
+    /**
+     * The seat's only limit, spent: it refuses every model until its budget starts over. Before, the IDE read only the
+     * five-hour and the weekly windows, and a run moved onto such a seat was refused and came back every quarter hour.
+     */
+    @Test
+    fun `a spent spending cap refuses a seat with no window until its budget starts over`() {
+        val now = System.currentTimeMillis()
+        val month = now + 14 * day
+        usage.fold("seat", read(cap = Limit(100, month)), now)
+
+        assertEquals(seconds(month), usage.standing("seat", now).refusedUntil)
+        assertEquals(100, usage.standing("seat", now).fullest)
+        assertNull(usage.standing("seat", month + 1000).refusedUntil)
+    }
+
+    // Measured by its cap alone it is measured all the same: at 12% it carries a night of work.
+    @Test
+    fun `a seat with room in its cap is measured by it`() {
+        val now = System.currentTimeMillis()
+        usage.fold("seat", read(cap = Limit(12, now + 14 * day)), now)
+
+        assertNull(usage.standing("seat", now).refusedUntil)
+        assertEquals(12, usage.standing("seat", now).fullest)
+    }
+
+    // The share is `100 - remainingPercent` in whole percent; `spendControlReached` is taken over it both ways.
+    @Test
+    fun `Codex's word on the cap is taken over its share`() {
+        val now = System.currentTimeMillis()
+        val month = now + 14 * day
+        usage.fold("a", read(cap = Limit(99, month), reached = true), now)
+        usage.fold("b", read(cap = Limit(100, month), reached = false), now)
+
+        assertEquals(seconds(month), usage.standing("a", now).refusedUntil)
+        assertNull(usage.standing("b", now).refusedUntil)
+        assertEquals(true, published.first()["extra"]?.jsonObject?.get("reached")?.jsonPrimitive?.booleanOrNull)
+    }
+
+    /**
+     * "None is unavailable, not a sparse-update recovery": a rolling update sends the cap's figures without the
+     * flag, and must not open a reached cap. A share that went down since - the owner raised the cap - does.
+     */
+    @Test
+    fun `a rolling update silent about the cap keeps its word while it can still be true`() {
+        val now = System.currentTimeMillis()
+        val month = now + 14 * day
+        usage.fold("seat", read(cap = Limit(99, month), reached = true), now)
+
+        usage.fold("seat", rolling(cap = Limit(99, month)), now + 60_000)
+        assertEquals(seconds(month), usage.standing("seat", now + 60_000).refusedUntil)
+
+        usage.fold("seat", rolling(cap = Limit(40, month)), now + 120_000)
+        assertNull(usage.standing("seat", now + 120_000).refusedUntil)
+    }
+
+    // Beside the plan's windows a cap only bounds the spending past them: it refuses nothing they still allow.
+    @Test
+    fun `a cap beside the plan's windows refuses nothing they allow`() {
+        val now = System.currentTimeMillis()
+        usage.fold("team", read(session = Limit(30, now + 3_600_000), week = Limit(40, now + 3 * day), cap = Limit(100, now + 14 * day)), now)
+
+        assertNull(usage.standing("team", now).refusedUntil)
+        assertEquals(40, usage.standing("team", now).fullest)
+    }
+
+    /**
+     * The cap stopping a turn is filed against the seat until the cap starts over - the limit event names the cap
+     * as its window (see CodexShapes.resetOf) - and lifted when a later whole answer shows room in it again.
+     */
+    @Test
+    fun `a refusal by the spending cap is filed until its budget starts over, and lifted when the cap has room`() {
+        val now = System.currentTimeMillis()
+        val month = seconds(now + 14 * day)
+        usage.noteRateLimit(
+            "seat",
+            CodexRateLimit.Verdict(extraUsage = false, stopped = true, window = "workspace_member_usage_limit_reached", resetsAt = month),
+            now,
+        )
+        assertEquals(month, usage.standing("seat", now).refusedUntil)
+
+        val after = now + CodexUsage.SERVER_ANSWER_MAX_AGE_MS + 1
+        usage.fold("seat", read(cap = Limit(40, month)), after)
+
+        assertNull(usage.standing("seat", after).refusedUntil)
+    }
+
+    // Out of credits is over when somebody adds credits, on no clock: nothing to file it until.
+    @Test
+    fun `a workspace out of credits files no refusal of its own`() {
+        val now = System.currentTimeMillis()
+        usage.noteRateLimit(
+            "seat",
+            CodexRateLimit.Verdict(extraUsage = false, stopped = true, window = "workspace_member_credits_depleted", resetsAt = null),
+            now,
+        )
+
+        assertNull(usage.standing("seat", now).refusedUntil)
+    }
+
     /** About somebody else's sign-in once it is forgotten - the refusal included. */
     @Test
     fun `a forgotten account is refused no longer`() {

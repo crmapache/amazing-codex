@@ -155,6 +155,65 @@ class CodexUsageTest {
         assertEquals(listOf("Fable 5"), snapshot.models?.map { it.label })
     }
 
+    private fun json(text: String) = Json.parseToJsonElement(text).jsonObject
+
+    /**
+     * Codex marks neither of its two shapes: a rolling `account/rateLimits/updated` carries the same snapshot as the
+     * whole answer to `account/rateLimits/read`. The translation marks the whole answer (CodexShapes.usageAnswer),
+     * and only it may take a share down within a window - a rolling update is a figure the process last heard.
+     */
+    @Test
+    fun `a whole answer to the read is told from a rolling update`() {
+        val limits = """{"primary":{"usedPercent":23,"windowDurationMins":10080,"resetsAt":1792368000}}"""
+
+        val whole = parse(CodexShapes.usageAnswer(json("""{"rateLimits":$limits,"ordinaryUsageAllowed":true}""")).toString())
+        val rolling = parse(CodexShapes.usage(json(limits)).toString())
+
+        assertTrue(whole.fromServer)
+        assertEquals(true, whole.ordinaryUsage)
+        assertFalse(rolling.fromServer)
+        assertNull(rolling.ordinaryUsage)
+        assertEquals(23, rolling.week?.percent)
+    }
+
+    // "Null means unavailable": a permission the backend did not give is not a "no".
+    @Test
+    fun `only a permission the backend gave is read`() {
+        val limits = """{"primary":{"usedPercent":100,"windowDurationMins":300,"resetsAt":1792368000}}"""
+
+        val refused = parse(CodexShapes.usageAnswer(json("""{"rateLimits":$limits,"ordinaryUsageAllowed":false}""")).toString())
+        val unsaid = parse(CodexShapes.usageAnswer(json("""{"rateLimits":$limits,"ordinaryUsageAllowed":null}""")).toString())
+
+        assertEquals(false, refused.ordinaryUsage)
+        assertTrue(unsaid.fromServer)
+        assertNull(unsaid.ordinaryUsage)
+    }
+
+    // The plugin this one grew out of told the two apart by a `limits` list its CLI passed through; Codex has none.
+    @Test
+    fun `a limits list proves nothing about the answer`() {
+        assertFalse(parse("""{"rate_limits":{"seven_day":{"utilization":23},"limits":[]}}""").fromServer)
+        assertFalse(parse("""{"rate_limits":null}""").fromServer)
+    }
+
+    /** Codex's own word on a business seat's cap, beside its share - `spendControlReached`. */
+    @Test
+    fun `the spending cap carries Codex's word on it`() {
+        val cap = """"individualLimit":{"limit":"100","used":"99.6","remainingPercent":0,"resetsAt":1790812800}"""
+
+        val reached = parse(CodexShapes.usage(json("""{$cap,"spendControlReached":true}""")).toString()).extra
+        val open = parse(CodexShapes.usage(json("""{$cap,"spendControlReached":false}""")).toString()).extra
+        val unsaid = parse(CodexShapes.usage(json("""{$cap,"spendControlReached":null}""")).toString()).extra
+
+        assertEquals(true, reached?.reached)
+        assertTrue(reached!!.full)
+        // Taken over the share both ways: the share is in whole percent.
+        assertEquals(100, open?.percent)
+        assertFalse(open!!.full)
+        assertNull(unsaid?.reached)
+        assertTrue(unsaid!!.full)
+    }
+
     @Test
     fun `with no per-model breakdown we do not invent a window size`() {
         assertNull(parse("""{"session":{"model_usage":{}}}""").contextWindow)
@@ -172,6 +231,41 @@ class CodexUsageTrackerTest {
     private fun snapshot(session: CodexUsage.Window? = null, week: CodexUsage.Window? = null) =
         CodexUsage.Snapshot(session = session, week = week, contextWindow = null)
 
+    /** A window as Codex reports it: its share, its length, and its reset in seconds. */
+    private fun codexWindow(window: CodexUsage.Window, minutes: Int) =
+        """{"usedPercent":${window.percent},"windowDurationMins":$minutes,"resetsAt":${Instant.parse(window.resets).epochSecond}}"""
+
+    private fun codexLimits(session: CodexUsage.Window?, week: CodexUsage.Window?) = listOfNotNull(
+        session?.let { "\"primary\":" + codexWindow(it, 300) },
+        week?.let { "\"secondary\":" + codexWindow(it, 10080) },
+    ).joinToString(",", "{", "}")
+
+    private fun json(text: String) = Json.parseToJsonElement(text).jsonObject
+
+    /**
+     * A whole answer to `account/rateLimits/read`, through the translation both routes use for it - a live
+     * conversation and a one-off process alike (CodexShapes.usageAnswer).
+     */
+    private fun read(session: CodexUsage.Window? = null, week: CodexUsage.Window? = null, ordinary: Boolean? = null) =
+        CodexUsage.parse(
+            CodexShapes.usageAnswer(
+                json("""{"rateLimits":${codexLimits(session, week)}${ordinary?.let { ",\"ordinaryUsageAllowed\":$it" }.orEmpty()}}"""),
+            ),
+        )
+
+    /** A rolling `account/rateLimits/updated`, as a conversation passes it on (CodexShapes.usage alone). */
+    private fun rolling(session: CodexUsage.Window? = null, week: CodexUsage.Window? = null) =
+        CodexUsage.parse(CodexShapes.usage(json(codexLimits(session, week))))
+
+    /** Past the time a read can be in flight: a whole answer this much later is about a later moment. */
+    private val later: Instant = now.plusMillis(CodexUsage.SERVER_ANSWER_MAX_AGE_MS + 1)
+
+    // The wait rests on our own request timeout: an answer that arrived was fetched inside it.
+    @Test
+    fun `the wait for a lower share covers the time a read can be in flight`() {
+        assertTrue(CodexUsage.SERVER_ANSWER_MAX_AGE_MS > AppServer.DEFAULT_TIMEOUT_SECONDS * 1000)
+    }
+
     // The very bug this exists for: for months the panel showed the share of a window that was already
     // gone. A process that worked before the reset goes on answering with its frozen figure - 99% on an
     // almost empty new window.
@@ -185,17 +279,106 @@ class CodexUsageTrackerTest {
         assertEquals("", merged.session?.resets)
     }
 
-    // Within a window usage only grows: a disagreement between the routes is one of them lagging, not a
-    // roll-back. Otherwise the ring would flicker back and forth every half-minute.
+    // A rolling update is a figure the process last heard. A smaller share from it is that age, not a roll-back,
+    // and the ring must not follow it.
     @Test
-    fun `within one window the share does not go down`() {
+    fun `a rolling update does not take a share down within its window`() {
         val tracker = CodexUsage.Tracker()
         val future = "2026-08-20T14:00:00Z"
 
-        tracker.merge(snapshot(session = window(20, future)), now)
-        val merged = tracker.merge(snapshot(session = window(12, future)), now)
+        tracker.merge(read(session = window(20, future)), now)
+        val merged = tracker.merge(rolling(session = window(12, future)), later)
 
         assertEquals(20, merged.session?.percent)
+    }
+
+    /**
+     * The bug of 16 October, on the Claude side. A one-off reset of the limit (the gift reset on the account page)
+     * empties the week without moving its reset time, so every answer after it is "the same window, a smaller
+     * share" - and the ring held 99% for a day while the server said 23%.
+     */
+    @Test
+    fun `a whole answer taking a share down within its window is believed`() {
+        val tracker = CodexUsage.Tracker()
+
+        tracker.merge(read(week = window(99, "2026-10-19T00:00:00Z")), now)
+        val merged = tracker.merge(read(week = window(23, "2026-10-18T23:59:59Z")), later)
+
+        assertEquals(23, merged.week?.percent)
+    }
+
+    /**
+     * Two reads in flight at once - a round and a refetch for another bucket - can arrive in the wrong order. Taken
+     * as it comes, the older one would drop the ring a percent at the end of a turn and put it back at the next round.
+     */
+    @Test
+    fun `a smaller share inside the time a read is in flight waits`() {
+        val tracker = CodexUsage.Tracker()
+        val future = "2026-08-20T14:00:00Z"
+
+        tracker.merge(read(session = window(25, future)), now)
+        val close = tracker.merge(read(session = window(24, future)), now.plusSeconds(20))
+        assertEquals(25, close.session?.percent)
+
+        // Still smaller once that time is behind it: that is the backend's word about now.
+        val apart = tracker.merge(read(session = window(24, future)), later)
+        assertEquals(24, apart.session?.percent)
+    }
+
+    /**
+     * A process that worked before the reset repeats the share from before it in a rolling update - and it may lift
+     * the ring for a moment, as any larger share does. It must not hold it there: the next whole answer, once it is
+     * surely the newer, takes it down again.
+     */
+    @Test
+    fun `a stale rolling share does not stand in the way of a whole answer`() {
+        val tracker = CodexUsage.Tracker()
+        val week = "2026-10-19T00:00:00Z"
+
+        tracker.merge(read(week = window(23, week)), now)
+        assertEquals(99, tracker.merge(rolling(week = window(99, week)), now.plusSeconds(20)).week?.percent)
+
+        assertEquals(23, tracker.merge(read(week = window(23, week)), later).week?.percent)
+    }
+
+    // A share only rolling updates have told is vouched for by nobody, and a whole answer replaces it at once.
+    @Test
+    fun `a share nothing but rolling updates told gives way to a whole answer at once`() {
+        val tracker = CodexUsage.Tracker()
+        val week = "2026-10-19T00:00:00Z"
+
+        tracker.merge(rolling(week = window(99, week)), now)
+        val merged = tracker.merge(read(week = window(23, week)), now.plusSeconds(5))
+
+        assertEquals(23, merged.week?.percent)
+    }
+
+    /**
+     * `ordinaryUsageAllowed` - the backend saying the plan's usage is allowed again - is recovery in so many words. Over a
+     * window held at the limit it is taken at once: waiting out the read's flight there meant a ring at 100% over an
+     * account the server had just reopened.
+     */
+    @Test
+    fun `the backend reopening the plan takes a window at the limit down at once`() {
+        val tracker = CodexUsage.Tracker()
+        val week = "2026-10-19T00:00:00Z"
+
+        tracker.merge(read(week = window(100, week)), now)
+        val merged = tracker.merge(read(week = window(23, week), ordinary = true), now.plusSeconds(5))
+
+        assertEquals(23, merged.week?.percent)
+    }
+
+    // Below the limit the permission says nothing about which answer is the later - it is there on every turn.
+    @Test
+    fun `the permission does not hurry a share below the limit`() {
+        val tracker = CodexUsage.Tracker()
+        val future = "2026-08-20T14:00:00Z"
+
+        tracker.merge(read(session = window(25, future), ordinary = true), now)
+        val merged = tracker.merge(read(session = window(24, future), ordinary = true), now.plusSeconds(10))
+
+        assertEquals(25, merged.session?.percent)
     }
 
     // One and the same window arrives in different formats: a live conversation rounds to seconds, the
@@ -331,16 +514,30 @@ class CodexUsageTrackerTest {
 
     private fun fable(percent: Int, resets: String) = listOf(CodexUsage.ModelWindow("Fable", window(percent, resets)))
 
-    // The model's week is a week like any other: the routes disagree about it the same way.
+    /** A whole answer with another bucket beside the plan's - a ring of its own (see CodexShapes.usage). */
+    private fun readBucket(percent: Int, resets: String) = CodexUsage.parse(
+        CodexShapes.usageAnswer(
+            json(
+                """{"rateLimits":{"limitId":"codex"},"rateLimitsByLimitId":{"premium":{"limitId":"premium",
+                   "secondary":{"usedPercent":$percent,"windowDurationMins":10080,"resetsAt":${Instant.parse(resets).epochSecond}}}}}""",
+            ),
+        ),
+    )
+
+    // Another bucket's week is a week like any other: two reads disagree about it the same way, and the backend
+    // resets it the same way. A rolling update never names it (it is about one bucket), so it keeps what is known.
     @Test
-    fun `a model's window does not go down within itself`() {
+    fun `another bucket's window goes down within itself only on a later whole answer`() {
         val tracker = CodexUsage.Tracker()
         val future = "2026-08-24T00:00:00Z"
 
-        tracker.merge(snapshot().copy(models = fable(58, future)), now)
-        val merged = tracker.merge(snapshot().copy(models = fable(41, future)), now)
+        tracker.merge(readBucket(58, future), now)
+        assertEquals(58, tracker.merge(readBucket(41, future), now.plusSeconds(20)).models?.single()?.window?.percent)
+        assertEquals(58, tracker.merge(rolling(session = window(3, "2026-08-20T16:00:00Z")), later).models?.single()?.window?.percent)
 
-        assertEquals(58, merged.models?.single()?.window?.percent)
+        val apart = tracker.merge(readBucket(3, future), later)
+        assertEquals("Premium", apart.models?.single()?.label)
+        assertEquals(3, apart.models?.single()?.window?.percent)
     }
 
     // A live conversation hands over the last response's headers and says nothing about per-model

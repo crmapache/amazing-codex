@@ -86,7 +86,7 @@ internal object LimitRelief {
         if (best != null) return Way.Go(best.id)
 
         val firstEnd = usable.mapNotNull(::refusedUntil).filter { it > now }.minOrNull()
-        return Way.Wait(maxOf(firstEnd ?: (now + UNKNOWN_RESET_MS), now + MIN_WAIT_MS))
+        return Way.Wait(retryAt(firstEnd, now))
     }
 
     /**
@@ -115,4 +115,21 @@ internal object LimitRelief {
 
     /** The shortest wait, so that a reset a moment overdue is not asked about in a loop. */
     const val MIN_WAIT_MS = 60L * 1000
+
+    /**
+     * How long after a limit's reset to ask again. The reset is the server's clock, not ours, and a request a few
+     * seconds early is refused and puts the work back to waiting for nothing.
+     *
+     * One figure for everything that waits a limit out - a scenario run resting on one (see ScenarioEngine.restOnLimit)
+     * and a tab that carries itself on after one (see CarryOns.limitWait). Two copies would drift, and the two would
+     * knock at different moments: one refused for being early, the other not.
+     */
+    const val RESET_SLACK_MS = 30_000L
+
+    /**
+     * When to look again at a refusal that ends at [until] - or, when nothing said when it ends, after
+     * [UNKNOWN_RESET_MS]; never sooner than [MIN_WAIT_MS]. The moment of the reset itself: the slack above goes on
+     * top of it where the waiting is done.
+     */
+    fun retryAt(until: Long?, now: Long): Long = maxOf(until ?: (now + UNKNOWN_RESET_MS), now + MIN_WAIT_MS)
 }

@@ -29,6 +29,8 @@ internal class CodexStream(
      * by the limit is told with, since the refusal itself names neither (see [turnCompleted]).
      */
     private val limitReached: () -> Pair<String, Long?>? = { null },
+    /** Fast mode as it stands at a turn's end - the state and, if any, why it does not serve (see CodexSession.fastReport). */
+    private val fastMode: () -> Pair<String, String?>? = { null },
 ) {
 
     /** A plan-mode turn proposed this plan; the session turns it into the plan card's question. */
@@ -77,11 +79,56 @@ internal class CodexStream(
     /** The plan steps as Codex last sent them - the strip is redrawn only when they change. */
     private var lastPlan: List<Pair<String, String>> = emptyList()
 
+    /**
+     * The model Codex moved a turn to by itself (`model/rerouted`), and the turn it named - see [answeringModel]. A
+     * reroute is about its turn alone: the next one goes to the thread's own model again.
+     */
+    private var reroutedTo: String? = null
+    private var reroutedTurn: String = ""
+
     val activeTurn: String? get() = turnId
+
+    /**
+     * What the end of the turn under way is told from: its id, when it began, the last thing the agent said in
+     * it and the last step's usage - the `result` carries all four (see [turnCompleted]).
+     *
+     * Read out for one turn only: a plan's, which Codex has ended and the panel holds open until the plan is
+     * decided (see CodexSession.HeldPlan). The conversation can change processes while it waits - another
+     * account chosen - and the end is told by the next process's stream. A stream that never heard the turn
+     * begin would sign it with no words and a duration counted from 1970.
+     */
+    data class TurnSoFar(val turnId: String?, val startedAt: Long, val lastAgentText: String, val usage: JsonObject?)
+
+    fun turnSoFar(): TurnSoFar = TurnSoFar(turnId, turnStartedAt, lastAgentText, lastUsage)
+
+    /** The turn [soFar] describes goes on in this stream - see [TurnSoFar]. */
+    fun resumeTurn(soFar: TurnSoFar) {
+        turnId = soFar.turnId
+        turnStartedAt = soFar.startedAt
+        lastAgentText = soFar.lastAgentText
+        lastUsage = soFar.usage
+    }
+
+    /**
+     * The model the answers of this moment come from: the one Codex rerouted this turn to, while the turn lasts,
+     * otherwise the one the session says the thread runs on.
+     *
+     * Signed by the session's model alone, the answers after a reroute named the model the turn had just been moved
+     * off: the panel read the very next answer as a second swap, back, and drew "X -> sol, switched by Codex" under
+     * the "sol -> X" Codex had announced a moment before - while every answer came from X.
+     *
+     * By the turn the reroute named rather than until the next `turn/completed`: a turn that never completes (its
+     * process died under it) would otherwise lend its reroute to the turns of the next process.
+     */
+    fun answeringModel(): String {
+        val moved = reroutedTo ?: return model()
+        return if (reroutedTurn.isEmpty() || reroutedTurn == turnId) moved else model()
+    }
 
     fun turnStarted(turn: JsonObject, now: Long = System.currentTimeMillis()) {
         turnId = AppServer.text(turn["id"]).ifEmpty { null }
         turnStartedAt = AppServer.longOf(turn["startedAt"])?.times(1000)?.takeIf { it > 0 } ?: now
+        if (reroutedTurn.isEmpty() || reroutedTurn != turnId) reroutedTo = null
         lastAgentText = ""
         // The usage is this turn's to report. Kept from the one before, a turn that ends without a token
         // count of its own - failed on the sign-in or on a limit before the model answered - would sign
@@ -135,7 +182,7 @@ internal class CodexStream(
                 if (text.isNotBlank() && !repeatsReview) {
                     lastAgentText = text
                     startBlock()
-                    emit(CodexDialect.assistantText(id, text, model(), uuid = id, usage = lastUsage))
+                    emit(CodexDialect.assistantText(id, text, answeringModel(), uuid = id, usage = lastUsage))
                     // An answer Codex marks as the final one ends the model's say, as far as it knows; a
                     // Stop hook may still send it back (see "hookPrompt" in [itemStarted]).
                     if (AppServer.text(item["phase"]) == FINAL_ANSWER) emit(CodexDialect.messageEnd())
@@ -144,13 +191,13 @@ internal class CodexStream(
 
             "reasoning" -> {
                 val thinking = CodexDialect.thinkingOf(item)
-                if (thinking.isNotBlank()) emit(CodexDialect.assistantThinking(id, thinking, model(), uuid = id))
+                if (thinking.isNotBlank()) emit(CodexDialect.assistantThinking(id, thinking, answeringModel(), uuid = id))
             }
 
             "plan" -> {
                 val text = AppServer.text(item["text"]).trim()
                 if (text.isNotEmpty()) {
-                    CodexDialect.toolUses(CodexDialect.toolCalls(item), model(), uuid = id)?.let(emit)
+                    CodexDialect.toolUses(CodexDialect.toolCalls(item), answeringModel(), uuid = id)?.let(emit)
                     return PlanProposal(id, text)
                 }
             }
@@ -164,13 +211,13 @@ internal class CodexStream(
                 if (review.isNotBlank()) {
                     lastAgentText = review
                     reviewSaid = review.trim()
-                    emit(CodexDialect.assistantText(id, review, model(), uuid = id))
+                    emit(CodexDialect.assistantText(id, review, answeringModel(), uuid = id))
                 }
             }
 
             else -> if (CodexDialect.isTool(item)) {
                 if (id !in drawn) drawCard(item)
-                CodexDialect.toolResults(CodexDialect.toolResults(item), uuid = "$id-result")?.let(emit)
+                CodexDialect.resultLines(item).forEach(emit)
             }
         }
 
@@ -240,7 +287,7 @@ internal class CodexStream(
                 }
             },
         )
-        CodexDialect.toolUses(listOf(call), model(), uuid = id)?.let(emit)
+        CodexDialect.toolUses(listOf(call), answeringModel(), uuid = id)?.let(emit)
         CodexDialect.toolResults(listOf(CodexDialect.ToolResult(id, "", false)), uuid = "$id-result")?.let(emit)
     }
 
@@ -268,8 +315,12 @@ internal class CodexStream(
         )
     }
 
-    fun rerouted(from: String, to: String, reason: String) {
+    /** Codex moved [turn] to another model by itself: the swap is said, and the turn's answers are signed by [to]. */
+    fun rerouted(from: String, to: String, reason: String, turn: String = "") {
         emit(CodexDialect.modelFallback(from, to, reason))
+        if (to.isEmpty()) return
+        reroutedTo = to
+        reroutedTurn = turn
     }
 
     /**
@@ -304,7 +355,11 @@ internal class CodexStream(
         // ScenarioEngine.ranIntoLimit), and a card is not judged on the refusal as its answer.
         val limited = failed && CodexErrors.isUsageLimit(info)
         if (limited) {
-            val known = limitReached()
+            // A session's own budget is no window of the account's, and the one the account said was full a moment
+            // ago would be the wrong limit with the wrong reset: the row would promise that reset, the account would
+            // be filed as refused until it (see AccountUsage.SHARED_WINDOWS), and a tab would plan to carry on at it
+            // (see CarryOns.endsOnAClock). Named by Codex's own code instead, with no reset - it has none.
+            val known = if (CodexErrors.isSessionBudget(info)) CodexErrors.SESSION_BUDGET to null else limitReached()
             emit(CodexDialect.rateLimited(resetsAtSeconds = known?.second, window = known?.first ?: "codex"))
             emit(
                 CodexDialect.assistantText(
@@ -324,7 +379,7 @@ internal class CodexStream(
         closeMessage()
         if (cutOffId != null && cutOff.isNotBlank()) {
             lastAgentText = cutOff
-            emit(CodexDialect.assistantText(cutOffId, cutOff, model(), uuid = cutOffId, usage = lastUsage))
+            emit(CodexDialect.assistantText(cutOffId, cutOff, answeringModel(), uuid = cutOffId, usage = lastUsage))
         }
 
         val duration = AppServer.longOf(turn["durationMs"]) ?: (now - turnStartedAt).coerceAtLeast(0)
@@ -336,6 +391,7 @@ internal class CodexStream(
                 resultText = if (failed) message.ifEmpty { "The turn failed." } else lastAgentText,
                 usage = lastUsage,
                 apiErrorStatus = if (failed) CodexErrors.httpStatus(info) else null,
+                fastMode = fastMode(),
             ),
         )
 
@@ -344,6 +400,8 @@ internal class CodexStream(
         drawn.clear()
         retryAttempt = 0
         lastPlan = emptyList()
+        reroutedTo = null
+        reroutedTurn = ""
     }
 
     /** A compaction of the whole conversation (`/compact`) runs as a turn of its own - see CodexSession. */
@@ -371,7 +429,7 @@ internal class CodexStream(
         val calls = CodexDialect.toolCalls(item)
         val id = AppServer.text(item["id"])
         drawn += id
-        CodexDialect.toolUses(calls, model(), uuid = id)?.let(emit)
+        CodexDialect.toolUses(calls, answeringModel(), uuid = id)?.let(emit)
     }
 
     /**

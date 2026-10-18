@@ -6,6 +6,8 @@ import {
   moveTab,
   moveWithinGroup,
   placeAtEnd,
+  placeFromWire,
+  placeIn,
   runOfTab,
   runTabId,
   SCENARIOS_GROUP,
@@ -14,6 +16,7 @@ import {
   STATISTICS_GROUP,
   tabAfterClosing,
   tabAfterElsewhere,
+  tabBeside,
   type PanelTabPlace,
 } from './tabs'
 
@@ -216,6 +219,31 @@ describe('the tab to look at once one is closed', () => {
   })
 })
 
+describe("the panel's next- and previous-tab keys", () => {
+  const strip = stripTabs(sessions, panel(STATISTICS_GROUP))
+
+  it('step through the strip as it is drawn, forks and the panel\'s own tabs included', () => {
+    expect(tabBeside(strip, 'main', 1)).toBe('fork-1')
+    expect(tabBeside(strip, 'third', 1)).toBe(STATISTICS_GROUP)
+    expect(tabBeside(strip, 'second', -1)).toBe('fork-2')
+  })
+
+  it('go round from the last tab to the first and back', () => {
+    expect(tabBeside(strip, STATISTICS_GROUP, 1)).toBe('main')
+    expect(tabBeside(strip, 'main', -1)).toBe(STATISTICS_GROUP)
+  })
+
+  it('start at an end when the screen shows no tab of the strip', () => {
+    expect(tabBeside(strip, 'gone', 1)).toBe('main')
+    expect(tabBeside(strip, 'gone', -1)).toBe(STATISTICS_GROUP)
+  })
+
+  it('stay put on a strip of one, and go nowhere on an empty one', () => {
+    expect(tabBeside(['main'], 'main', 1)).toBe('main')
+    expect(tabBeside([], 'main', 1)).toBe('')
+  })
+})
+
 describe('rearranging the forks inside a group', () => {
   /** The same conversation with three forks: two of them have something to be rearranged between. */
   const withThree: Session[] = [
@@ -320,5 +348,31 @@ describe('tabAfterElsewhere', () => {
 
   it('leaves the screen empty when the news names nothing at all', () => {
     expect(tabAfterElsewhere([tab('main', 'main')], [], [], 'main')).toBe('')
+  })
+})
+
+// A closed tab of the panel's own comes back where it stood: the IDE kept the place and carries it back unread.
+describe('placeFromWire', () => {
+  it('takes a place the page wrote, and puts the tab back among the neighbours it had', () => {
+    const place = placeFromWire({ at: 2, among: ['a', 'b', 'c'] })
+    expect(place).toEqual({ at: 2, among: ['a', 'b', 'c'] })
+    // "b" was closed meanwhile: the tab stands after "a", where its left neighbours still are.
+    expect(placeIn(place!, ['a', 'c'])).toBe(1)
+  })
+
+  it('stays after the neighbour it stood after when a conversation comes back to the left of it', () => {
+    // The statistics were opened while the first conversation was closed; it came back in front of everything.
+    const place = { at: 3, among: ['r', 'm', 'e'] }
+    expect(placeIn(place, ['main', 'r', 'm', 'e'])).toBe(4)
+    expect(placeIn({ at: 1, among: ['r', 'm'] }, ['main', 'r', 'x', 'm'])).toBe(2)
+    expect(placeIn({ at: 0, among: ['r'] }, ['main', 'r'])).toBe(0)
+  })
+
+  it('refuses anything else rather than trusting it', () => {
+    expect(placeFromWire(undefined)).toBeUndefined()
+    expect(placeFromWire({ at: -1, among: [] })).toBeUndefined()
+    expect(placeFromWire({ at: 1.5, among: [] })).toBeUndefined()
+    expect(placeFromWire({ at: 0, among: [1] })).toBeUndefined()
+    expect(placeFromWire({ at: 0 })).toBeUndefined()
   })
 })

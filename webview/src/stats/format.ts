@@ -32,6 +32,25 @@ export const compactNumber = (value: number): string => {
 
 const trimZero = (text: string): string => text.replace(/\.0$/, '')
 
+/**
+ * "2 794M" - tokens counted in millions, the unit of the "tok" figure by the composer, so the two can be
+ * read against each other. Below a million there is nothing to count in millions, and it says "18.4k".
+ */
+export const tokenMillions = (value: number): string =>
+  Math.abs(value) >= 1_000_000 ? `${groupThousands(value / 1_000_000)}M` : compactNumber(value)
+
+/**
+ * "500M", "1.5B" - tokens on a chart's scale, where there is room for four characters and no more. The
+ * notes and tips say the exact millions (see tokenMillions).
+ */
+export const tokenScale = (value: number): string => {
+  const abs = Math.abs(value)
+  if (abs >= 1_000_000_000) return `${trimZero((value / 1_000_000_000).toFixed(1))}B`
+  if (abs >= 1_000_000) return `${trimZero((value / 1_000_000).toFixed(abs >= 100_000_000 ? 0 : 1))}M`
+  if (abs >= 1_000) return `${Math.round(value / 1_000)}k`
+  return String(Math.round(value))
+}
+
 /** "38h 10m", "45m", "0m" - minutes in the design's shape. */
 export const duration = (minutes: number): string => {
   const whole = Math.max(0, Math.round(minutes))

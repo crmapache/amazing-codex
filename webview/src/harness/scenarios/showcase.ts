@@ -684,9 +684,33 @@ export const scenariosShowcase: Scenario[] = [
         type: 'queue',
         sessionId: SESSION,
         items: [
-          { id: 'q1', text: 'Then compare the timings against the card path - same profile, same cart.', attach: '', images: 0 },
-          { id: 'q2', text: 'If the wait is over 400ms, put a skeleton behind the sheet instead of the spinner.', attach: '2 refs', images: 0 },
-          { id: 'q3', text: 'And draft the release note for this once the numbers are in.', attach: '1 ref', images: 1 },
+          {
+            id: 'q1',
+            text: '> The merchant session is validated before the sheet opens, so a slow network shows up as a frozen button.\nThen compare the timings against the card path - same profile, same cart.',
+            images: 0,
+            tokens: [{ kind: 'text', value: 'Then compare the timings against the card path - same profile, same cart.' }],
+            quotes: ['The merchant session is validated before the sheet opens, so a slow network shows up as a frozen button.'],
+          },
+          {
+            id: 'q2',
+            text: 'If the wait is over 400ms, put a skeleton behind @apps/web/src/checkout/PaymentSheet.tsx instead of the spinner, like @design/skeleton-sheet.png.',
+            images: 0,
+            tokens: [
+              { kind: 'text', value: 'If the wait is over 400ms, put a skeleton behind ' },
+              { kind: 'chip', chip: { kind: 'file', value: 'apps/web/src/checkout/PaymentSheet.tsx' } },
+              { kind: 'text', value: ' instead of the spinner, like ' },
+              { kind: 'chip', chip: { kind: 'img', value: 'design/skeleton-sheet.png' } },
+            ],
+          },
+          {
+            id: 'q3',
+            text: 'And draft the release note for this once the numbers are in - this is the slow frame: [Image #1]',
+            images: 1,
+            tokens: [
+              { kind: 'text', value: 'And draft the release note for this once the numbers are in - this is the slow frame: ' },
+              { kind: 'chip', chip: { kind: 'img', value: 'Image #1' } },
+            ],
+          },
         ],
       }),
       shell({ type: 'picked', kind: 'file', value: 'apps/web/src/checkout/PaymentSheet.tsx' }),

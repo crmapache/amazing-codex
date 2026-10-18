@@ -5,12 +5,15 @@ import type { MenuOption } from '../Menu'
 import { modeClass } from '../StatusBar'
 import { Picker } from './Picker'
 import { PromptField } from './PromptField'
-import { blankCard, blankInput, blankSlot, blankStage } from '../../scenarios/blank'
+import { blankCard, blankEach, blankInput, blankSlot, blankStage, ITEM_NAME } from '../../scenarios/blank'
 import { cardRuns, MAX_CARD_RETRIES, MAX_STAGE_REPEAT, passesOf, problemsOf, blocking, type Problem } from '../../scenarios/rules'
 import { useT, type Dict } from '../../i18n'
 import { CrossIcon, DuplicateIcon } from './icons'
 import type { EditorPlace } from './view'
 import s from './scenarios.module.css'
+
+/** The picker's choice for a stage that runs once per item of a list rather than a number of times. */
+const PER_ITEM = 'each'
 
 /**
  * Where a round of work is written down: an outline on the left, and on the right only the part of it
@@ -155,7 +158,9 @@ export const ScenarioEditor = ({
                   <span className={s.outlineNumber}>{index + 1}</span>
                   <span className={s.outlineText}>
                     <span className={s.outlineTitle}>{stage.title || t.scenarios.editor.untitledStage}</span>
-                    {passes > 1 ? (
+                    {stage.each ? (
+                      <span className={s.outlineNote}>{t.scenarios.editor.perItemShort}</span>
+                    ) : passes > 1 ? (
                       <span className={s.outlineNote}>
                         {stage.untilDone
                           ? t.scenarios.editor.roundsUntilShort(passes)
@@ -480,7 +485,9 @@ const StagePane = ({
       <div className={s.paneLabel}>
         {t.scenarios.editor.stageHead(index + 1, stage.title || t.scenarios.editor.untitledStage)}
         <span className={s.paneLine} />
-        {passes > 1 ? (
+        {stage.each ? (
+          <span className={s.paneNote}>{t.scenarios.editor.perItem}</span>
+        ) : passes > 1 ? (
           <span className={s.paneNote}>
             {stage.untilDone ? t.scenarios.editor.goesRoundUntil(passes) : t.scenarios.editor.goesRound(passes)}
           </span>
@@ -529,22 +536,35 @@ const StagePane = ({
       </div>
 
       <div className={s.chips}>
+        {/*
+          A number of times, or once for each item of a list the main thread gives as the stage begins - the
+          loop for work whose length is known only then (see Stage.each on the IDE's side).
+        */}
         <Picker
           label={t.scenarios.editor.passes}
           title={t.scenarios.editor.passes}
-          width={200}
-          value={String(stage.repeat)}
-          options={Array.from({ length: MAX_STAGE_REPEAT }, (_, n) => ({
-            id: String(n + 1),
-            label: n === 0 ? t.scenarios.editor.once : t.scenarios.editor.times(n + 1),
-          }))}
-          onPick={(repeat) => onEdit((one) => ({ ...one, repeat: Number(repeat) }))}
+          width={240}
+          value={stage.each ? PER_ITEM : String(stage.repeat)}
+          options={[
+            ...Array.from({ length: MAX_STAGE_REPEAT }, (_, n) => ({
+              id: String(n + 1),
+              label: n === 0 ? t.scenarios.editor.once : t.scenarios.editor.times(n + 1),
+            })),
+            { id: PER_ITEM, label: t.scenarios.editor.perItem },
+          ]}
+          onPick={(repeat) =>
+            onEdit((one) =>
+              repeat === PER_ITEM
+                ? { ...one, repeat: 1, untilDone: false, each: one.each ?? blankEach() }
+                : { ...one, repeat: Number(repeat), each: null },
+            )
+          }
         />
         {/*
           A loop that ends when there is nothing left to do rather than when the counter runs out. The
           number stays a ceiling either way, so a scenario cannot spend a night going round.
         */}
-        {stage.repeat > 1 ? (
+        {stage.repeat > 1 && !stage.each ? (
           <label className={s.check}>
             <input
               type="checkbox"
@@ -555,6 +575,30 @@ const StagePane = ({
           </label>
         ) : null}
       </div>
+
+      {/* What the list is, and what its item is called in the prompts - said to the main thread as the stage begins. */}
+      {stage.each ? (
+        <div className={s.listBlock}>
+          <div className={s.cardLabel}>{t.scenarios.editor.listLabel}</div>
+          <input
+            className={`${s.field} ${s.fieldName} ${s.fieldMono}`}
+            value={stage.each.name}
+            placeholder={t.scenarios.editor.itemName}
+            onChange={(event) =>
+              onEdit((one) => ({ ...one, each: { name: event.target.value, description: one.each?.description ?? '' } }))
+            }
+          />
+          <textarea
+            className={`${s.area} ${s.areaShort}`}
+            value={stage.each.description}
+            placeholder={t.scenarios.editor.listHint}
+            onChange={(event) =>
+              onEdit((one) => ({ ...one, each: { name: one.each?.name ?? '', description: event.target.value } }))
+            }
+          />
+          <p className={s.cardNote}>{t.scenarios.editor.itemNote(stage.each.name || ITEM_NAME)}</p>
+        </div>
+      ) : null}
 
       {stage.cards.map((card, at) => (
         <CardBlock
@@ -839,9 +883,18 @@ const moved = <T,>(list: T[], from: number, to: number): T[] => {
 const describe = (t: Dict, draft: Scenario, problem: Problem): string => {
   const card = draft.stages.flatMap((stage) => stage.cards).find((one) => one.id === problem.cardId)
   const where = card?.title || t.scenarios.editor.untitledCard
+  const stage = draft.stages.find((one) => one.id === problem.stageId)?.title || t.scenarios.editor.untitledStage
   const name = problem.name ?? ''
 
   switch (problem.kind) {
+    case 'badItemName':
+      return t.scenarios.problems.badItemName(stage, name)
+    case 'noItemList':
+      return t.scenarios.problems.noItemList(stage)
+    case 'itemSlotClash':
+      return t.scenarios.problems.itemSlotClash(where, name)
+    case 'unusedItem':
+      return t.scenarios.problems.unusedItem(stage, name)
     case 'noStages':
       return t.scenarios.problems.noStages
     case 'emptyStage':

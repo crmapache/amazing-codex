@@ -1,7 +1,7 @@
 ---
 paths:
-  - "src/main/kotlin/io/github/crmapache/amazingclaudecode/claude/ClaudeLaunch.kt"
-  - "src/test/kotlin/io/github/crmapache/amazingclaudecode/claude/ClaudeLaunchTest.kt"
+  - "src/main/kotlin/io/github/crmapache/amazingcodex/codex/CodexLaunch.kt"
+  - "src/test/kotlin/io/github/crmapache/amazingcodex/codex/CodexLaunchTest.kt"
   - "webview/src/components/TaskListPanel.tsx"
   - "webview/src/components/TaskListPanel.test.ts"
 ---
@@ -13,8 +13,8 @@ paths:
 ушёл: всё, что новее Opus 4.8, Sonnet 5, Fable 5 и Mythos 5, остаётся без них, пока аккаунт не попал в
 серверный эксперимент (`tengu_rosy_wren`). Панель стартует на Opus, то есть полоса была пустой у того, кто
 работает на умолчании, и полной у того, кто переключился на Haiku, - без единого слова на экране о том,
-почему. Поэтому запуск разговора несёт `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` (`ClaudeLaunch.environment`,
-применяется в `ClaudeSession.start`, то есть и на вкладках, и на голове с карточками сценария).
+почему. Поэтому запуск разговора несёт `CLAUDE_CODE_ENABLE_TODO_TOOLS=1` (`CodexLaunch.environment`,
+применяется в `CodexSession.start`, то есть и на вкладках, и на голове с карточками сценария).
 
 - **Ничьего выбора это не перебивает.** CLI читает переменную обычной проверкой на истинность: «0» и
   «не задано» значат для него ровно одно и то же - обе падают в эксперимент, - то есть сказать через неё
@@ -27,7 +27,7 @@ paths:
   `CLAUDE_CODE_ENABLE_TASKS=false` меняет его на `TodoWrite`, и панель понимает оба, но собрана она под
   новый: список складывается из отдельных вызовов, держится за номер из ответа `TaskCreate`, строку можно
   удалить (`PanelState.pendingTasks`). Просить старый - привязывать панель к форме, от которой CLI уходит.
-- **Разовым запускам этого не дают** (`ClaudeCli`): переписывание черновика, поиск моделью и написание
+- **Разовым запускам этого не дают** (`CodexCli`): переписывание черновика, поиск моделью и написание
   сценария стартуют с `--tools ""`, и списка задач у них нет.
 - **Строки в брифинг не добавлено, и это проверено, а не предположено.** Инструменты отложенные - агент
   достаёт их через `ToolSearch`, - и живой прогон на Opus дал полный цикл `TaskCreate`/`TaskUpdate` там, где

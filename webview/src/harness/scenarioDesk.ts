@@ -9,7 +9,7 @@ import type {
   ScenarioSchedule,
   WebviewMessage,
 } from '../protocol'
-import { plan } from '../scenarios/rules'
+import { keyOf, listKey, plan } from '../scenarios/rules'
 
 /**
  * The IDE's scenario desk, played by the harness.
@@ -287,8 +287,51 @@ const PATROL: Scenario = {
   scope: 'project',
 }
 
+/**
+ * A stage that runs once per item of a list (see Stage.each): its one pass waits for the list, the main thread
+ * gives four items, and the stage becomes four passes named after them - the second put off and coming back
+ * as a second go at the end of the stage, before the check after it.
+ */
+const EPIC: Scenario = {
+  version: 1,
+  id: 'plan-an-epic',
+  name: 'Plan an epic',
+  createdAt: Date.now() - 2 * 24 * 60 * 60 * 1000,
+  updatedAt: Date.now() - 2 * 24 * 60 * 60 * 1000,
+  inputs: [{ id: 'e1', name: 'epic', label: 'Epic', placeholder: 'https://tracker/epic/12', required: true }],
+  head: {
+    briefing: 'Plan every card of the epic in its order, then check the plans against each other.',
+    model: '',
+    effort: '',
+    permissionMode: 'acceptEdits',
+    onQuestion: 'head',
+    retries: 2,
+  },
+  stages: [
+    {
+      id: 'e-plans',
+      title: 'Plans',
+      repeat: 1,
+      untilDone: false,
+      each: { name: 'card', description: 'The cards of {{epic}} without a plan yet, in planning order. The value is the card\'s link.' },
+      cards: [card('e-plan', 'Plan the card', '/plan [[card]]')],
+    },
+    {
+      id: 'e-check',
+      title: 'Check',
+      repeat: 1,
+      untilDone: false,
+      cards: [card('e-sum', 'Check the plans together', '/check-epic {{epic}}')],
+    },
+  ],
+  scope: 'project',
+}
+
+/** What the main thread lists for the stage of EPIC - four cards, by name and link. */
+const EPIC_CARDS = ['Read the umbrella', 'Store the scores', 'Pick the winner', 'Propose titles for the test']
+
 const reset = (): void => {
-  shelves = [structuredClone(REVIEW), structuredClone(PATROL), structuredClone(RELEASE)]
+  shelves = [structuredClone(REVIEW), structuredClone(PATROL), structuredClone(RELEASE), structuredClone(EPIC)]
   runs = [
     {
       id: 'run-yesterday',
@@ -664,7 +707,7 @@ const summarise = (run: ScenarioRun): ScenarioRunSummary => {
             state: step.state,
             stage: run.snapshot.stages.findIndex((one) => one.id === step.stageId) + 1,
             pass: step.pass,
-            title: step.title,
+            title: step.item?.label || step.title,
           })),
     at: here?.title ?? '',
     asking: run.question ? run.question.title || run.question.tool : '',
@@ -719,6 +762,71 @@ const stopWalking = (id: string): void => {
   delete walkers[id]
 }
 
+/**
+ * The list of a stage that runs once per item, given: its one pass turned into a pass per item, the way
+ * StageList.expand does it in the IDE, and the main thread's word about the list at the head of the stage.
+ */
+const listed = (run: ScenarioRun, stageId: string): ScenarioRun => {
+  const first = run.steps.findIndex((one) => one.stageId === stageId)
+  const standIn = run.steps.filter((one) => one.stageId === stageId)
+  const passes = EPIC_CARDS.flatMap((label, index) =>
+    standIn.map((one) => ({
+      ...one,
+      key: keyOf(stageId, one.cardId, index + 1),
+      pass: index + 1,
+      state: 'waiting' as const,
+      startedAt: 0,
+      item: { label, value: `https://tracker/card/${index + 31}`, index: index + 1, count: EPIC_CARDS.length, again: '' },
+    })),
+  )
+  const steps = [...run.steps.slice(0, first), ...passes, ...run.steps.slice(first + standIn.length)]
+
+  return {
+    ...run,
+    steps,
+    total: steps.length,
+    notes: [
+      ...run.notes,
+      { at: Date.now(), stepKey: listKey(stageId), text: `Four cards of the epic have no plan yet: ${EPIC_CARDS.join(', ')}.` },
+    ],
+  }
+}
+
+/**
+ * The item at `at` put off until the rest of the list: the rest of its pass skipped and a second go at it
+ * written at the end of its stage, the way StageList.putOff does it in the IDE.
+ */
+const putOff = (run: ScenarioRun, at: number, reason: string): ScenarioRun => {
+  const step = run.steps[at]
+  const item = step?.item
+  if (!step || !item) return run
+
+  const samePass = (one: ScenarioRunStep): boolean => one.stageId === step.stageId && one.pass === step.pass
+  const marked = run.steps.map((one, index) =>
+    index > at && samePass(one) && one.state === 'waiting' ? { ...one, state: 'skipped' as const } : one,
+  )
+  const pass = Math.max(...marked.filter((one) => one.stageId === step.stageId).map((one) => one.pass)) + 1
+  const ofPass = marked.filter(samePass)
+  const again = ofPass.slice(ofPass.findIndex((one) => one.key === step.key)).map((one) => ({
+    ...one,
+    key: keyOf(one.stageId, one.cardId, pass),
+    pass,
+    state: 'waiting' as const,
+    startedAt: 0,
+    finishedAt: 0,
+    conversationId: '',
+    said: '',
+    summary: '',
+    verdict: '' as const,
+    verdictReason: '',
+    item: { ...item, again: reason },
+  }))
+  const end = marked.map((one) => one.stageId).lastIndexOf(step.stageId) + 1
+  const steps = [...marked.slice(0, end), ...again, ...marked.slice(end)]
+
+  return { ...run, steps, total: steps.length }
+}
+
 const walk = (id: string, from = 0, startIn: 'run' | 'judge' = 'run'): void => {
   let at = from
   let phase: 'run' | 'judge' = startIn
@@ -742,6 +850,12 @@ const walk = (id: string, from = 0, startIn: 'run' | 'judge' = 'run'): void => {
       // And if the queue was standing behind this run - its own, or one started from the shelf - its next
       // turn is due now; the IDE does the same on the ending of every run (see ScenarioDesk.ended).
       stepQueue()
+      return
+    }
+
+    // A stage over a list, reached before its list: the main thread gives it, and the stage grows by it.
+    if (phase === 'run' && !step.item && run.snapshot.stages.find((one) => one.id === step.stageId)?.each) {
+      keep(listed(run, step.stageId))
       return
     }
 
@@ -831,7 +945,12 @@ const walk = (id: string, from = 0, startIn: 'run' | 'judge' = 'run'): void => {
                 state: 'running',
                 startedAt: Date.now(),
                 conversationId: `conv-${one.key}`,
-                slots: one.cardId === 'c-diff' ? ({} as Record<string, string>) : { findings: '/tmp/acc/findings.md' },
+                // A pass of a list carries its item in its slot, the way the IDE writes it in (see ScenarioEngine.startCard).
+                slots: one.item
+                  ? { card: one.item.value }
+                  : one.cardId === 'c-diff'
+                    ? ({} as Record<string, string>)
+                    : { findings: '/tmp/acc/findings.md' },
                 prompt: `${one.title}: what the card's own session was told, with the inputs written in.`,
                 said: [
                   '**Context.**',
@@ -854,6 +973,28 @@ const walk = (id: string, from = 0, startIn: 'run' | 'judge' = 'run'): void => {
 
     phase = 'run'
     at += 1
+
+    // The second item of a list cannot get done now, and comes back after the rest (see StageList.putOff).
+    if (step.item && step.item.index === 2 && !step.item.again) {
+      const reason = 'The tracker asked to sign in again, so the plan stayed in a draft.'
+      keep(
+        putOff(
+          {
+            ...run,
+            steps: run.steps.map((one) =>
+              one.key === step.key
+                ? { ...one, state: 'done', verdict: 'later', said: '', summary: 'The plan is written; publishing it failed.', verdictReason: reason, finishedAt: Date.now() }
+                : one,
+            ),
+            notes: [...run.notes, { at: Date.now(), stepKey: step.key, text: 'Putting this card off until the rest are planned.' }],
+          },
+          at - 1,
+          reason,
+        ),
+      )
+      return
+    }
+
     keep({
       ...run,
       steps: run.steps.map((one) =>

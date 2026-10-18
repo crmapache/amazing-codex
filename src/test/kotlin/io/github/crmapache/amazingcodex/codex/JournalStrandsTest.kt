@@ -33,6 +33,16 @@ class JournalStrandsTest {
         assertEquals(SessionJournal.Strand("agent:toolu_42", SessionJournal.Strand.Kind.DETAIL), JournalStrands.of(line))
     }
 
+    /** A subagent's patch is a row of the turn's list of changed files, and a phone thinning steps would lose files. */
+    @Test
+    fun `a subagent's patch of a file is the conversation's own`() {
+        val line = """{"type":"user","uuid":"f1-result","parent_tool_use_id":"spawn-1",""" +
+            """"toolUseResult":{"filePath":"/p/a.kt","type":"update","unified_diff":"@@ -1 +1 @@\n-a\n+b\n"},""" +
+            """"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"f1","content":""}]}}"""
+
+        assertNull(JournalStrands.of(line))
+    }
+
     @Test
     fun `the conversation's own lines belong to no strand`() {
         val line = """{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]},""" +

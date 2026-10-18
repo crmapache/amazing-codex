@@ -19,13 +19,16 @@ import { matchSpans } from '../feed/searchText'
 import { mathVersion, subscribeMath } from '../math'
 import type { PaintedTerm } from '../protocol'
 import type { FeedItem, FeedRowItem, ToolItem, UserItem } from '../feed/types'
+import type { PanelState } from '../feed/panelState'
 import type { CardState } from '../hooks/useCardState'
 import s from './feed.module.css'
 import { BashCard } from './items/BashCard'
+import { ChangesRow, type RevertChanges } from './items/ChangesRow'
 import { FindingsCard } from './items/FindingsCard'
 import { PlanCard } from './items/PlanCard'
 import { TaskCard } from './items/TaskCard'
 import {
+  CarryOnRow,
   CheckpointRow,
   CompactRow,
   CrashRow,
@@ -34,13 +37,15 @@ import {
   MetaRow,
   ModLogRow,
   ModelStuckRow,
+  FastModeRow,
+  SessionInfoRow,
   ModelSwitchRow,
   OutrankedRow,
   RetryRow,
   ThinkRow,
 } from './items/Rows'
 import type { SignInOffer } from './items/Rows'
-import { TextCard } from './items/TextCard'
+import { REVEAL_UNIT, TextCard } from './items/TextCard'
 import { ToolGroupCard } from './items/ToolGroupCard'
 import { UserCard } from './items/UserCard'
 import { PinnedBar } from './PinnedBar'
@@ -116,6 +121,18 @@ interface FeedProps {
    * there. Hand in a STABLE function, for the same reason.
    */
   onCodexConfig?: () => void
+  /**
+   * Put back what a turn changed - the buttons on the list of changed files (see ChangesRow).
+   *
+   * Absent on the phone and in a step log: a revert is decided looking at the file, and the file is in the
+   * editor at the desk. Hand in a STABLE function, for the same reason as above.
+   */
+  onRevertChanges?: RevertChanges
+  /**
+   * The project's folder as the IDE names it, for the paths on the list of changed files (see ChangesRow).
+   * Absent on the phone - it is never told the path.
+   */
+  projectRoot?: string
   /**
    * Take a sent message back into the input field, to be corrected and sent again (see feed/reuse.ts).
    * Absent on the phone: the field there is its own and holds plain text rather than the panel's tokens.
@@ -201,6 +218,13 @@ interface FeedProps {
    * menu and no way to type a command without losing the draft, so the card carries the way in.
    */
   onActions?: (item: FeedItem) => void
+  /**
+   * When the IDE carries this conversation on by itself after a limit - see PanelState.carryOn. Drawn as the
+   * last row of the feed, with [onCancelCarryOn] as the way to say no.
+   */
+  carryOn?: PanelState['carryOn']
+  /** "Don't carry on" - without it the row only tells (a screen that cannot answer the IDE). */
+  onCancelCarryOn?: () => void
 }
 
 export const Feed = ({
@@ -218,6 +242,8 @@ export const Feed = ({
   onChooseModel,
   signIn,
   onCodexConfig,
+  onRevertChanges,
+  projectRoot,
   onReuse,
   onRewind,
   onLoadEarlier,
@@ -232,6 +258,8 @@ export const Feed = ({
   pins,
   onPin,
   onActions,
+  carryOn,
+  onCancelCarryOn,
 }: FeedProps) => {
   const view = useRef<HTMLElement | null>(null)
   const t = useT()
@@ -270,7 +298,7 @@ export const Feed = ({
    * back at itself must not show while it streams either - see spokenAnswer, and the same call in
    * applyAssistant for the finished block.
    */
-  const { text: pacedText } = useSmoothStream(spokenAnswer(streamingText), { done: !streaming })
+  const { text: pacedText } = useSmoothStream(spokenAnswer(streamingText), { done: !streaming, unit: REVEAL_UNIT })
 
   /**
    * The printing thought and answer live in the same list as everything else rather than as separate
@@ -305,6 +333,23 @@ export const Feed = ({
         ]
       : []),
   ]
+
+  /**
+   * The lists of changed files a message has been written after. They stay as a record - the rows still open
+   * the files - but lose their buttons: once the conversation has moved on, putting a turn's files back from
+   * under the next request would leave the agent working on code that is no longer there, and two live lists
+   * one above the other read as two things to decide. Only the list after the last message acts.
+   */
+  const closedChanges = useMemo(() => {
+    const closed = new Set<string>()
+    let messageAfter = false
+    for (let index = settled.length - 1; index >= 0; index--) {
+      const item = settled[index]!
+      if (item.kind === 'user') messageAfter = true
+      else if (item.kind === 'changes' && messageAfter) closed.add(item.id)
+    }
+    return closed
+  }, [settled])
 
   /**
    * While an unanswered permission request of the MAIN stream is open somewhere in the feed (not a
@@ -848,6 +893,8 @@ export const Feed = ({
               onChooseModel={onChooseModel}
               signIn={signIn}
               onCodexConfig={onCodexConfig}
+              onRevertChanges={closedChanges.has(item.id) ? undefined : onRevertChanges}
+              projectRoot={projectRoot}
               onReuse={onReuse}
               onRewind={onRewind}
               onLoadEarlier={onLoadEarlier}
@@ -860,6 +907,16 @@ export const Feed = ({
             />
           </div>
         ))}
+
+        {/* The plan to carry on after a limit stands below everything said so far, where the next turn will
+            begin: it is about what comes next, not about anything in the feed (see CarryOnRow). */}
+        {carryOn ? (
+          // The gutter every row of the feed stands in - but none of a row's marks: it is no line of the
+          // conversation, and nothing jumps to it or remembers it as a place to read.
+          <div className={s.row}>
+            <CarryOnRow carryOn={carryOn} running={streaming} onCancel={onCancelCarryOn} />
+          </div>
+        ) : null}
 
         {/* An empty status line means either that what is happening has already been said in the feed
             itself (as during a context compaction), or that there is nothing to say at all - the second
@@ -920,6 +977,10 @@ interface ItemViewProps {
   signIn?: SignInOffer
   /** The screen of Codex's own settings - see FeedProps.onCodexConfig. */
   onCodexConfig?: () => void
+  /** See FeedProps.onRevertChanges. */
+  onRevertChanges?: RevertChanges
+  /** See FeedProps.projectRoot. */
+  projectRoot?: string
   onReuse?: (item: UserItem) => void
   onRewind?: (item: UserItem) => void
   onLoadEarlier?: () => void
@@ -959,6 +1020,8 @@ const ItemView = memo(({
   onChooseModel,
   signIn,
   onCodexConfig,
+  onRevertChanges,
+  projectRoot,
   onReuse,
   onRewind,
   onLoadEarlier,
@@ -1052,6 +1115,15 @@ const ItemView = memo(({
 
     case 'modelStuck':
       return <ModelStuckRow item={item} />
+
+    case 'fast':
+      return <FastModeRow item={item} />
+
+    case 'session':
+      return <SessionInfoRow item={item} />
+
+    case 'changes':
+      return <ChangesRow item={item} root={projectRoot} onRevert={onRevertChanges} />
 
     case 'meta':
       return <MetaRow item={item} />

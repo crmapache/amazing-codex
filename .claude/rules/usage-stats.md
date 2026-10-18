@@ -1,9 +1,8 @@
 ---
 paths:
-  - "src/main/kotlin/io/github/crmapache/amazingclaudecode/usage/**"
-  - "src/test/kotlin/io/github/crmapache/amazingclaudecode/usage/**"
+  - "src/main/kotlin/io/github/crmapache/amazingcodex/usage/**"
+  - "src/test/kotlin/io/github/crmapache/amazingcodex/usage/**"
   - "webview/src/components/UsageStats.tsx"
-  - "usage-service/**"
   - "PRIVACY.md"
 ---
 
@@ -18,7 +17,8 @@ paths:
 - **`webview/src/components/UsageStats.tsx`** - карточка над полем, экран «Settings → Usage statistics» и экран
   с полным текстом отчёта.
 - **`usage-service/`** - приёмник и админка на `usage.mzpizote.com` (SQLite в томе, пароль `ADMIN_PASSWORD`).
-  Как деплоить - `usage-service/README.md`. Секреты (общий ключ и пароль админки) - в `secrets/usage.env`,
+  Как деплоить - `usage-service/README.md`; в релизе его выкатывает `/deploy` сам, если исходники разошлись с
+  сервером (шаг 5 скилла, до публикации плагина). Секреты (общий ключ и пароль админки) - в `secrets/usage.env`,
   в чат не выводить.
 
 Что легко сломать, не заметив:
@@ -28,7 +28,7 @@ paths:
   сначала хотел «по умолчанию включено», решили спрашивать один раз карточкой. Карточка рисуется только на
   ответ IDE `unknown` - до первого сообщения `usageStats` (харнесс, перезагрузка страницы) её нет.
 - **Отчёт уходит только пока плагином пользуются** (правило 2.2.e). Толкают его отправленное сообщение и
-  законченный ответ (`StatsCollector.onUse`) и открытие панели (`ready` в `ClaudePanel`), своего таймера нет.
+  законченный ответ (`StatsCollector.onUse`) и открытие панели (`ready` в `CodexPanel`), своего таймера нет.
   Не добавляй периодическую отправку - IDE, открытая на выходные, не должна слать ничего.
 - **Обещание «анонимно» держит `UsageReportTest`, а не аккуратность.** День сравнивается с точным набором
   ключей: новое поле книги не поедет, пока его не впишут в `UsageReport.dayJson`, и тогда тест красный -
@@ -38,7 +38,7 @@ paths:
   Файлы - числом, проект, время суток, токены и стоимость не читаются вовсе.
 - **Сервис держит форму и сам** (`usage-service/src/report.ts`): имена - идентификаторы, значения - небольшие
   целые, остальное выбрасывается. IP не пишется никуда, в логе - первые символы.
-- **Фичи считаются у двери окна, а не в каждой ветке.** `ClaudePanel.handleWebviewMessage` зовёт
+- **Фичи считаются у двери окна, а не в каждой ветке.** `CodexPanel.handleWebviewMessage` зовёт
   `UsageFeatures.ofMessage` для каждого сообщения панели, `SessionCommands` - только для телефона (сообщения
   панели проходят через окно раньше, второй счёт удвоил бы). Мапятся только нажатия человека: сообщения, которые
   панель шлёт сама (`history`, `mcpList`, `saveDraft`, `tabShown`, ...), фичей не считаются -

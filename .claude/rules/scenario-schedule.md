@@ -1,10 +1,10 @@
 ---
 paths:
-  - "src/main/kotlin/io/github/crmapache/amazingclaudecode/scenario/ScenarioSchedule.kt"
-  - "src/main/kotlin/io/github/crmapache/amazingclaudecode/scenario/Schedules.kt"
-  - "src/main/kotlin/io/github/crmapache/amazingclaudecode/scenario/ScheduleStore.kt"
-  - "src/main/kotlin/io/github/crmapache/amazingclaudecode/scenario/ScenarioDesk.kt"
-  - "src/test/kotlin/io/github/crmapache/amazingclaudecode/scenario/Schedule*Test.kt"
+  - "src/main/kotlin/io/github/crmapache/amazingcodex/scenario/ScenarioSchedule.kt"
+  - "src/main/kotlin/io/github/crmapache/amazingcodex/scenario/Schedules.kt"
+  - "src/main/kotlin/io/github/crmapache/amazingcodex/scenario/ScheduleStore.kt"
+  - "src/main/kotlin/io/github/crmapache/amazingcodex/scenario/ScenarioDesk.kt"
+  - "src/test/kotlin/io/github/crmapache/amazingcodex/scenario/Schedule*Test.kt"
   - "webview/src/scenarios/schedule.ts"
   - "webview/src/scenarios/schedule.test.ts"
   - "webview/src/scenarios/timetable.ts"
@@ -69,7 +69,7 @@ paths:
   файл - прочитанные как «пусто», каждый из них стирал все расписания навсегда, и они не возвращались
   вместе с веткой.
 
-- **Расписание лежит на машине, а не в файле сценария** (`~/.amazing-claude-code/scenario-schedules/`).
+- **Расписание лежит на машине, а не в файле сценария** (`~/.amazing-codex/scenario-schedules/`).
   Круг работ стоит делить через репозиторий, а «в девять, на моей машине, с этой веткой» - договор
   человека со своим утром: уехав в чужой checkout, он поднимал бы агентов в чужой рабочей копии в чужие
   девять.

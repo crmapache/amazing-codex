@@ -5,6 +5,7 @@ import { Back } from './Back'
 import { Magnifier } from '../../components/SearchCapsule'
 import m from '../mobile.module.css'
 import { useT } from '../../i18n'
+import { EmptyPlate } from './EmptyPlate'
 
 interface HistoryProps {
   project: ProjectEntry
@@ -59,7 +60,7 @@ export const History = ({ project, conversations, busy, error, onOpen, onBack, o
     <div className={m.list}>
       {conversations === null && <p className={m.empty}>{t.common.loading}</p>}
 
-      {conversations?.length === 0 && <p className={m.empty}>{t.mobile.history.empty}</p>}
+      {conversations?.length === 0 && <EmptyPlate title={t.mobile.history.empty} inset />}
 
       {/* Over the list rather than under it: what it is about is the row just pressed, and a line at the
           foot of forty conversations is a line nobody sees. */}

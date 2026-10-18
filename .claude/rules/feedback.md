@@ -1,7 +1,7 @@
 ---
 paths:
-  - "src/main/kotlin/io/github/crmapache/amazingclaudecode/feedback/**"
-  - "src/test/kotlin/io/github/crmapache/amazingclaudecode/feedback/**"
+  - "src/main/kotlin/io/github/crmapache/amazingcodex/feedback/**"
+  - "src/test/kotlin/io/github/crmapache/amazingcodex/feedback/**"
   - "feedback-service/**"
   - "webview/src/components/Feedback.tsx"
   - "webview/src/components/Feedback.test.ts"
@@ -20,7 +20,7 @@ paths:
 - **`src/main/kotlin/.../feedback/`** — `DiagnosticsLog` (кольцевой буфер технических событий),
   `FeedbackReport` (сборка отчёта), `FeedbackEnvironment` (версии), `FeedbackAttachments` (выбранные
   файлы), `FeedbackSender` (первый настоящий HTTP-запрос плагина), `FeedbackDesk` (координатор, живёт в
-  `ClaudePanel`).
+  `CodexPanel`).
 - **`feedback-service/`** — приёмник на своём сервере (`feedback.mzpizote.com`), пересылает в телеграм.
   Отдельный сервис, а не роут в релее: релей самодостаточен, под Apache-2.0 и готовится к выносу, а
   приёмник с токеном чужого бота был бы мёртвым грузом в каждой чужой копии. Как деплоить — в
@@ -38,13 +38,13 @@ paths:
   сообщение, пришла его копия, отказ и почему. Только виды и счёт - длина текста и число картинок, никогда
   сами слова и адрес устройства. Вид запроса от устройства прогоняется через `kindOf`: выдуманный «тип» -
   это то, что напечатал отправитель, и в отчёт он не идёт.
-- **В `DiagnosticsLog` нельзя класть содержимое.** Соблазн в одной строке: `ClaudePanel` при незнакомом
+- **В `DiagnosticsLog` нельзя класть содержимое.** Соблазн в одной строке: `CodexPanel` при незнакомом
   сообщении логирует в `idea.log` весь JSON от панели, включая текст промпта. В буфер идут только тип и
   длина — буфер уезжает наружу, `idea.log` нет.
 - **Панели не отдаются пути к файлам.** Выбранное держит IDE, панель знает `id`, имя и размер; при
   отправке она называет `id`. Поэтому она не может назвать файл, который человек не выбирал, и путь не
   может утечь с экрана, который отправляет данные наружу.
-- **Сообщения фидбэка обрабатываются в `ClaudePanel`, а не в `SessionCommands`.** До `ClaudePanel`
+- **Сообщения фидбэка обрабатываются в `CodexPanel`, а не в `SessionCommands`.** До `CodexPanel`
   сетевой клиент не доходит физически — это гарантия помимо списка. В `RemoteCommands` они всё равно
   перечислены в `DENIED`, иначе `RemoteCommandsTest` красный.
 - **В compact-раскладке кнопка стоит в ряду инструментов, а не рядом с сердечком.** Три селектора делят

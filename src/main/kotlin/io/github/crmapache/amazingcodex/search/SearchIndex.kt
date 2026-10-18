@@ -401,15 +401,17 @@ internal class SearchIndex(
     }
 
     /**
-     * What a reverted thread's [file] kept of the files before it (see CodexRollout) - nothing for a thread's
-     * first file, which is nearly every one.
+     * What a reverted thread's [file] kept of the files before it, and what a fork made on Codex 0.163 inherited
+     * from its source's (see CodexRollout) - nothing for any other first file, which is nearly every one. The
+     * inherited part is the fork's to be found in, as it was when Codex copied it into the fork's file: it is on
+     * the fork's screen, above the seam.
      */
     private fun readKeptPart(file: File, into: Conversation) {
         if (CodexRollout.isRoot(file) && CodexRollout.baseOf(file) == null) return
         val name = CodexRollout.nameOf(file) ?: return
-        val root = file.parentFile?.parentFile?.parentFile?.parentFile ?: return
+        val root = CodexRollout.rootOf(file) ?: return
         val siblings = CodexRollout.filesOf(root, name.thread, fresh = true).associateBy { CodexRollout.nameOf(it)?.key }
-        val kept = CodexRollout.partsOf(file) { siblings[it] }.dropLast(1)
+        val kept = CodexRollout.partsOf(file) { key -> siblings[key] ?: CodexRollout.fileByKey(root, name.thread, key) }.dropLast(1)
         if (kept.isEmpty()) return
         CodexRollout.useParts(kept) { lines -> lines.forEach { take(into, it) } }
     }

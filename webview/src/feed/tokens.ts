@@ -249,6 +249,16 @@ const isToken = (value: unknown): value is UserToken => {
 }
 
 /**
+ * The pieces of a message as another side handed them over - or null when they are not pieces after all.
+ *
+ * The queue's rows are drawn from what the IDE carries (see QueuedMessage.tokens), and a row is drawn on
+ * every render of the panel: a malformed piece would take the panel down with it rather than one row,
+ * which then simply falls back to the text.
+ */
+export const tokensOf = (value: unknown): UserToken[] | null =>
+  Array.isArray(value) && value.length > 0 && value.every(isToken) ? value : null
+
+/**
  * Takes the attachments back out of the clipboard.
  *
  * The attribute's value is encoded, so there can be no quotation marks inside - we read it with an

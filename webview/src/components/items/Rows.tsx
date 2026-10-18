@@ -5,6 +5,9 @@ import { compactProgress } from '../../feed/compact'
 import { plainLine } from '../../feed/markdown'
 import { formatTokens } from '../../feed/build'
 import { limitWindowName } from '../../feed/usage'
+import { clockOrDate } from '../../feed/when'
+import { carryOnShown } from '../../feed/carryOn'
+import { fastReasonText } from '../../feed/fastMode'
 import { useNow } from '../../hooks/useNow'
 import { useT } from '../../i18n'
 import type { Dict } from '../../i18n/en'
@@ -17,6 +20,8 @@ import type {
   MetaItem,
   ModLogItem,
   ModelStuckItem,
+  FastModeItem,
+  SessionInfoItem,
   ModelSwitchItem,
   OutrankedItem,
   RetryItem,
@@ -24,7 +29,9 @@ import type {
 } from '../../feed/types'
 import s from '../feed.module.css'
 import { Caret } from './Caret'
+import { CopyButton } from './CopyButton'
 import { FORK_WHOLE, forkCodeOf } from '../../feed/rewind'
+import { resumeCommand, resumeNote } from '../../feed/sessionInfo'
 import { refusalWords } from '../RewindDialog'
 
 /**
@@ -375,6 +382,27 @@ export const ModelStuckRow = ({ item }: { item: ModelStuckItem }) => {
 }
 
 /**
+ * Fast mode was asked for, and Codex ran without it (see FastModeItem): why, in the panel's words, and what
+ * that means for the turns going on - the same quiet shape as the row above it.
+ */
+export const FastModeRow = ({ item }: { item: FastModeItem }) => {
+  const t = useT()
+
+  return (
+    <div className={s.modelSwitch}>
+      <span className={s.modelSwitchLabel}>{t.fast.row.label}</span>
+      <div className={s.modelSwitchBody}>
+        <p className={s.modelSwitchLine}>
+          <span className={s.modelSwitchTo}>{t.fast.row.title}</span>
+          <span className={s.modelSwitchNote}>{fastReasonText(t, item.reason)}</span>
+        </p>
+        <p className={s.modelSwitchReason}>{t.fast.row.hint}</p>
+      </div>
+    </div>
+  )
+}
+
+/**
  * What a compaction card says: the panel's own words, built from the figures the CLI gave.
  *
  * `target` is only ever the CLI's own line (the error of a failed compaction) and is shown as it came.
@@ -401,12 +429,11 @@ const untilReset = (resetsAt: number | undefined, now: number): string | null =>
   if (minutes < 60) return `${minutes}m`
 
   const hours = Math.floor(minutes / 60)
+  // A weekly window, and a spending cap's month, are days off for most of their life, and "335h 12m" is a number
+  // one has to divide in one's head before it means anything (the same shape as timeLeft in feed/usage.ts).
+  if (hours >= 24) return `${Math.floor(hours / 24)}d ${hours % 24}h`
   return `${hours}h ${minutes % 60}m`
 }
-
-/** The reset time as a clock reading: what one compares against one's own day. */
-const resetClock = (resetsAt: number): string =>
-  new Date(resetsAt).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
 
 /**
  * The subscription limit ran out (see LimitItem). Deliberately not red: nothing has broken.
@@ -439,9 +466,58 @@ export const LimitRow = ({ item }: { item: LimitItem }) => {
         {item.state === 'extra' ? t.feed.limit.extra(named) : t.feed.limit.waiting(named)}
       </span>
       {item.state === 'waiting' && item.resetsAt !== undefined && left ? (
-        <span className={s.limitWhen}>{t.feed.limit.resetAt(resetClock(item.resetsAt), left)}</span>
+        <span className={s.limitWhen}>{t.feed.limit.resetAt(clockOrDate(item.resetsAt, now), left)}</span>
       ) : null}
       <div className={s.spacer} />
+    </div>
+  )
+}
+
+/**
+ * When the IDE carries this conversation on by itself (see PanelState.carryOn): a limit refused the turn,
+ * and the work resumes once the window resets - or at once, if the tab is moved to an account with room.
+ *
+ * Said where the next turn will begin rather than on the limit's own row: it is about what comes next, and
+ * the row about the limit goes away at the reset, which is exactly when this happens. Not a warning colour:
+ * nothing is wrong, the panel is saying what it will do. And a way to say no, because what it will do is
+ * start work in a conversation the person may have walked away from.
+ */
+export const CarryOnRow = ({
+  carryOn,
+  running,
+  onCancel,
+}: {
+  carryOn: { at: number; guess: boolean }
+  /** A turn is running - the row stands down over it (see carryOnShown). */
+  running: boolean
+  /** Absent where the screen cannot answer the IDE - then the row only tells. */
+  onCancel?: () => void
+}) => {
+  const t = useT()
+  // The moment is the IDE's clock, so it is measured against the IDE's clock - a phone's runs apart (see useNow).
+  const clockNow = useNow()
+  const [now, setNow] = useState(clockNow)
+
+  // The same tick as the limit's row beside it: enough to stand down within seconds of the moment.
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(clockNow()), LIMIT_TICK_MS)
+    return () => window.clearInterval(timer)
+  }, [clockNow])
+
+  if (!carryOnShown(carryOn, running, now)) return null
+
+  const clock = clockOrDate(carryOn.at, now)
+
+  return (
+    <div className={s.carryOn}>
+      <span className={s.carryOnLabel}>{t.feed.auto.label}</span>
+      <span className={s.carryOnText}>{carryOn.guess ? t.feed.carryOn.guessed(clock) : t.feed.carryOn.planned(clock)}</span>
+      <div className={s.spacer} />
+      {onCancel ? (
+        <button type="button" className={s.carryOnCancel} onClick={onCancel}>
+          {t.feed.carryOn.cancel}
+        </button>
+      ) : null}
     </div>
   )
 }
@@ -498,6 +574,56 @@ export const OutrankedRow = ({ item, onOpen }: { item: OutrankedItem; onOpen?: (
           {t.feed.outranked.open}
         </button>
       ) : null}
+    </div>
+  )
+}
+
+/**
+ * `/status`: the conversation's id, and the command that resumes it in a terminal opened in the project's
+ * folder - the folder the resumed conversation works in. The command and what the caption says about it are the
+ * fork's (see feed/sessionInfo.ts): `codex resume`, and the account it runs on.
+ *
+ * A title and fields under it rather than a table: each field is a caption saying what the value is for, and
+ * the value itself as a plate that copies whole on a click - copying is all these lines are for, and a plate is
+ * a bigger target than a square beside a long id. Stacked, the card reads the same at any width.
+ */
+export const SessionInfoRow = ({ item }: { item: SessionInfoItem }) => {
+  const t = useT()
+  const words = t.feed.session
+
+  return (
+    <div className={s.sessionInfo}>
+      <span className={s.sessionInfoTitle}>{words.label}</span>
+      {item.conversationId ? (
+        <>
+          <SessionInfoField name={words.id} value={item.conversationId} />
+          <SessionInfoField name={words.terminal} note={resumeNote(item, words)} value={resumeCommand(item)} />
+        </>
+      ) : (
+        <p className={s.sessionInfoEmpty}>{words.none}</p>
+      )}
+    </div>
+  )
+}
+
+/** One field of SessionInfoRow: what the value is, what it is for, and the value as a plate that copies. */
+const SessionInfoField = ({ name, note, value }: { name: string; note?: string; value: string }) => {
+  const t = useT()
+
+  return (
+    <div className={s.sessionInfoField}>
+      <p className={s.sessionInfoCaption}>
+        <span className={s.sessionInfoName}>{name}</span>
+        {note ? <span className={s.sessionInfoNote}>{note}</span> : null}
+      </p>
+      <CopyButton
+        text={value}
+        className={s.sessionInfoValue}
+        iconClassName={s.sessionInfoIcon}
+        title={t.feed.copy.click}
+      >
+        <code className={s.sessionInfoText}>{value}</code>
+      </CopyButton>
     </div>
   )
 }

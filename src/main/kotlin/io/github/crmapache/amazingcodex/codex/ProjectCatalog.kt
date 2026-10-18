@@ -267,98 +267,105 @@ internal class ProjectCatalog(
         )
     }
 
-    fun sendInit() {
+    fun sendInit() = hub.broadcastProject(initMessage())
+
+    /**
+     * The project and the machine's settings as they stand right now - what [sendInit] says, and what a
+     * client joining later is handed (see CodexSessionHub.attach).
+     */
+    fun initMessage(): String {
         val preferences = CodexPreferences.snapshot()
 
-        hub.broadcastProject(
-            buildJsonObject {
-                put("type", "init")
-                put("projectName", project.name)
-                put("workingDirectory", project.basePath.orEmpty())
-                ProjectFacts.gitBranch(project)?.let { put("gitBranch", it) }
-                // The panel's own version, shown at the foot of the menu. Asked of the platform rather
-                // than kept as a constant of ours: a second copy of a number that Gradle already patches
-                // into plugin.xml is a number that will one day disagree with it.
-                //
-                pluginVersion?.let { put("pluginVersion", it) }
-                // The choice of model and the rest outlives an IDE restart: looking for it again after
-                // every opening is the same as not saving it at all.
-                putJsonObject("preferences") {
-                    // What "as last chosen" comes to right now - the account in use first, the machine's
-                    // last pick after it - rather than the machine's pick alone (see StartingChoice).
-                    put("model", StartingChoice.unpinnedModel())
-                    put("effort", StartingChoice.unpinnedEffort())
-                    put("contextMode", preferences.contextMode)
-                    // What a new tab is PINNED to, beside what was last chosen above. Two values rather
-                    // than one, and the empty one is the point: empty means "whatever was last chosen"
-                    // (see CodexPreferences.newTabModel).
-                    put("newTabModel", preferences.newTabModel)
-                    put("newTabEffort", preferences.newTabEffort)
-                    put("newTabContextMode", preferences.newTabContextMode)
-                    // And the answer an untouched tab is drawn by, worked out here and only here - the
-                    // chip over it promises the process the IDE will launch (see sendNewTabDefaults).
-                    put("startingModel", StartingChoice.model())
-                    put("startingEffort", StartingChoice.effort())
-                    put("startingContextMode", StartingChoice.contextMode())
-                    // With the same value the process will genuinely come up with: the selector in the
-                    // panel has to tell the truth from the first second. Never chosen at all - we take
-                    // Codex's own default, the way the terminal takes it (see
-                    // PermissionDefaultMode).
-                    put(
-                        "mode",
-                        PermissionModes.resolve(
-                            preferences.mode,
-                            fallback = PermissionDefaultMode.of(project.basePath),
-                        ),
-                    )
-                    if (preferences.composerLayout.isNotEmpty()) put("composerLayout", preferences.composerLayout)
-                    // Sent only when chosen, like the layout above: an absent value means the panel's own
-                    // default rather than "never fold", and the two must not be confused.
-                    if (preferences.pasteCollapse.isNotEmpty()) put("pasteCollapse", preferences.pasteCollapse)
-                    // And which key sends. Sent unconditionally, unlike the two above: an empty value
-                    // says "Enter", which is a real answer here rather than an absent one - a panel
-                    // that has never been asked sends on Enter (see normalizeSendKey).
-                    put("sendKey", preferences.sendKey)
-                    // And how much colour the gauges keep. Unconditional like the send key: a hundred is
-                    // an answer rather than a missing one - a panel nobody has asked draws the ladder.
-                    put("calmVivid", preferences.gaugeVivid)
-                    // And which indicators around the field are switched off. Unconditional too: an empty
-                    // list says "all of them shown", the answer a panel nobody has asked gives by itself.
-                    putJsonArray("hiddenIndicators") { preferences.hiddenIndicators.forEach { add(it) } }
-                    // Two values rather than one, and the empty one is not the useless one: `language`
-                    // is the explicit choice and is usually empty, `ideLanguage` is what the IDE itself
-                    // is set to. Empty means "speak whatever the IDE speaks", and the picker needs the
-                    // second value to say which language that is right now instead of promising
-                    // something unnamed.
-                    put("language", preferences.language)
-                    put("ideLanguage", IdeLanguage.current())
-                    // Whether the tabs come back after a restart. Unconditional: "on" is the answer a
-                    // panel nobody has asked gives, and it is a real one (see CodexPreferences.restoreTabs).
-                    put("restoreTabs", preferences.restoreTabs)
-                    // Whether a message carries what the editor shows. Unconditional for the same reason:
-                    // "on" is the default (see CodexPreferences.shareEditor).
-                    put("shareEditor", preferences.shareEditor)
+        return buildJsonObject {
+            put("type", "init")
+            put("projectName", project.name)
+            put("workingDirectory", project.basePath.orEmpty())
+            ProjectFacts.gitBranch(project)?.let { put("gitBranch", it) }
+            // The panel's own version, shown at the foot of the menu. Asked of the platform rather
+            // than kept as a constant of ours: a second copy of a number that Gradle already patches
+            // into plugin.xml is a number that will one day disagree with it.
+            //
+            pluginVersion?.let { put("pluginVersion", it) }
+            // The choice of model and the rest outlives an IDE restart: looking for it again after
+            // every opening is the same as not saving it at all.
+            putJsonObject("preferences") {
+                // What "as last chosen" comes to right now - the account in use first, the machine's
+                // last pick after it - rather than the machine's pick alone (see StartingChoice).
+                put("model", StartingChoice.unpinnedModel())
+                put("effort", StartingChoice.unpinnedEffort())
+                put("contextMode", preferences.contextMode)
+                // What a new tab is PINNED to, beside what was last chosen above. Two values rather
+                // than one, and the empty one is the point: empty means "whatever was last chosen"
+                // (see CodexPreferences.newTabModel).
+                put("newTabModel", preferences.newTabModel)
+                put("newTabEffort", preferences.newTabEffort)
+                put("newTabContextMode", preferences.newTabContextMode)
+                // And the answer an untouched tab is drawn by, worked out here and only here - the
+                // chip over it promises the process the IDE will launch (see sendNewTabDefaults).
+                put("startingModel", StartingChoice.model())
+                put("startingEffort", StartingChoice.effort())
+                put("startingContextMode", StartingChoice.contextMode())
+                // With the same value the process will genuinely come up with: the selector in the
+                // panel has to tell the truth from the first second. Never chosen at all - we take
+                // Codex's own default, the way the terminal takes it (see
+                // PermissionDefaultMode).
+                put(
+                    "mode",
+                    PermissionModes.resolve(
+                        preferences.mode,
+                        fallback = PermissionDefaultMode.of(project.basePath),
+                    ),
+                )
+                if (preferences.composerLayout.isNotEmpty()) put("composerLayout", preferences.composerLayout)
+                // Sent only when chosen, like the layout above: an absent value means the panel's own
+                // default rather than "never fold", and the two must not be confused.
+                if (preferences.pasteCollapse.isNotEmpty()) put("pasteCollapse", preferences.pasteCollapse)
+                // And which key sends. Sent unconditionally, unlike the two above: an empty value
+                // says "Enter", which is a real answer here rather than an absent one - a panel
+                // that has never been asked sends on Enter (see normalizeSendKey).
+                put("sendKey", preferences.sendKey)
+                // And how much colour the gauges keep. Unconditional like the send key: a hundred is
+                // an answer rather than a missing one - a panel nobody has asked draws the ladder.
+                put("calmVivid", preferences.gaugeVivid)
+                // And which indicators around the field are switched off. Unconditional too: an empty
+                // list says "all of them shown", the answer a panel nobody has asked gives by itself.
+                putJsonArray("hiddenIndicators") { preferences.hiddenIndicators.forEach { add(it) } }
+                // Two values rather than one, and the empty one is not the useless one: `language`
+                // is the explicit choice and is usually empty, `ideLanguage` is what the IDE itself
+                // is set to. Empty means "speak whatever the IDE speaks", and the picker needs the
+                // second value to say which language that is right now instead of promising
+                // something unnamed.
+                put("language", preferences.language)
+                put("ideLanguage", IdeLanguage.current())
+                // Whether the tabs come back after a restart. Unconditional: "on" is the answer a
+                // panel nobody has asked gives, and it is a real one (see CodexPreferences.restoreTabs).
+                put("restoreTabs", preferences.restoreTabs)
+                // Whether a message carries what the editor shows. Unconditional for the same reason:
+                // "on" is the default (see CodexPreferences.shareEditor).
+                put("shareEditor", preferences.shareEditor)
+                // Whether the text fields check spelling. Unconditional, and "on" by default like the
+                // two above (see CodexPreferences.spellcheck).
+                put("spellcheck", preferences.spellcheck)
+            }
+            // What the improve button asks for. Both texts: the screen shows the built-in one as what
+            // is in force while nothing of one's own has been put in, and it is also what the restore
+            // button restores - a default the screen cannot name is a default nobody edits.
+            putJsonObject("improve") {
+                put("instructions", preferences.improveInstructions)
+                put("builtIn", PromptImprover.BUILT_IN_INSTRUCTIONS)
+            }
+            // The sound settings are also a choice made once.
+            putJsonObject("sounds") {
+                putJsonArray("muted") {
+                    CodexPreferences.mutedSounds.filter { it in AlertSounds.ids }.forEach { add(it) }
                 }
-                // What the improve button asks for. Both texts: the screen shows the built-in one as what
-                // is in force while nothing of one's own has been put in, and it is also what the restore
-                // button restores - a default the screen cannot name is a default nobody edits.
-                putJsonObject("improve") {
-                    put("instructions", preferences.improveInstructions)
-                    put("builtIn", PromptImprover.BUILT_IN_INSTRUCTIONS)
+                putJsonObject("volumes") {
+                    CodexPreferences.soundVolumes
+                        .filterKeys { it in AlertSounds.ids }
+                        .forEach { (id, volume) -> put(id, volume) }
                 }
-                // The sound settings are also a choice made once.
-                putJsonObject("sounds") {
-                    putJsonArray("muted") {
-                        CodexPreferences.mutedSounds.filter { it in AlertSounds.ids }.forEach { add(it) }
-                    }
-                    putJsonObject("volumes") {
-                        CodexPreferences.soundVolumes
-                            .filterKeys { it in AlertSounds.ids }
-                            .forEach { (id, volume) -> put(id, volume) }
-                    }
-                }
-            }.toString(),
-        )
+            }
+        }.toString()
     }
 
     fun refreshBranch() {
@@ -1244,9 +1251,10 @@ internal class ProjectCatalog(
 
         /**
          * "Today's tokens" is the most expensive thing done in the background, and by a wide margin:
-         * every project's transcripts, every line of every file touched in the last two days, parsed as
-         * JSON. So it gets a round of its own - the figure creeps rather than jumps, and five minutes of
-         * staleness on it costs nothing.
+         * every project's transcripts, every answer in every file touched in the last two days, parsed as
+         * JSON - and on the very first round every file there is, to fill the statistics' tokens by day
+         * (see TranscriptTokens). So it gets a round of its own - the figure creeps rather than jumps, and
+         * five minutes of staleness on it costs nothing.
          */
         val tokens = AppExecutorUtil.getAppScheduledExecutorService().scheduleWithFixedDelay(
             { if (hub.hasClients()) usage.refreshTodayTokens() },

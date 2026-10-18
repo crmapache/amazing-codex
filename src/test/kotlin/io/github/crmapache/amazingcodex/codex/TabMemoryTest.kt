@@ -43,6 +43,8 @@ class TabMemoryTest {
             tabs = listOf(
                 tab("main", conversation = "c-1"),
                 tab("b", conversation = "c-2", parent = "main", draft = """{"tokens":[{"kind":"text","value":"half a"}],"quotes":[]}"""),
+                // Fast mode was asked for this conversation, and it comes back asking (see SessionLaunch.fast).
+                tab("c", conversation = "c-3").copy(fast = true),
             ),
         )
 
@@ -163,5 +165,34 @@ class TabMemoryTest {
         assertNotEquals(one, two)
         assertTrue(one.name.startsWith("repo-"))
         assertEquals(one, TabMemory.fileFor("/work/repo", root))
+    }
+
+    /* A tab closed by mistake a minute before the IDE went down is the one somebody reaches for after it is up. */
+    @Test
+    fun `the tabs closed by hand are kept with the list, where they stood`() {
+        val state = TabMemory.State(
+            active = "main",
+            tabs = listOf(tab("main", conversation = "c-1")),
+            closed = listOf(
+                TabMemory.Closed(
+                    tab = tab("f", conversation = "c-3", parent = "main", draft = """{"tokens":[{"kind":"text","value":"half"}],"quotes":[]}"""),
+                    groupId = "main",
+                    depth = 1,
+                    groupsLeft = listOf("other"),
+                    tabsLeft = listOf("main"),
+                    closedAt = 1_700_000_000_000,
+                ),
+            ),
+        )
+
+        val back = TabMemory.decode(TabMemory.encode(state))
+        assertEquals(state, back)
+        // And through the filter of what comes back on the strip: the closed ones are not on it, and are not lost.
+        assertEquals(state.closed, TabMemory.restorable(back!!).closed)
+    }
+
+    @Test
+    fun `a file written before closed tabs were kept reads with none`() {
+        assertEquals(emptyList(), TabMemory.decode("""{"version":1,"tabs":[{"id":"main","title":"x"}]}""")?.closed)
     }
 }

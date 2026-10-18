@@ -1,0 +1,141 @@
+/*
+ * The picture under the pointer - see ImagePreview.tsx for why it is one element in the body.
+ *
+ * Dressed as a hover hint (the same deep background, line and shadow - see tooltip.module.css), because
+ * that is what it is: something the pointer brings up and takes away, not a window to work in.
+ */
+.frame {
+  position: fixed;
+  left: 0;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: max-content;
+  padding: 4px;
+  border-radius: var(--acc-r-lg);
+  background: var(--acc-bg-deep);
+  border: 1px solid var(--acc-line-strong);
+  box-shadow: var(--acc-shadow-menu);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-2px);
+  transition:
+    opacity 0.12s ease,
+    transform 0.12s ease;
+  /* The pointer goes straight through: the preview stands over the chip's neighbours, and a picture that
+     caught the pointer would hide itself the moment it appeared (the chip under it is no longer hovered). */
+  pointer-events: none;
+  /* The hints' own level: the two never show at once - a chip with a picture carries no hint. */
+  z-index: 60;
+}
+
+.frame[data-side='top'] {
+  transform: translateY(2px);
+}
+
+.frame[data-open] {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+/*
+ * As large as the panel allows and no larger than a glance needs: a screenshot reads at three hundred
+ * pixels across, and a panel dragged narrow still keeps the whole picture inside the window rather than
+ * cut at its edge. A picture smaller than that stays its own size - blown up, an icon is a blur.
+ *
+ * The checks show through a transparent picture: a dark logo on the panel's dark background is otherwise
+ * not there at all.
+ */
+.image {
+  display: block;
+  max-width: min(360px, calc(100vw - 26px));
+  max-height: min(300px, calc(100vh - 60px));
+  border-radius: var(--acc-r-sm);
+  background-color: var(--acc-bg-card);
+  background-image:
+    linear-gradient(45deg, var(--acc-bg-control) 25%, transparent 25%, transparent 75%, var(--acc-bg-control) 75%),
+    linear-gradient(45deg, var(--acc-bg-control) 25%, transparent 25%, transparent 75%, var(--acc-bg-control) 75%);
+  background-size: 12px 12px;
+  background-position:
+    0 0,
+    6px 6px;
+}
+
+/* A picked picture's path, whole: the chip cuts it in the middle, and two pictures with long names alike are
+   told apart by nothing else. As wide as the widest picture, wrapped anywhere past it - a path has no spaces
+   to wrap at. */
+.name {
+  max-width: min(360px, calc(100vw - 26px));
+  padding: 0 3px;
+  font: 10px/1.3 var(--acc-mono);
+  color: var(--acc-fg);
+  overflow-wrap: anywhere;
+}
+
+.name[hidden] {
+  display: none;
+}
+
+/* Under the picture: its size, and what a click does where it does something. Figures rather than words,
+   mostly - nothing on screen said how large the picture is. */
+.caption {
+  padding: 0 3px 1px;
+  font: 10px/1.3 var(--acc-mono);
+  color: var(--acc-fg-dim);
+  white-space: nowrap;
+}
+
+/* Coming from the IDE: a frame the size of a small picture, breathing, so the wait reads as a wait. */
+.frame[data-state='loading'] .image {
+  display: none;
+}
+
+.frame[data-state='loading'] .caption {
+  display: none;
+}
+
+.frame[data-state='loading']::before {
+  content: '';
+  display: block;
+  width: 120px;
+  height: 80px;
+  border-radius: var(--acc-r-sm);
+  background: var(--acc-bg-control);
+  animation: breathe 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes breathe {
+  from {
+    opacity: 0.45;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .frame[data-state='loading']::before {
+    animation: none;
+  }
+}
+
+/* Nothing to show: the words alone, in a hint's own size and colour - under the name, when there is one, so
+   it is clear which file is gone. */
+.frame[data-state='missing'] .image {
+  display: none;
+}
+
+.frame[data-state='missing'] .name {
+  max-width: 220px;
+  padding: 0 4px;
+}
+
+.frame[data-state='missing'] .caption {
+  max-width: 220px;
+  padding: 0 4px;
+  font: 11px/1.3 var(--acc-font);
+  color: var(--acc-fg);
+  white-space: normal;
+}

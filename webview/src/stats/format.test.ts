@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { addDays, dayNumber, daysBetween, weekday } from './dates'
-import { clock, compactNumber, duration, durationDelta, durationTight, groupThousands, longDate, money, shortDate, turnLength } from './format'
+import { clock, compactNumber, duration, durationDelta, durationTight, groupThousands, longDate, money, shortDate, tokenMillions, tokenScale, turnLength } from './format'
 
 describe('figures', () => {
   it('sets thousands off with a narrow space', () => {
@@ -15,6 +15,18 @@ describe('figures', () => {
     expect(compactNumber(18430)).toBe('18.4k')
     expect(compactNumber(100_000)).toBe('100k')
     expect(compactNumber(41_200_000)).toBe('41.2M')
+  })
+
+  it('says tokens in millions, and on a scale as short as it gets', () => {
+    expect(tokenMillions(2_794_300_000)).toBe('2 794M')
+    expect(tokenMillions(586_000_000)).toBe('586M')
+    expect(tokenMillions(18_430)).toBe('18.4k')
+    expect(tokenScale(0)).toBe('0')
+    expect(tokenScale(500_000_000)).toBe('500M')
+    expect(tokenScale(1_000_000_000)).toBe('1B')
+    expect(tokenScale(1_500_000_000)).toBe('1.5B')
+    expect(tokenScale(2_500_000)).toBe('2.5M')
+    expect(tokenScale(500_000)).toBe('500k')
   })
 
   it('says minutes as hours and minutes', () => {

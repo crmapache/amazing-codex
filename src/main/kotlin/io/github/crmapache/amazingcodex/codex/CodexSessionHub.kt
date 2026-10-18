@@ -1,6 +1,5 @@
 package io.github.crmapache.amazingcodex.codex
 
-import io.github.crmapache.amazingcodex.codex.accounts.CodexAccounts
 
 import io.github.crmapache.amazingcodex.codex.accounts.AccountIdentity
 
@@ -12,25 +11,35 @@ import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.util.Disposer
+import com.intellij.openapi.vfs.VfsUtilCore
 import com.intellij.util.concurrency.AppExecutorUtil
 import io.github.crmapache.amazingcodex.codex.accounts.AccountDesk
+import io.github.crmapache.amazingcodex.codex.accounts.AccountStore
 import io.github.crmapache.amazingcodex.codex.accounts.AccountsWatch
+import io.github.crmapache.amazingcodex.codex.accounts.CodexAccounts
+import io.github.crmapache.amazingcodex.editor.ChangeRevert
 import io.github.crmapache.amazingcodex.editor.DiskRefresh
 import io.github.crmapache.amazingcodex.editor.EditorContext
+import io.github.crmapache.amazingcodex.editor.FileReverts
+import io.github.crmapache.amazingcodex.editor.OpenInEditor
 import io.github.crmapache.amazingcodex.editor.UnsavedEdits
 import io.github.crmapache.amazingcodex.feedback.DiagnosticsLog
 import io.github.crmapache.amazingcodex.remote.LocalBridgeServer
 import io.github.crmapache.amazingcodex.remote.NotificationReasons
 import io.github.crmapache.amazingcodex.remote.RemoteAgent
 import io.github.crmapache.amazingcodex.search.SearchDesk
+import io.github.crmapache.amazingcodex.scenario.LimitRelief
 import io.github.crmapache.amazingcodex.scenario.ScenarioDesk
 import io.github.crmapache.amazingcodex.remote.RemoteKeys
 import io.github.crmapache.amazingcodex.remote.RemoteState
 import io.github.crmapache.amazingcodex.stats.StatsCollector
 import io.github.crmapache.amazingcodex.usage.UsageReporter
+import io.github.crmapache.amazingcodex.webview.ImagePreviews
+import io.github.crmapache.amazingcodex.webview.PastedFiles
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.TimeUnit
 import kotlinx.serialization.json.JsonObject
@@ -39,6 +48,8 @@ import kotlinx.serialization.json.add
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
@@ -78,7 +89,9 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
             onEvent = { sessionId, line -> onAgentLine(sessionId, line) },
             onError = { sessionId, text -> sendError(sessionId, text) },
             onDiagnostic = { sessionId, text -> diagnostics.forEach { it(sessionId, text) } },
-            onFinished = { sessionId -> sendStatus(sessionId, SessionSnapshot.STATUS_IDLE) },
+            onFinished = { sessionId ->
+                sendStatus(sessionId, SessionSnapshot.STATUS_IDLE)
+            },
             onCrashed = { sessionId, exitCode -> sendProcessExited(sessionId, exitCode) },
             onToolPermission = { sessionId, request -> permissionListener?.invoke(sessionId, request) },
             // Straight to the owner of the cards rather than through a listener of its own: a question
@@ -121,14 +134,30 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
                 permissions.withdrawAll(sessionId)
                 sendTurnStopped(sessionId)
             },
-            onProcessDropping = { sessionId ->
-                permissions.withdrawAll(sessionId)
+            onProcessDropping = { sessionId, kept ->
+                // Read before the swap is announced: the announcement is what clears the count (see
+                // SessionSnapshot). Agents working in the background die with the process without a word, and
+                // the agent that started them goes on waiting for reports that are never coming. Agents nobody
+                // has heard from for long are a stuck count rather than work (see CarryOns.helpersAtWork).
+                val held = snapshot(sessionId).get()
+                val heard = maxOf(helpersHeard[sessionId] ?: 0L, held.changedAt)
+                if (CarryOns.helpersAtWork(held.pendingAgents.isNotEmpty(), heard, System.currentTimeMillis())) {
+                    conversations.oweCarryOn(sessionId, CarryOns.Owed(CarryOns.Reason.RESTART, helpersLost = true))
+                }
+                // Not the plan the next process holds as its own (see CodexSession.HeldPlan): its card stays live.
+                permissions.withdrawAll(sessionId, except = kept)
                 sendProcessReplaced(sessionId)
             },
-            onBorn = { sessionId, effort, model, contextMode, accountId ->
+            onReplacedQuietly = { sessionId -> afterQuietSwap(sessionId) },
+            onCarryOnChanged = { sessionId -> carryOnChanged(sessionId) },
+            // What a conversation still has to say goes in the one pass that decides what is said next (see
+            // sayNext) - asked for here when it lands after the turn's end has already been said.
+            onUnsentWaiting = { sessionId -> runQueued(sessionId) },
+            onBorn = { sessionId, effort, model, contextMode, accountId, fast ->
                 sendEffort(sessionId, effort)
+                fast?.let { sendFastMode(sessionId, it) }
                 sendModel(sessionId, model)
-                sendContextMode(sessionId, contextMode)
+                sendContextMode(sessionId, contextMode, born = true)
                 sendAccount(sessionId, accountId)
                 // And the models that account may run. Once per account rather than per tab (see
                 // ProjectUsage.refreshModels): a conversation resumed onto the account it was billed to
@@ -254,6 +283,14 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
     private val clients = ConcurrentHashMap<String, SessionClient>()
 
     private val journals = ConcurrentHashMap<String, SessionJournal>()
+
+    /**
+     * The numbering each closed tab's journal stopped at, by tab. A tab comes back under its own identifier (see
+     * [reopenTab]), and its new journal carries on from here rather than from one: a phone that was away across the
+     * close holds a number from the old journal, and a journal counting from one again had nothing after it - the
+     * phone settled on the old feed and never showed what came after the tab was back.
+     */
+    private val closedJournals = ConcurrentHashMap<String, Long>()
     private val snapshots = ConcurrentHashMap<String, AtomicReference<SessionSnapshot>>()
     private val streams = ConcurrentHashMap<String, SessionStream>()
 
@@ -354,6 +391,12 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
      * would stand above the history it answers, and the seam under it.
      */
     private val forkOpenings = ConcurrentHashMap<String, CountDownLatch>()
+
+    /** The tabs closed by hand, to be opened again - see [ClosedTabs] and [reopenTab]. */
+    private val closedTabs = ClosedTabs()
+
+    /** Held while a closed tab is opened again: two presses of the key are two tabs, one after the other. */
+    private val reopening = Any()
 
     init {
         // Where the CLI keeps its files for this project is a process to find out on a WSL project, and
@@ -482,12 +525,15 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         val client = clients[clientId] ?: return
 
         val batch = ArrayList<String>()
+        refreshInit()
         batch += projectMessages()
         batch += sessionsMessage()
         // Which tab to put on screen: the one that was there when the panel was last closed or reloaded.
         // Said to the panel alone - a phone chooses its own conversation - and said even when there is
         // none to name, because the panel waits for this word before reporting its own (see App).
         if (client.isLocal) batch += activeTabMessage()
+        // The tabs that can be opened again, for "Recently closed" - to the desk alone, like the tab on screen.
+        if (client.isLocal) batch += closedTabsMessage()
 
         // The registry's tabs, plus any conversation that has a journal without being in it. The second
         // part should never happen - a tab is opened before anything is said in it - but a feed that
@@ -496,11 +542,19 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         for (sessionId in known + journals.keys.filterNot { it in known }) {
             if (!catchUp.wants(sessionId)) continue
 
-            val seen = since[sessionId] ?: 0
             val journal = journal(sessionId)
+            // What a client holds of a feed the journal has started over from is nothing (see SessionJournal.wiped).
+            val seen = (since[sessionId] ?: 0).takeUnless(journal::wiped) ?: 0
             val tail = journal.tail(seen, catchUp.budget())
 
             batch += restoreStarted(sessionId, from = seen, truncated = tail.truncated)
+
+            // A feed built from nothing gets the window's last exact figure first (see lastContextMessage).
+            if (seen == 0L || tail.truncated) lastContextMessage(sessionId)?.let { batch += it }
+            // And whether fast mode is asked for, ahead of the tail too: the feed notes "it did not turn on" by
+            // what Codex said at each turn of the tail and by the ask (see noteFastReport in feed/build.ts),
+            // and told after the tail, a client would rebuild the feed without the notes the others saw.
+            conversations.fastMode(sessionId)?.let { batch += fastModeMessage(sessionId, it) }
 
             tail.entries.forEach { entry -> batch += SessionMessages.stamp(entry.json, entry.seq, entry.at) }
 
@@ -530,7 +584,7 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
             // of its own, and then that choice is (see [plannedMessages]).
             conversations.effort(sessionId)?.let { batch += effortMessage(sessionId, it) }
             conversations.model(sessionId)?.let { batch += modelMessage(sessionId, it) }
-            conversations.contextMode(sessionId)?.let { batch += contextModeMessage(sessionId, it) }
+            conversations.contextMode(sessionId)?.let { batch += contextModeMessage(sessionId, it, born = true) }
             batch += plannedMessages(sessionId)
             conversations.conversationIdOf(sessionId)?.let { batch += conversationMessage(sessionId, it) }
             batch += accountMessage(sessionId, conversations.accountOf(sessionId))
@@ -885,10 +939,12 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
      * [replay] marks a past conversation being read off disk rather than a live turn - the mark travels
      * onwards untouched, because the interface treats the two differently (see feed/build.ts).
      */
-    fun onAgentLine(sessionId: String, line: String, replay: Boolean = false) {
+    fun onAgentLine(sessionId: String, incoming: String, replay: Boolean = false) {
         // Not an event at all - there is nothing to put into an envelope. A live process does not bring
         // such a line this far (see CodexSession.noteDiagnostic), but an old transcript may hold one.
-        if (!line.startsWith("{")) return
+        if (!incoming.startsWith("{")) return
+
+        val line = incoming
 
         // A process reporting what it came up with names every command it knows, the MCP servers' ones
         // included - the one place they can be learned from at all (see ProjectCatalog.noteCommands).
@@ -907,6 +963,9 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         if (!replay && usage.noteRateLimit(sessionId, line)) {
             notificationListener?.invoke(sessionId, NotificationReasons.EXTRA_USAGE, "")
         }
+
+        // A limit that stopped this tab is waited out and the work carried on after it (see [noteLimitRefusal]).
+        if (!replay) noticeLimit(sessionId, line)
 
         rawListeners.forEach { it(sessionId, line, replay) }
 
@@ -957,6 +1016,40 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         // A turn is what names a new tab's conversation, and a /clear replaces it: this is the moment the
         // remembered list learns which conversation the tab now holds.
         rememberTabs()
+    }
+
+    /**
+     * `/status`'s answer (see SessionInfoRow): the tab's conversation id - the IDE's own note of it, which a reset of
+     * the panel's state does not take away - and what the row says about continuing it in a terminal (see
+     * ResumeLine). Only to whoever asked: it is an answer in the moment, not something the conversation said.
+     *
+     * [local] - asked by this IDE's own panel. Only that one is handed the account's drawer in a line: a phone is
+     * not handed the machine's paths (see RemoteFeed), and is told instead that a terminal of one's own continues
+     * on the default sign-in.
+     */
+    fun sessionInfo(sessionId: String, local: Boolean): String {
+        val conversationId = conversations.conversationIdOf(sessionId)
+        val accountId = conversations.accountOf(sessionId)
+        val accounts = CodexAccounts.getInstance()
+
+        return buildJsonObject {
+            put("type", "sessionInfo")
+            put("sessionId", sessionId)
+            if (conversationId == null) return@buildJsonObject
+
+            put("conversationId", conversationId)
+            val shell = CodexExecutable.rawEnvironment()
+            val line = ResumeLine.of(
+                conversationId,
+                account = accountId.ifEmpty { null }?.let(accounts::labelOf),
+                homes = if (local) accounts.terminalHomes(accountId, project.basePath) else null,
+                posix = !HostOs.isWindows,
+                carried = AccountStore.OUTRANKING_VARIABLES.filter { !shell[it].isNullOrEmpty() },
+            )
+            line.command?.let { put("resume", it) }
+            line.account?.let { put("account", it) }
+            if (line.onDefault) put("onDefault", true)
+        }.toString()
     }
 
     fun sendError(sessionId: String, text: String) {
@@ -1117,7 +1210,15 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         if (quote.isNotEmpty()) thisLogger().info("Session $id forked from $parentId")
     }
 
-    fun closeSession(id: String) {
+    /**
+     * [byPerson] is a close the person made - the cross, the panel's key - and only such a close is kept to be
+     * undone (see [reopenTab]). A tab the hub takes down itself, one whose conversation is gone from the disk
+     * after a restart (see [lostTranscript]), is not something anybody would want back.
+     */
+    fun closeSession(id: String, byPerson: Boolean = false) {
+        // While everything the tab held is still here: the draft, the queue, the conversation's id.
+        if (byPerson) keepClosed(id)
+
         // Before the conversation goes: a rewind it leaves unanswered is answered as the process goes (see
         // AwaitedControls), and finding its tab still holding a queue, it would send it - raising a process
         // for a tab nobody has any more.
@@ -1125,18 +1226,26 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         // What this conversation was waiting to say goes with it: there is nothing left to say it to.
         queued.clear(id)
         conversations.close(id)
+        forgetCarryOn(id)
         stats.noteSessionClosed(id)
-        // A tab closed is a tab forgotten: its draft goes with it, and the next start does not bring it back.
+        // Off the strip, and so off the list the next start brings back. What it held - its draft too - is kept with
+        // the tabs closed by hand when the person closed it (see keepClosed): it outlives a restart there, and is let
+        // go only when twenty newer closes push it out.
         remembered.remove(id)
         drafts.remove(id)
         asleepUntilSeen.remove(id)
         arrived.forget(id)
-        journals.remove(id)
+        // In one step with the removal: a journal asked for in between would count from one again.
+        journals.compute(id) { _, journal ->
+            journal?.let { closedJournals[id] = it.lastSeq() }
+            null
+        }
         snapshots.remove(id)
         streams.remove(id)
         locks.remove(id)
         tabs.close(id)
         broadcastSessions()
+        if (byPerson) sendClosedTabs()
     }
 
     /**
@@ -1212,6 +1321,10 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         if (!CodexPreferences.restoreTabs) return
 
         val saved = memory.load() ?: return
+        // The tabs closed by hand come back too, as tabs to be opened again: the one closed by mistake a
+        // minute before the IDE went down is exactly the one somebody reaches for after it is up.
+        closedTabs.load(saved.closed)
+
         val state = TabMemory.restorable(saved)
         if (state.tabs.isEmpty()) return
 
@@ -1244,7 +1357,13 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
             // Written down before the conversation is made, which is when it is read (see
             // CodexSessions.newSession) - and read again by the first message of a tab that holds only a
             // draft, which has no conversation to make yet.
-            val launch = SessionLaunch(model = tab.model, effort = tab.effort, mode = tab.mode, contextMode = tab.contextMode)
+            val launch = SessionLaunch(
+                model = tab.model,
+                effort = tab.effort,
+                mode = tab.mode,
+                contextMode = tab.contextMode,
+                fast = tab.fast,
+            )
             if (!launch.isEmpty) conversations.rememberLaunch(tab.id, launch)
 
             val conversation = tab.conversationId
@@ -1314,7 +1433,13 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
 
             remembered[sessionId] = tab.copy(conversationId = null)
             conversations.close(sessionId)
-            val launch = SessionLaunch(model = tab.model, effort = tab.effort, mode = tab.mode, contextMode = tab.contextMode)
+            val launch = SessionLaunch(
+                model = tab.model,
+                effort = tab.effort,
+                mode = tab.mode,
+                contextMode = tab.contextMode,
+                fast = tab.fast,
+            )
             if (!launch.isEmpty) conversations.rememberLaunch(sessionId, launch)
             if (!drafts.containsKey(sessionId) && !named) tabs.resetTitle(sessionId)
             resetJournal(sessionId)
@@ -1337,31 +1462,41 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
     }
 
     private fun rememberTabsNow() {
-        val list = tabs.tabs().map { tab ->
-            val before = remembered[tab.id]
-            val conversationId = conversations.conversationIdOf(tab.id) ?: before?.conversationId
-            TabMemory.Tab(
-                id = tab.id,
-                parentId = tab.parentId,
-                // Kept for a born fork too: its process may have named a conversation that never reached the disk
-                // (see restoreTabs). Only when already known - this runs on any thread, the panel's included.
-                forkOrigin = conversations.forkOriginIfKnown(tab.id) ?: before?.forkOrigin,
-                // Only for a fork whose origin is not worked out yet - kept by an older panel, or asked a moment
-                // ago and still being resolved.
-                forkBefore = before?.forkBefore.takeIf { conversationId == null && before?.forkOrigin == null },
-                title = tab.title,
-                titleSource = tab.titleSource,
-                // Only a thread that has said something: an empty tab's thread has no file to come back to.
-                conversationId = conversations.savedConversationIdOf(tab.id, otherwise = before?.conversationId),
-                model = conversations.model(tab.id) ?: before?.model.orEmpty(),
-                effort = conversations.effort(tab.id) ?: before?.effort.orEmpty(),
-                mode = conversations.permissionMode(tab.id) ?: before?.mode.orEmpty(),
-                contextMode = conversations.contextMode(tab.id) ?: before?.contextMode.orEmpty(),
-                draft = drafts[tab.id],
-            ).also { remembered[tab.id] = it.copy(draft = null) }
-        }
+        val list = tabs.tabs().map { tab -> tabSnapshot(tab).also { remembered[tab.id] = it.copy(draft = null) } }
 
-        memory.remember(TabMemory.State(active = activeTab?.takeIf { tabs.contains(it) }, tabs = list))
+        memory.remember(
+            TabMemory.State(active = activeTab?.takeIf { tabs.contains(it) }, tabs = list, closed = closedTabs.chats()),
+        )
+    }
+
+    /**
+     * One tab as it is kept - for the strip remembered across a restart, and for a tab closed by hand (see
+     * [keepClosed]): the same record, so that a tab comes back the same way whichever of the two brings it.
+     */
+    private fun tabSnapshot(tab: SessionRegistry.Tab): TabMemory.Tab {
+        val before = remembered[tab.id]
+        val conversationId = conversations.conversationIdOf(tab.id) ?: before?.conversationId
+
+        return TabMemory.Tab(
+            id = tab.id,
+            parentId = tab.parentId,
+            // Kept for a born fork too: its process may have named a conversation that never reached the disk
+            // (see restoreTabs). Only when already known - this runs on any thread, the panel's included.
+            forkOrigin = conversations.forkOriginIfKnown(tab.id) ?: before?.forkOrigin,
+            // Only for a fork whose origin is not worked out yet - kept by an older panel, or asked a moment
+            // ago and still being resolved.
+            forkBefore = before?.forkBefore.takeIf { conversationId == null && before?.forkOrigin == null },
+            title = tab.title,
+            titleSource = tab.titleSource,
+            // Only a thread that has said something: an empty tab's thread has no file to come back to.
+            conversationId = conversations.savedConversationIdOf(tab.id, otherwise = before?.conversationId),
+            model = conversations.model(tab.id) ?: before?.model.orEmpty(),
+            effort = conversations.effort(tab.id) ?: before?.effort.orEmpty(),
+            mode = conversations.permissionMode(tab.id) ?: before?.mode.orEmpty(),
+            contextMode = conversations.contextMode(tab.id) ?: before?.contextMode.orEmpty(),
+            fast = conversations.fastMode(tab.id) ?: conversations.planned(tab.id)?.fast ?: before?.fast,
+            draft = drafts[tab.id],
+        )
     }
 
     /**
@@ -1377,6 +1512,272 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
 
     /** The drafts held for the panel, to hand to one that has just loaded (see CodexPanel.sendDrafts). */
     fun heldDrafts(): Map<String, JsonObject> = drafts.filterKeys { tabs.contains(it) }
+
+    // --- Tabs closed by hand, to open again ------------------------------------------
+
+    /** What came back of a closed tab - see [reopenTab]. */
+    sealed interface Reopened {
+        /** A conversation's tab, back on the strip - and what was in its field, for the panel that asked. */
+        data class Chat(val sessionId: String, val draft: JsonObject?) : Reopened
+
+        /** One of the panel's own tabs, which only the page can open - where it stood, in the page's words. */
+        data class Panel(val id: String, val place: JsonObject?) : Reopened
+    }
+
+    /**
+     * A tab the person is closing, written down to be opened again - see [ClosedTabs].
+     *
+     * The record is the one the strip is remembered by across a restart (see [tabSnapshot]), and for the same
+     * reason: what a tab holds is the conversation, the name, the model, effort and mode it ran on, and the
+     * words in its field, and that is everything needed to put it back. Plus where it stood, so that it goes
+     * back there rather than to the end, and what it was waiting to say.
+     *
+     * A tab with none of it - an empty "New chat" - is not kept: opening it again would be a new tab, and a
+     * press of the key spent on one would bring back nothing anybody lost.
+     */
+    private fun keepClosed(id: String) {
+        val all = tabs.tabs()
+        val tab = all.firstOrNull { it.id == id } ?: return
+        val kept = tabSnapshot(tab)
+        // What was written into a turn that would not take it in comes back with what was queued, and ahead of it:
+        // it was sent into the turn, and the queue was written for after it (see CodexSession.unsent). Both were to
+        // go at the end of the turn the close has just killed, and both come back held.
+        val queue = conversations.unsentOf(id).map(::unsentEntry) + queued.of(id)
+
+        val named = kept.titleSource == SessionSnapshot.TITLE_USER
+        if (kept.conversationId == null && kept.forkOrigin == null && !TabMemory.hasDraft(kept.draft) && !named && queue.isEmpty()) {
+            return
+        }
+
+        closedTabs.push(
+            ClosedTabs.Chat(
+                kept = TabMemory.Closed(
+                    tab = kept,
+                    groupId = tab.groupId,
+                    depth = tab.depth,
+                    groupsLeft = all.map { it.groupId }.distinct().takeWhile { it != tab.groupId },
+                    tabsLeft = all.filter { it.groupId == tab.groupId }.takeWhile { it.id != id }.map { it.id },
+                    closedAt = System.currentTimeMillis(),
+                ),
+                queue = queue,
+                countedOn = stats.countedOn(id),
+            ),
+        )
+    }
+
+    /**
+     * A message the conversation still held unsent (see CodexSession.unsent), as the queue keeps one - the form a
+     * closed tab carries what it was to say in (see [keepClosed]).
+     *
+     * Its card is drawn again from its words when it goes: the chips it was typed with lived in the card the feed
+     * drew when it was sent, and the feed of a tab opened again is its transcript, which this message never
+     * reached. Under the name it was sent with, so a rewind or a fork still names it the same. Counted already -
+     * it was the person's message the moment it was sent (see SessionQueue.Entry.counted).
+     */
+    private fun unsentEntry(message: CodexSession.Outgoing): SessionQueue.Entry = SessionQueue.Entry(
+        id = message.uuid ?: UUID.randomUUID().toString(),
+        text = message.text,
+        images = message.images,
+        echo = buildJsonObject {
+            putJsonArray("tokens") {
+                addJsonObject {
+                    put("kind", "text")
+                    put("value", message.text)
+                }
+            }
+            putJsonArray("quotes") {}
+            message.uuid?.let { put("uuid", it) }
+        },
+        remote = false,
+        context = message.context,
+        counted = true,
+    )
+
+    /**
+     * One of the panel's own tabs was closed - the statistics, the scenarios, a run being watched. Only the page
+     * knows it existed, so the page says so; kept here so that it takes its turn among the conversations (see
+     * [ClosedTabs]). What it is and where it stood are the page's words, carried back to it as they came.
+     */
+    fun notePanelTabClosed(id: String, title: String, place: JsonObject?) {
+        if (id.isEmpty() || id.length > PANEL_TAB_ID_LIMIT) return
+
+        closedTabs.push(
+            ClosedTabs.Panel(
+                id = id,
+                title = title.take(PANEL_TAB_TITLE_LIMIT),
+                place = place?.takeIf { it.toString().length <= PANEL_TAB_PLACE_LIMIT },
+                closedAt = System.currentTimeMillis(),
+            ),
+        )
+        sendClosedTabs()
+    }
+
+    /**
+     * Open a closed tab again - the latest one, or the one named by [key] (a row of "Recently closed" on the
+     * history screen). Null when there is nothing to bring back.
+     *
+     * [openPanels] are the panel's own tabs on the strip right now, which only the page knows: one of them
+     * closed and then opened from the menu is not opened a second time - the key moves on to the next tab
+     * instead (see ClosedTabs.take). A conversation open again in some tab is found the same way, here.
+     *
+     * Reads the disk (whether a conversation is still there), so not for the panel's thread. One at a time:
+     * a key held down is a row of tabs coming back in order, not two of them fighting over one place.
+     */
+    fun reopenTab(openPanels: Set<String>, key: String? = null): Reopened? = synchronized(reopening) {
+        var back: Reopened? = null
+
+        while (back == null) {
+            val entry = closedTabs.take(key) { stillOpen(it, openPanels) } ?: break
+            back = when (entry) {
+                is ClosedTabs.Panel -> Reopened.Panel(entry.id, entry.place)
+                is ClosedTabs.Chat -> bringBackClosed(entry)
+            }
+            // A row of the list names one tab: if that one cannot come back, the next is not what was asked for.
+            if (key != null) break
+        }
+
+        sendClosedTabs()
+        back
+    }
+
+    /** Whether what this entry would bring back is on the strip already - see [reopenTab]. */
+    private fun stillOpen(entry: ClosedTabs.Entry, openPanels: Set<String>): Boolean = when (entry) {
+        is ClosedTabs.Panel -> entry.id in openPanels
+        is ClosedTabs.Chat -> {
+            val conversation = entry.kept.tab.conversationId
+            conversation != null && tabs.tabs().any { tab ->
+                (conversations.conversationIdOf(tab.id) ?: remembered[tab.id]?.conversationId) == conversation
+            }
+        }
+    }
+
+    /**
+     * A conversation's tab back on the strip, where it stood and holding what it held - the same road a tab
+     * takes back after a restart (see [restoreTabs]): its own model, effort and mode rather than the
+     * transcript's, the transcript played in from the end, the process left down until the tab is looked at.
+     *
+     * Two things differ, and both are about the close it is undoing. Its queue comes back held (see
+     * SessionQueue.hold): the turn it was waiting for was killed by the close. And the identifier is the one it
+     * had, so its forks, still standing in its group, are its own again; only when that identifier is taken -
+     * the opening tab, after a restart that kept nothing else - does it get a new one.
+     *
+     * Whether its conversation is still on disk is asked first: the CLI clears out old transcripts, and the
+     * list remembers up to twenty tabs across restarts. A tab whose conversation is gone comes back if
+     * something else of it is worth having - words in its field, a name given by hand, a queue - and empty of
+     * the conversation; with none of that it does not come back at all, and the key moves on to the next.
+     */
+    private fun bringBackClosed(entry: ClosedTabs.Chat): Reopened.Chat? {
+        val kept = entry.kept
+        val record = kept.tab
+        val conversation = record.conversationId
+        val fork = record.forkOrigin
+
+        val onDisk = conversation != null && CodexHistory.transcriptFile(project.basePath, conversation) != null
+        val named = record.titleSource == SessionSnapshot.TITLE_USER
+        val held = TabMemory.hasDraft(record.draft) || named || entry.queue.isNotEmpty()
+        if (!onDisk && fork == null && !held) {
+            thisLogger().info("A closed tab's conversation is gone from disk - not brought back")
+            return null
+        }
+
+        val id = record.id.takeUnless { tabs.contains(it) } ?: "session-${System.currentTimeMillis()}"
+        val own = id == record.id
+        // A conversation gone from under a tab takes its name with it, unless the name was the person's.
+        val lost = conversation != null && !onDisk && fork == null
+        val title = if (lost && !named) "" else record.title
+        tabs.reopen(
+            id = id,
+            title = title,
+            titleSource = record.titleSource,
+            parentId = record.parentId.takeIf { own },
+            groupId = if (own) kept.groupId else id,
+            depth = if (own) kept.depth else 0,
+            groupsLeft = kept.groupsLeft,
+            tabsLeft = kept.tabsLeft,
+        )
+
+        remembered[id] = record.copy(
+            id = id,
+            parentId = tabs.tabs().firstOrNull { it.id == id }?.parentId,
+            conversationId = conversation.takeIf { onDisk },
+            draft = null,
+        )
+        record.draft?.let { drafts[id] = it }
+
+        val launch = SessionLaunch(
+            model = record.model,
+            effort = record.effort,
+            mode = record.mode,
+            contextMode = record.contextMode,
+            fast = record.fast,
+        )
+        if (!launch.isEmpty) conversations.rememberLaunch(id, launch)
+        when {
+            onDisk -> conversations.resume(id, conversation!!)
+            fork != null -> conversations.restoreFork(id, fork)
+        }
+
+        // The tab starts from what its transcript holds, and every client lets go of what it held of the closed one.
+        // Its process said nothing after the close (see CodexSession.mute).
+        resetJournal(id)
+        if (entry.queue.isNotEmpty()) sendQueue(id, queued.hold(id, entry.queue))
+        stats.noteSessionReopened(id, entry.countedOn)
+        broadcastSessions()
+
+        when {
+            onDisk -> replayTranscript(
+                id,
+                conversation!!,
+                adoptTranscriptModel = record.model.isEmpty(),
+                wakeAfter = false,
+                whenMissing = fork?.let { origin -> { bringBackFork(id, origin, launch) } },
+            )
+
+            fork != null -> replayFork(id)
+        }
+
+        thisLogger().info("A closed tab was opened again")
+        return Reopened.Chat(id, record.draft)
+    }
+
+    /** The tabs that can be opened again, to the windows at this desk - see [closedTabsMessage]. */
+    private fun sendClosedTabs() {
+        val message = closedTabsMessage()
+        for (client in clients.values) {
+            if (!client.isLocal) continue
+            runCatching { client.deliver(listOf(message)) }
+                .onFailure { thisLogger().warn("A client could not take the closed tabs", it) }
+        }
+    }
+
+    /**
+     * The list behind "Recently closed" on the history screen, the latest first. Enough to draw a row and to
+     * tell whether the thing is open again - the conversation, or the panel tab's own identifier - and never
+     * what was in a field. To the desk alone: closing tabs is not a phone's business (see RemoteCommands).
+     */
+    private fun closedTabsMessage(): String = buildJsonObject {
+        put("type", "closedTabs")
+        putJsonArray("tabs") {
+            for (entry in closedTabs.list()) {
+                addJsonObject {
+                    put("key", entry.key)
+                    put("title", entry.title)
+                    put("closedAt", entry.closedAt)
+                    when (entry) {
+                        is ClosedTabs.Chat -> {
+                            put("kind", if (entry.kept.depth > 0) "fork" else "chat")
+                            entry.kept.tab.conversationId?.let { put("conversationId", it) }
+                        }
+
+                        is ClosedTabs.Panel -> {
+                            put("kind", "panel")
+                            put("id", entry.id)
+                        }
+                    }
+                }
+            }
+        }
+    }.toString()
 
     /**
      * The panel put this tab on screen. Remembered, so that it is the tab on screen after a restart, and
@@ -1504,22 +1905,21 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         remote: Boolean = false,
         /** Carry what the editor beside the panel shows - see [editorSeen]. */
         withEditor: Boolean = false,
+        /** ...for this one message, although the setting is off - see [editorSeen]. */
+        editorOnce: Boolean = false,
     ) {
         if (text.isBlank()) return
 
-        val seen = editorSeen(withEditor, text)
+        val seen = editorSeen(withEditor, editorOnce, text)
         val running = snapshot(sessionId).get().status == SessionSnapshot.STATUS_RUNNING
         if (PromptDelivery.waitsForTheTurn(text, running)) {
             // An identifier of our own: the message came as a send rather than as a queued one, so
-            // nobody has named it. What it does not get is the "3 refs" beside the row - that is worked
-            // out of the chips in the field, and a second answer to what counts as an attachment would
-            // drift from the first (see SessionQueue.Entry).
+            // nobody has named it.
             enqueue(
                 sessionId,
                 SessionQueue.Entry(
                     id = UUID.randomUUID().toString(),
                     text = text,
-                    attach = "",
                     images = images,
                     echo = echoWith(echo, seen),
                     remote = remote,
@@ -1544,14 +1944,21 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
      * is the moment Send was pressed: what the person was looking at while they wrote.
      *
      * The setting is asked here as well as by the panel, which already leaves the flag off when it is off:
-     * a panel page a version behind would not know the setting exists.
+     * a panel page a version behind would not know the setting exists, and a page whose word of the setting is
+     * a moment old (switched off in another window) would send it after all.
+     *
+     * Except for [once]: the chip's "Send with this message only", the one message going the other way from a
+     * setting that is off (see feed/editorContext.ts). It needs a word of its own rather than the flag alone - the
+     * flag under an off setting is exactly what the check above exists to refuse, and that refusal used to swallow
+     * the person's explicit choice: the agent got no file while the card under the message said it went. A page
+     * that does not know the menu sends no such word, so the check above still holds it.
      *
      * Never with a slash command. It is not a question about code but an order to the conversation, the
      * terminal attaches nothing to one either, and the CLI tells a command by the text it was sent - a
      * second block beside "/compact" is not something to find out the hard way that it reads past.
      */
-    private fun editorSeen(withEditor: Boolean, text: String): EditorContext.Snapshot? =
-        if (withEditor && CodexPreferences.shareEditor && !PromptDelivery.isCommand(text)) {
+    private fun editorSeen(withEditor: Boolean, once: Boolean, text: String): EditorContext.Snapshot? =
+        if (EditorContext.goesWith(withEditor, once, CodexPreferences.shareEditor, PromptDelivery.isCommand(text))) {
             EditorContext.getInstance(project).now()
         } else {
             null
@@ -1582,11 +1989,26 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         remote: Boolean,
         /** What the editor showed, as the agent reads it - a block of its own beside the text (see CodexSession.userMessage). */
         context: String?,
+        /**
+         * Said by the panel rather than by anybody - see [carryOn]. It is not the person writing again, so a
+         * queue held for their next turn stays held, and it is no message of theirs to count.
+         */
+        auto: Boolean = false,
+        /** The person's message, counted when it was first sent - see SessionQueue.Entry.counted. */
+        counted: Boolean = false,
     ) {
         // A fork whose inherited history is still being played in: the message goes under it, not above it.
         forkOpenings[sessionId]?.await(FORK_OPENING_WAIT_SECONDS, TimeUnit.SECONDS)
 
-        stats.notePrompt(sessionId, text, images = images.size, remote = remote)
+        // Somebody's own words are the next thing said here, and whatever the panel was going to carry on
+        // stands behind them no more (see CarryOns) - a queued message included: it was written by a person too.
+        if (!auto) conversations.dropCarryOn(sessionId)
+
+        // The turn a held queue was waiting for (see SessionQueue.hold): the person has written again, and what
+        // is queued goes after this turn, as anything queued does.
+        if (!auto && queued.release(sessionId)) sendQueue(sessionId, queued.of(sessionId))
+
+        if (!auto && !counted) stats.notePrompt(sessionId, text, images = images.size, remote = remote)
 
         // A message into a conversation nobody opened a tab for.
         //
@@ -1655,7 +2077,6 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         sessionId: String,
         id: String,
         text: String,
-        attach: String = "",
         images: List<ImageAttachment> = emptyList(),
         echo: JsonObject? = null,
         remote: Boolean = false,
@@ -1663,16 +2084,17 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         before: String? = null,
         /** Carry what the editor shows, taken now rather than when the message fires - see SessionQueue.Entry.context. */
         withEditor: Boolean = false,
+        /** ...for this one message, although the setting is off - see [editorSeen]. */
+        editorOnce: Boolean = false,
     ) {
         if (text.isBlank()) return
 
-        val seen = editorSeen(withEditor, text)
+        val seen = editorSeen(withEditor, editorOnce, text)
         enqueue(
             sessionId,
             SessionQueue.Entry(
                 id = id,
                 text = text,
-                attach = attach,
                 images = images,
                 echo = echoWith(echo, seen),
                 remote = remote,
@@ -1683,6 +2105,15 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
     }
 
     private fun enqueue(sessionId: String, entry: SessionQueue.Entry, before: String?) {
+        // A queue held for the person's next turn (see SessionQueue.hold), and a message queued into a tab with
+        // nothing running - from a phone, whose Queue does not look at the turn. That message IS the next turn:
+        // it goes now, as a queued message to an idle conversation always does, and the held ones follow it.
+        // Not one taken out for editing and put back: that one belongs among the held, at its place.
+        if (before == null && queued.isHeld(sessionId) && freeToSay(sessionId)) {
+            deliverPrompt(sessionId, entry.text, entry.images, entry.echo, entry.remote, entry.context, counted = entry.counted)
+            return
+        }
+
         sendQueue(sessionId, queued.add(sessionId, entry, before))
         runQueued(sessionId)
     }
@@ -1726,6 +2157,125 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         )
     }
 
+    /**
+     * The picture behind a chip, for the preview under the pointer (see ImagePreviews) - to the asker alone.
+     *
+     * [place] says where it is (PreviewPlace in the webview's protocol): a file on disk, a queued message's
+     * pasted picture out of the bytes the queue keeps for sending it, or a sent message's picture out of
+     * its line in the tab's transcript. Off the interface thread: a file read, a picture shrunk, a pass
+     * over a transcript of tens of megabytes. Nothing to show is answered with an empty picture rather than
+     * with silence - the preview says so in words instead of waiting out its timeout.
+     */
+    fun previewImage(clientId: String, id: String, place: JsonObject?, asker: String = clientId) {
+        if (id.isEmpty()) return
+
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val fitted = place?.let { runCatching { pictureAt(it)?.let(ImagePreviews::fitted) }.getOrNull() }
+            emitTo(
+                clientId,
+                buildJsonObject {
+                    put("type", "imagePreview")
+                    put("id", id)
+                    put("data", fitted?.url.orEmpty())
+                    // The picture's own size when what travels is a smaller copy - the caption says how large it is.
+                    if (fitted != null && fitted.width > 0 && fitted.height > 0) {
+                        put("width", fitted.width)
+                        put("height", fitted.height)
+                    }
+                }.toString(),
+                asker,
+            )
+        }
+    }
+
+    /**
+     * The picture behind a chip, opened in the editor - a click on the chip (see chipOpening in the webview).
+     *
+     * A file opens as itself, found the way any path in the feed is found (see OpenInEditor). A picture with no
+     * file of its own - read back off the transcript, waiting in the queue, the bytes of a paste the page holds -
+     * is kept as a file first (see PastedFiles.keep), whole rather than shrunk: this is the picture itself, not
+     * a glance at it, and named by its content, so a second click opens the same file rather than a copy.
+     *
+     * Opening nothing is answered, to the asker alone: the message has left the queue, the line is not in the
+     * transcript, the file is gone or could not be written. The preview over the chip says so - a click that
+     * does nothing is the one thing a click may not do.
+     */
+    fun openPicture(clientId: String, id: String, place: JsonObject?, asker: String = clientId) {
+        val unopened = {
+            if (id.isNotEmpty()) {
+                emitTo(
+                    clientId,
+                    buildJsonObject {
+                        put("type", "pictureUnopened")
+                        put("id", id)
+                    }.toString(),
+                    asker,
+                )
+            }
+        }
+        if (place == null) {
+            unopened()
+            return
+        }
+
+        ApplicationManager.getApplication().executeOnPooledThread {
+            if ((place["kind"] as? JsonPrimitive)?.contentOrNull == "file") {
+                val path = (place["path"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+                if (path.isBlank()) unopened() else OpenInEditor.open(project, path, OpenInEditor.Place(), missing = unopened)
+                return@executeOnPooledThread
+            }
+
+            val file = runCatching { pictureAt(place) }.getOrNull()?.let { PastedFiles.keep(it.bytes, it.mediaType) }
+            if (file == null) unopened() else OpenInEditor.open(project, file.path, OpenInEditor.Place(), missing = unopened)
+        }
+    }
+
+    private fun pictureAt(place: JsonObject): ImagePreviews.Picture? {
+        val text = { name: String -> place[name]?.jsonPrimitive?.contentOrNull.orEmpty() }
+        val image = place["image"]?.jsonPrimitive?.intOrNull ?: -1
+
+        return when (text("kind")) {
+            // The file a click on the chip opens - the first of several, as the chooser lists them.
+            "file" -> OpenInEditor.resolve(project, text("path")).firstOrNull { !it.isDirectory }
+                ?.let { ImagePreviews.ofFile(VfsUtilCore.virtualToIoFile(it)) }
+            "queued" -> queued.of(text("sessionId")).firstOrNull { it.id == text("id") }
+                ?.images?.getOrNull(image)
+                ?.let { ImagePreviews.ofBase64(it.mediaType, it.data) }
+            "said" -> saidPicture(text("sessionId"), text("uuid"), image)
+            // Only a click sends these: the page holds them, and needs no preview of its own bytes.
+            "bytes" -> ImagePreviews.ofDataUrl(text("data"))
+            else -> null
+        }
+    }
+
+    /**
+     * A sent message's [image]-th picture, out of the tab's thread (see ThreadPictures).
+     *
+     * The page names the message by its card's uuid: Codex's own id for a message the feed read off the history,
+     * a name of the panel's for one sent in this run - which Codex never hears, so the conversation says where that
+     * one stands in its turn (see CodexSession.placeOf). The thread is the tab's, read the way Codex reads it: a
+     * revert's segment and a fork made on Codex 0.163 point back into the files they came from (see CodexRollout).
+     * A fork not born yet has no thread of its own, and what its feed shows is its source's. The file is enough on
+     * every Codex that names its messages there; an older one's file names none, and Codex is asked then, through the
+     * shared process.
+     */
+    private fun saidPicture(sessionId: String, uuid: String, image: Int): ImagePreviews.Picture? {
+        if (uuid.isBlank() || image < 0) return null
+        val thread = conversations.conversationIdOf(sessionId) ?: conversations.forkOrigin(sessionId)?.source ?: return null
+        val message = conversations.placeOf(sessionId, uuid)
+            ?.let { (turn, at) -> ThreadPictures.Message.InTurn(turn, at) }
+            ?: ThreadPictures.Message.Item(uuid)
+        val file = CodexHistory.transcriptFile(project.basePath, thread) ?: return null
+
+        return when (val read = ThreadPictures.ofFile(file, message, image)) {
+            is ThreadPictures.Read.Found -> read.picture
+            ThreadPictures.Read.Missing -> null
+            ThreadPictures.Read.Unnamed -> ThreadPictures.ofTurns(thread, message, image) { method, params ->
+                CodexCatalog.call(method, params, timeoutSeconds = SAID_PICTURE_TIMEOUT_SECONDS)
+            }
+        }
+    }
+
     /** The queue dragged into another order - see [SessionQueue.reorder]. */
     fun reorderQueue(sessionId: String, ids: List<String>) {
         sendQueue(sessionId, queued.reorder(sessionId, ids))
@@ -1739,22 +2289,313 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
      * queued message out of a compaction - `/compact` is a turn like any other, and a message written
      * into a running one is taken by the CLI and, more often than not, silently dropped (see
      * PromptDelivery).
+     *
+     * And one pass at a time per tab (see PassGate). This is asked from several threads - the end of a turn, a
+     * quiet swap, a limit's timer, the minute round - and "is it free" and "send, which marks it busy" are two
+     * steps: two passes side by side both found the tab free, and two messages went in, the second into the turn
+     * the first had just started.
      */
-    private fun runQueued(sessionId: String) {
-        if (snapshot(sessionId).get().status == SessionSnapshot.STATUS_RUNNING) return
+    internal fun runQueued(sessionId: String, now: Long = System.currentTimeMillis()) {
+        passes.computeIfAbsent(sessionId) { PassGate() }.request(now) { at -> sayNext(sessionId, at) }
+    }
+
+    /** Each tab's gate over [runQueued]. */
+    private val passes = ConcurrentHashMap<String, PassGate>()
+
+    /** One pass of [runQueued] - what goes into the tab next, if anything, as things stand at [now]. */
+    private fun sayNext(sessionId: String, now: Long) {
+        if (!freeToSay(sessionId)) return
+
+        // Work stopped for a reason that was nobody's goes on before anything queued, and before a held queue
+        // too: what was queued was written to come after that work, and this is the work finishing. Nobody would
+        // come back to say it - the stop was not theirs - so every such tab stood still until somebody went
+        // through them writing "carry on" (see CarryOns).
+        //
+        // Only into a conversation there is something of. A move of a tab that never got as far as its transcript
+        // raises a fresh one with no conversation behind it (see CodexSessions.moveTo), and "carry on" would send
+        // a new agent off after work it has never heard of. Asked of the tab rather than of the disk, and before
+        // anything is settled: a lookup that fails - a project in WSL whose Codex home is not resolved yet -
+        // must not cost the carry-on for good.
+        if (conversations.carryOnOf(sessionId)?.isDue(now) == true && conversations.conversationIdOf(sessionId) == null) {
+            conversations.dropCarryOn(sessionId)
+        }
+
+        val owed = conversations.takeCarryOn(sessionId, now)
+        if (owed != null && !owed.silent) {
+            carryOn(sessionId, owed)
+            return
+        }
+
+        // A limit still being waited out holds the queue as well: what is queued would be refused just as the
+        // turn before it was, and goes after the panel's "carry on" once the limit has reset - or, when the
+        // person said no to the carry-on, at the reset with nothing said before it (see CarryOns.cancel).
+        if (conversations.carryOnOf(sessionId)?.reason == CarryOns.Reason.LIMIT) return
+
+        // What the conversation itself still has to say goes before anything queued (see CodexSession.unsent): the
+        // turn a decided plan asks for, and what the person wrote into the turn that has just ended and the turn
+        // would not take in. Both belong to that turn; the queue was written for after it. One road for both with
+        // the queue, so one end of a turn starts one turn: the conversation used to say its own at the same end,
+        // the queue's message went first, and the two `turn/start`s went into Codex side by side. After the panel's
+        // "carry on" above, which is the end of the very work they were written into - and held by a limit's wait
+        // as the queue is, since they would be refused the same. Ahead of a held queue: they are not the messages a
+        // closed tab brought back (those are in the queue - see keepClosed), but this tab's own.
+        if (conversations.unsentOf(sessionId).isNotEmpty()) {
+            // A turn begins here, as with a queued message, and the agent reads the disk (see deliverPrompt).
+            UnsavedEdits.flush(project)
+            if (conversations.sayUnsent(sessionId)) return
+        }
+
+        // Waiting for the person rather than for the turn - see SessionQueue.hold.
+        if (queued.isHeld(sessionId)) return
+
+        val (entry, rest) = queued.take(sessionId) ?: return
+        sendQueue(sessionId, rest)
+        deliverPrompt(sessionId, entry.text, entry.images, entry.echo, entry.remote, entry.context, counted = entry.counted)
+    }
+
+    /**
+     * The panel's own "carry on" - see [sayNext] and CarryOns.
+     *
+     * Said in the panel's language (see CarryOnWords) and drawn as the panel's rather than the person's: the
+     * echo is marked `auto` with the reason, and every client puts PANEL over the card where it would put YOU.
+     * The agent gets the words inside a tag, which is what keeps that true for a transcript read back later.
+     */
+    private fun carryOn(sessionId: String, owed: CarryOns.Owed) {
+        val words = CarryOnWords.of(owed, IdeLanguage.inForce(CodexPreferences.language))
+        val echo = buildJsonObject {
+            putJsonArray("tokens") {
+                addJsonObject {
+                    put("kind", "text")
+                    put("value", words)
+                }
+            }
+            putJsonArray("quotes") {}
+            put("auto", owed.reason.wire)
+        }
+
+        DiagnosticsLog.note(DiagnosticsLog.AGENT, "the panel carried a conversation on (${owed.reason.wire})")
+        deliverPrompt(sessionId, CarryOnWords.forAgent(owed.reason, words), emptyList(), echo, remote = false, context = null, auto = true)
+    }
+
+    /**
+     * The "Don't carry on" under a limit's wait: the person has seen the plan and wants none of it. The words go,
+     * the wait stays for the queue (see CarryOns.cancel); the wait's own message tells every screen the plan is
+     * off (see [carryOnChanged]).
+     */
+    fun cancelCarryOn(sessionId: String) {
+        conversations.cancelCarryOn(sessionId)
+    }
+
+    /**
+     * A tab's process was replaced while it stood idle - see CodexSessions.onReplacedQuietly.
+     *
+     * Two things can be owed from this moment: the background agents that died with the old process, and the
+     * end of a limit's wait - a tab moved to an account that is not refusing has nothing left to wait for.
+     */
+    private fun afterQuietSwap(sessionId: String) {
+        val owed = conversations.carryOnOf(sessionId)
+        // Nothing owed, and nothing the conversation carried across still to say (see CodexSession.adopt): no turn
+        // is waiting for this moment, and a pass for every idle tab of every project would be work over nothing.
+        if (owed == null && conversations.unsentOf(sessionId).isEmpty()) return
+        if (owed?.reason == CarryOns.Reason.LIMIT) followLimitAcross(sessionId, owed)
+
+        // Off the thread that made the swap: that is the one an account was chosen on, and what follows raises
+        // a process and writes into it - for every tab of every project at once.
+        AppExecutorUtil.getAppExecutorService().execute { runQueued(sessionId) }
+    }
+
+    /**
+     * A tab waiting out a limit has been moved to another account. The wait was about the account it left, so
+     * it is timed again by the one it is on (see CarryOns.limitAcross) - and written only over what was read
+     * here: a person who wrote into the tab meanwhile has dropped the wait, and putting it back would carry on
+     * behind their own message.
+     */
+    private fun followLimitAcross(sessionId: String, owed: CarryOns.Owed) {
+        val from = owed.account ?: return
+        val to = conversations.accountOf(sessionId)
+        // The same subscription under another row (see CodexAccounts.sameAccount): the same limit.
+        if (from == to || CodexAccounts.getInstance().sameAccount(from, to)) return
+
+        val now = System.currentTimeMillis()
+        val refused = AccountUsage.getInstance().standing(to, now).refusedUntil
+        conversations.replaceCarryOn(sessionId, owed, CarryOns.limitAcross(owed, to, refused, now))
+    }
+
+    /** The last genuine stop of a limit each tab's stream reported - the window, and when it resets. */
+    private val lastStops = ConcurrentHashMap<String, CodexRateLimit.Verdict>()
+
+    /**
+     * When each tab last heard from its background agents - a subagent's step, a task's progress or end (see
+     * CarryOns.helpersAtWork).
+     */
+    private val helpersHeard = ConcurrentHashMap<String, Long>()
+
+    /**
+     * What a live line says about this tab's limit and its background: the reset of a stop and the refusal that
+     * follows it, a turn that went through, a sign of the agents at work.
+     *
+     * The refusal itself carries neither the window nor the reset - the CLI says those in the limit event
+     * before it (see AgentStream.isLimitRefusal), so the last stop is remembered until the refusal comes.
+     */
+    private fun noticeLimit(sessionId: String, line: String) {
+        if (line.contains(TASK_EVENT) || line.contains(SUBAGENT_LINE)) helpersHeard[sessionId] = System.currentTimeMillis()
+
+        CodexRateLimit.of(line)?.let { verdict -> if (verdict.stopped) lastStops[sessionId] = verdict }
+        when {
+            AgentStream.isLimitRefusal(line) -> {
+                refusedTurns += sessionId
+                noteLimitRefusal(sessionId)
+            }
+            AgentStream.isAuthFailure(line) -> refusedTurns += sessionId
+            // A turn that went through: whatever the panel said before it worked, and the next limit is a fresh
+            // one rather than another refusal of the same carry-on (see CarryOns.answered).
+            AgentStream.isTurnResult(line) -> {
+                val refused = refusedTurns.remove(sessionId)
+                if (!refused && !line.contains(ERROR_RESULT)) conversations.carryOnAnswered(sessionId)
+            }
+        }
+    }
+
+    /**
+     * The tabs whose turn under way Codex has refused rather than run - the limit or the sign-in said no, in the
+     * placeholder answer before the turn's result (see AgentStream.isLimitRefusal). Read and let go at that result.
+     *
+     * The result alone cannot say it here. Codex's refused turn ends with a result that is no error, on purpose:
+     * the refusal is said once, by the placeholder, and a scenario run moves to another account by that rather
+     * than by the result (see CodexStream.turnCompleted). Read as "went through", every refused carry-on was
+     * forgotten as the panel's last word the moment it was refused (see CarryOns.answered). The count of refusals
+     * in a row (CarryOns.LIMIT_TRIES) still held, but only because the placeholder, where the count is taken, comes
+     * a line before the result - the state said one thing and meant another.
+     */
+    private val refusedTurns = ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * The limit refused this tab's turn: the work is carried on by itself once the window resets - or as soon
+     * as the tab stands on an account with room (see [followLimitAcross]). The five-hour window is the usual
+     * case, and the one this was asked for: a long turn running into it at night used to stand there until
+     * morning, with the window long since open again. When - and whether at all - is CarryOns.limitWait.
+     */
+    internal fun noteLimitRefusal(sessionId: String, now: Long = System.currentTimeMillis()) {
+        val account = conversations.accountOf(sessionId)
+        val stop = lastStops.remove(sessionId)
+
+        // A refusal no clock ends - the workspace out of credits, the session's own budget - is not waited out:
+        // nothing would have reset when the wait was over (see CarryOns.endsOnAClock). What was queued waits for the
+        // person as it would have without any of this.
+        if (stop != null && !CarryOns.endsOnAClock(stop.window)) {
+            DiagnosticsLog.note(DiagnosticsLog.AGENT, "a refusal no clock ends - nothing planned for it")
+            return
+        }
+
+        val said = stop?.resetsAt?.takeIf { it > now }
+        val known = said ?: AccountUsage.getInstance().standing(account, now).refusedUntil
+        val previous = conversations.lastCarryOn(sessionId)
+
+        val wait = CarryOns.limitWait(now, known, previous, account)
+        if (wait == null) {
+            if (previous?.reason == CarryOns.Reason.LIMIT && previous.tries + 1 >= CarryOns.LIMIT_TRIES) {
+                DiagnosticsLog.note(DiagnosticsLog.AGENT, "the limit kept refusing the panel's carry-on - left to the person")
+            }
+            return
+        }
+
+        conversations.oweCarryOn(sessionId, wait)
+    }
+
+    /**
+     * What the hub kept about a closed tab's carry-on - its timer, its gate, what it heard - let go with the tab
+     * (see [closeSession]). The conversation dropped what it owed a moment before (see CodexSessions.close).
+     */
+    private fun forgetCarryOn(sessionId: String) {
+        carryOnClocks.remove(sessionId)?.cancel(false)
+        shownWaits.remove(sessionId)
+        carryOnLocks.remove(sessionId)
+        passes.remove(sessionId)
+        helpersHeard.remove(sessionId)
+        lastStops.remove(sessionId)
+        refusedTurns.remove(sessionId)
+    }
+
+    /** What wakes each tab waiting out a limit (see [carryOnChanged]). */
+    private val carryOnClocks = ConcurrentHashMap<String, ScheduledFuture<*>>()
+
+    /** The wait each tab's screens were last told about, so that a change nobody can see is not said. */
+    private val shownWaits = ConcurrentHashMap<String, Long>()
+
+    /** Each tab's lock over [carryOnChanged]. */
+    private val carryOnLocks = ConcurrentHashMap<String, Any>()
+
+    /**
+     * What the panel owes a tab has changed: a wait is wound or let go, and every screen is told when the tab
+     * goes on by itself - the plan has to be visible, and it has to be possible to say no to it.
+     *
+     * What is owed is read here, under the tab's own lock, rather than handed in by whoever changed it. Changes
+     * come from several threads at once, and a value handed along could be drawn after a newer one: a wait dropped
+     * a moment ago drawn back on every screen. Read under the lock, the last of these to run tells the truth.
+     */
+    private fun carryOnChanged(sessionId: String) {
+        synchronized(carryOnLocks.computeIfAbsent(sessionId) { Any() }) {
+            val now = System.currentTimeMillis()
+            val owed = conversations.carryOnOf(sessionId)
+            val due = owed?.dueAt(now)
+
+            carryOnClocks.remove(sessionId)?.cancel(false)
+            // Wound for a silent wait too: it is the queue that goes at its end.
+            if (due != null) {
+                carryOnClocks[sessionId] = AppExecutorUtil.getAppScheduledExecutorService().schedule(
+                    {
+                        // At the moment it was wound for, whatever the clock says: a timer may come a hair early,
+                        // and a wait found "not yet" here would have nothing left to wake it but the minute round.
+                        runCatching { runQueued(sessionId, now = due) }
+                            .onFailure { thisLogger().warn("A tab could not carry on after its limit", it) }
+                    },
+                    due - now,
+                    TimeUnit.MILLISECONDS,
+                )
+            }
+
+            sendCarryOnWait(sessionId, owed?.shownAt(now), owed?.guess == true)
+        }
+    }
+
+    /**
+     * When this tab goes on by itself - or that it no longer will - to every screen (see the carryOnWait
+     * message in protocol.ts). Into the journal: a panel reloaded during a wait of hours must still show it.
+     *
+     * The moment travels as `until`, never as `at`: the journal stamps every message with its own `at`, the moment
+     * it was written, and a phone reads that one as the time the message happened (see mobile/feed.ts). Two keys
+     * of one name were one key to whoever parsed last - the reset taken for the event, or the event for the reset.
+     */
+    private fun sendCarryOnWait(sessionId: String, at: Long?, guess: Boolean) {
+        val before = shownWaits[sessionId]
+        if (before == at) return
+        if (at == null) shownWaits.remove(sessionId) else shownWaits[sessionId] = at
+
+        broadcast(
+            sessionId,
+            buildJsonObject {
+                put("type", "carryOnWait")
+                put("sessionId", sessionId)
+                if (at != null) {
+                    put("until", at)
+                    if (guess) put("guess", true)
+                }
+            }.toString(),
+        )
+    }
+
+    /** Whether something may be said into this conversation now, as far as the conversation is concerned. */
+    private fun freeToSay(sessionId: String): Boolean {
+        if (snapshot(sessionId).get().status == SessionSnapshot.STATUS_RUNNING) return false
         // Between a tab's two processes there is nothing to send into: the old conversation is gone and
         // the new one is not in yet, so this would raise a bare third one on no transcript at all. The
         // move says so itself the moment it is done (see CodexSessions.onMoved).
-        if (conversations.isMoving(sessionId)) return
+        if (conversations.isMoving(sessionId)) return false
         // A rewind of a conversation is on its way: what is queued was written after the messages it may be
         // about to drop, and it waits for the answer - dropped with them, or sent once the rewind is refused
         // (see [rewind]). The turn a rewind stops can end before the rewind answers, and that end would
         // otherwise fire the queue into the conversation a moment before it is cut.
-        if (sessionId in rewinding) return
-
-        val (entry, rest) = queued.take(sessionId) ?: return
-        sendQueue(sessionId, rest)
-        deliverPrompt(sessionId, entry.text, entry.images, entry.echo, entry.remote, entry.context)
+        return sessionId !in rewinding
     }
 
     private fun sendQueue(sessionId: String, items: List<SessionQueue.Entry>) {
@@ -1769,16 +2610,21 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         buildJsonObject {
             put("type", "queue")
             put("sessionId", sessionId)
+            // Waiting for the person's next turn rather than for the end of this one - see SessionQueue.hold.
+            if (queued.isHeld(sessionId)) put("held", true)
             putJsonArray("items") {
                 items.forEach { entry ->
                     addJsonObject {
                         put("id", entry.id)
                         put("text", entry.text)
-                        put("attach", entry.attach)
                         // The count rather than the bytes: a photo from a phone is measured in hundreds
                         // of kilobytes, the frame that would carry it back to every client has a limit of
-                        // 256, and all a queued row needs of it is that there is one.
+                        // 256, and all a queued row needs of it is that there is one. A picture is shown
+                        // only under the pointer, and asked for then (see [previewImage]).
                         put("images", entry.images.size)
+                        // The pieces the row draws its chips from, cut down for a row (see QueueRows).
+                        QueueRows.tokens(entry.echo)?.let { put("tokens", it) }
+                        QueueRows.quotes(entry.echo)?.let { put("quotes", it) }
                     }
                 }
             }
@@ -1863,6 +2709,57 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         }
     }
 
+
+    /**
+     * Files a turn changed, put back - a row's button on the list of changed files, or the list's "revert all"
+     * (see ChangeRevert) - or, with [restore], brought back after that. [id] names the list in the feed, so
+     * every client can mark the rows it answers.
+     *
+     * What is unsaved in an editor is saved first, as before any turn: the turn's lines are looked for in the
+     * file as the person sees it, and a revert written over an unsaved buffer would fight it afterwards. The
+     * outcome is said to everyone watching and kept in the journal: a second window and a reloaded panel show
+     * the same rows put back, and a refusal is a fact about the file rather than about the screen that asked.
+     */
+    fun revertChanges(sessionId: String, id: String, files: List<ChangeRevert.FileRequest>, restore: Boolean = false) {
+        if (id.isBlank() || files.isEmpty()) return
+
+        // The next turn of this tab waits for the answer, so that the note about these files reaches it (see PutBack).
+        conversations.putBackPressed(sessionId)
+        AppExecutorUtil.getAppExecutorService().execute {
+            try {
+                putBackNow(sessionId, id, files, restore)
+            } finally {
+                conversations.putBackAnswered(sessionId)
+            }
+        }
+    }
+
+    /** [revertChanges], off the thread that asked: the files put back, the agent's note kept, the outcome said to all. */
+    private fun putBackNow(sessionId: String, id: String, files: List<ChangeRevert.FileRequest>, restore: Boolean) {
+        UnsavedEdits.flush(project)
+        // Put back last first and brought back first first, the way the edits of one file are: a turn that moved a
+        // file and then created another where it stood has the new one gone before the old one comes back.
+        val order = if (restore) files else files.asReversed()
+        val done = order.associate { file -> file.path to FileReverts.apply(project, file.path, file.edits, restore) }
+        val outcomes = files.map { file -> file.path to (done[file.path] ?: ChangeRevert.Outcome.FAILED) }
+        // The agent is told before its next turn: Codex does not notice by itself that a file changed under it (see
+        // PutBack). Only files this press changed or found as it would have left them.
+        for ((file, outcome) in files.zip(outcomes.map { it.second })) {
+            val way = when (outcome) {
+                ChangeRevert.Outcome.REVERTED -> PutBack.Way.REVERTED
+                ChangeRevert.Outcome.RESTORED -> PutBack.Way.RESTORED
+                else -> continue
+            }
+            conversations.notePutBack(sessionId, file.path, way, ChangeRevert.originOf(file.edits))
+        }
+        // Counts only: the paths would leave the machine with a report (see DiagnosticsLog).
+        DiagnosticsLog.note(
+            DiagnosticsLog.AGENT,
+            (if (restore) "brought back" else "reverted") + " a turn's changes: " +
+                outcomes.groupingBy { it.second.wire }.eachCount().entries.joinToString { "${it.key} ${it.value}" },
+        )
+        broadcast(sessionId, ChangeRevert.outcomeJson(sessionId, id, outcomes, restore))
+    }
 
     /**
      * Everything on this side that held the dropped part, made to agree with the CLI - see [rewind]. Runs
@@ -2013,6 +2910,9 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
             )
 
             if (change.applied) usage.refreshContext(sessionId)
+            // A model without fast mode has just turned it off (see CodexSessions.setModel) - said either way,
+            // since the clients keep the switch by this message alone.
+            conversations.fastMode(sessionId)?.let { sendFastMode(sessionId, it) }
             rememberTabs()
         }
     }
@@ -2033,9 +2933,14 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         rememberTabs()
     }
 
+    /**
+     * The context window of one conversation, Std or Long. A window is read at launch, so a change that moves it
+     * brings the process up again (after the turn running, if one is - see CodexSessions.setContextMode), and the
+     * figure that follows is measured against the window the conversation is in now (see CodexSession.contextNow).
+     */
     fun changeContextMode(sessionId: String, mode: String, remember: Boolean = true) {
         conversations.setContextMode(sessionId, mode, remember) { applied ->
-            sendContextMode(sessionId, applied)
+            sendContextMode(sessionId, applied, born = false)
             usage.refreshContext(sessionId)
             rememberTabs()
         }
@@ -2062,15 +2967,50 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
             put("effort", effort)
         }.toString()
 
-    private fun sendContextMode(sessionId: String, mode: String) {
-        emitLive(contextModeMessage(sessionId, mode))
+    /**
+     * The context window a conversation is in - live, like the effort (see [sendEffort]). [born] tells a change from
+     * an announcement, the way it does for the model (see [modelMessage]): the window is also named at a birth, to
+     * every client that joins, after a reset and for a tab not started yet, and nothing changes then. Read as a
+     * change, a panel reloaded in the middle of a conversation threw away the exact figure it had just been handed
+     * (see lastContextMessage in [attach]), and its meter went back to a guess until the next step.
+     */
+    private fun sendContextMode(sessionId: String, mode: String, born: Boolean) {
+        emitLive(contextModeMessage(sessionId, mode, born))
     }
 
-    private fun contextModeMessage(sessionId: String, mode: String): String =
+    private fun contextModeMessage(sessionId: String, mode: String, born: Boolean): String =
         buildJsonObject {
             put("type", "contextMode")
             put("sessionId", sessionId)
             put("mode", mode)
+            if (born) put("born", true)
+        }.toString()
+
+    /**
+     * Fast mode for one conversation - asked for or not (see CodexSession.fastMode). Whether Codex runs it on
+     * the fast tier, the clients read off the stream (`fast_mode_state` on `system/init` and `result`, said from
+     * what Codex reports - see CodexSession.fastReport); this says what was asked, which nothing in the stream does.
+     * Never sent for a conversation that asks nothing: there Codex's own config decides, and the stream shows it.
+     *
+     * From a phone as from the desk: it writes no setting, so there is no `remember` to withhold.
+     */
+    fun changeFastMode(sessionId: String, on: Boolean) {
+        DiagnosticsLog.note(DiagnosticsLog.AGENT, "fast mode asked for: $on")
+        conversations.setFastMode(sessionId, on)
+        sendFastMode(sessionId, on)
+        rememberTabs()
+    }
+
+    /** Live, like the effort and for the same reason (see [sendEffort]): it is what the conversation IS. */
+    private fun sendFastMode(sessionId: String, on: Boolean) {
+        emitLive(fastModeMessage(sessionId, on))
+    }
+
+    private fun fastModeMessage(sessionId: String, on: Boolean): String =
+        buildJsonObject {
+            put("type", "fastMode")
+            put("sessionId", sessionId)
+            put("on", on)
         }.toString()
 
     /**
@@ -2107,6 +3047,8 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         return buildList {
             add(modelMessage(sessionId, planned.model))
             add(effortMessage(sessionId, planned.effort))
+            if (planned.contextMode.isNotEmpty()) add(contextModeMessage(sessionId, planned.contextMode, born = true))
+            planned.fast?.let { add(fastModeMessage(sessionId, it)) }
             if (planned.mode.isNotEmpty()) {
                 add(
                     buildJsonObject {
@@ -2417,8 +3359,9 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         // different conversation would be drawn by the setting, which by then may be somebody else's
         // choice made in another tab.
         conversations.effort(sessionId)?.let { sendEffort(sessionId, it) }
+        conversations.fastMode(sessionId)?.let { sendFastMode(sessionId, it) }
         conversations.model(sessionId)?.let { sendModel(sessionId, it) }
-        conversations.contextMode(sessionId)?.let { sendContextMode(sessionId, it) }
+        conversations.contextMode(sessionId)?.let { sendContextMode(sessionId, it, born = true) }
         // A tab put back to sleep with a choice of its own (a restored one, a draft and nothing more) is
         // drawn by that choice rather than by the setting - see [plannedMessages].
         plannedMessages(sessionId).forEach(::emitLive)
@@ -2461,6 +3404,10 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
                 // Off the scheduler's own thread: this pool carries the Stop watchdog and the usage
                 // polling, and taking a process down is not instant.
                 ApplicationManager.getApplication().executeOnPooledThread {
+                    // Carried on first: a tab whose wait has just ended is about to work, and put to sleep a moment
+                    // before, it would only be raised again - MCP servers and all - in the same tick.
+                    runCatching { carryOnWhatIsDue() }
+                        .onFailure { thisLogger().warn("A tab could not carry on", it) }
                     runCatching { putIdleConversationsToSleep() }
                         .onFailure { thisLogger().warn("The idle sweep stumbled", it) }
                 }
@@ -2471,6 +3418,20 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         )
 
         Disposer.register(this) { sweep.cancel(false) }
+    }
+
+    /**
+     * Every "carry on" that has come due and not gone - the second door after a wait's own timer (see
+     * [carryOnChanged]).
+     *
+     * The timer counts the machine's awake time, not the clock's: a Mac that slept through the night wakes with
+     * the reset long past and its timer still hours away. And a tab busy at the moment its wait ended - a
+     * background agent reporting in - goes on from its next idle status, which may never come. This round is
+     * a minute at most behind either.
+     */
+    private fun carryOnWhatIsDue() {
+        val now = System.currentTimeMillis()
+        conversations.dueCarryOns(now).forEach { runQueued(it, now) }
     }
 
     private fun putIdleConversationsToSleep() {
@@ -2504,12 +3465,16 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
      * (see [IdleSleep]), read fresh rather than off the picture the loop started with.
      */
     private fun idleNow(sessionId: String, startedAt: Long, now: Long): Boolean {
+        // About to be carried on - see carryOnWhatIsDue. A tab busy at that moment is not idle either.
+        if (conversations.carryOnOf(sessionId)?.isDue(now) == true) return false
+
         val snapshot = snapshotOf(sessionId)
 
         return IdleSleep.sleeps(
             snapshot,
             running = true,
-            queued = queued.of(sessionId).isNotEmpty(),
+            // A held queue waits for the person, not for this process: the next message raises one anyway.
+            queued = queued.of(sessionId).isNotEmpty() && !queued.isHeld(sessionId),
             awake = maxOf(snapshot.changedAt, startedAt),
             now = now,
         )
@@ -2603,6 +3568,22 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         PROJECT_ORDER.mapNotNull { type -> projectCache[type] }
 
     /**
+     * The `init` a joining client is handed, built again rather than replayed.
+     *
+     * It carries the machine's settings, and the copy kept since the project opened carried them as they
+     * were then: a page reloaded after the spell check, the editor in messages or the send key had been
+     * switched got the old answer back, and its screen showed it until the IDE restarted. Only once it has
+     * been said at all - the first client's warm-up says it (see [warmUp]), and a copy that fails to build
+     * leaves the old one rather than none.
+     */
+    private fun refreshInit() {
+        if (!projectCache.containsKey(INIT)) return
+        runCatching { catalog.initMessage() }
+            .onSuccess { projectCache[INIT] = it }
+            .onFailure { thisLogger().warn("The project's init could not be built again", it) }
+    }
+
+    /**
      * The same facts, for a client that is watching the PROJECT rather than a conversation in it.
      *
      * A phone on the scenarios screen is looking at the project and at no chat at all, and the shelves,
@@ -2626,6 +3607,34 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
             if (truncated) put("truncated", true)
         }.toString()
 
+    /**
+     * The exact figure of the window last said in this conversation, for a client building its feed from
+     * nothing - or null when none has been said since the conversation began.
+     *
+     * The CLI is asked for it at the end of a turn (see [ProjectUsage.refreshContext]), and a phone is handed
+     * the end of the journal rather than the whole of it (see [CatchUp]). Opened in the middle of a long turn -
+     * the one that follows a compaction is the usual case - that end held the agent's answers and not one
+     * figure, so the meter fell back to its estimate against a window guessed from the model's name: 287
+     * thousand tokens of a million-token window read as a full one.
+     *
+     * Ahead of the tail rather than after it: what the tail says is newer, so a figure in it replaces this
+     * one, and an answer in it sets the estimate over it, as they would have live. Only to a feed being built
+     * from nothing - one that holds the conversation already holds this, and a figure arriving after its
+     * estimate would take the estimate back to the turn's start. Kept in the snapshot, which starts over
+     * with the conversation (`/clear`, another conversation opened in the tab).
+     */
+    private fun lastContextMessage(sessionId: String): String? {
+        val known = snapshot(sessionId).get()
+        if (known.contextMax <= 0) return null
+
+        return buildJsonObject {
+            put("type", "context")
+            put("sessionId", sessionId)
+            put("used", known.contextUsed)
+            put("max", known.contextMax)
+        }.toString()
+    }
+
     private fun restoreFinished(sessionId: String, upTo: Long): String =
         buildJsonObject {
             put("type", "restoreFinished")
@@ -2634,7 +3643,7 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         }.toString()
 
     private fun journal(sessionId: String): SessionJournal =
-        journals.getOrPut(sessionId) { SessionJournal() }
+        journals.computeIfAbsent(sessionId) { SessionJournal(after = closedJournals.remove(it) ?: 0) }
 
     private fun snapshot(sessionId: String): AtomicReference<SessionSnapshot> =
         snapshots.getOrPut(sessionId) { AtomicReference(SessionSnapshot()) }
@@ -2702,6 +3711,30 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         private const val FORK_OPENING_WAIT_SECONDS = 10L
 
         /**
+         * How long Codex is given to find a sent message's picture in a thread an older Codex wrote (see [saidPicture]) -
+         * a page of turns with every picture in them, walked from the newest.
+         */
+        private const val SAID_PICTURE_TIMEOUT_SECONDS = 30L
+
+        /** How a turn's result says the turn failed - a refused carry-on, not one that went through. */
+        private const val ERROR_RESULT = "\"is_error\":true"
+
+        /** A task's start, progress or end - a sign of the background at work (see [helpersHeard]). */
+        private const val TASK_EVENT = "\"subtype\":\"task_"
+
+        /** A subagent's own step, filed under the call that started it. */
+        private const val SUBAGENT_LINE = "\"parent_tool_use_id\":\""
+
+        /**
+         * What the page may hand over about one of its own closed tabs (see [notePanelTabClosed]). Its words are
+         * carried back to it unread, and the limits are only there so that a page out of its mind cannot make
+         * this list heavy: a tab's identifier is a word and a run's id, a name is a line, a place a few ids.
+         */
+        private const val PANEL_TAB_ID_LIMIT = 200
+        private const val PANEL_TAB_TITLE_LIMIT = 200
+        private const val PANEL_TAB_PLACE_LIMIT = 8_000
+
+        /**
          * Every conversation hub already alive on this machine.
          *
          * For the decisions that belong to the machine rather than to a window - which account pays (see
@@ -2757,6 +3790,9 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         /** And the relay's - one client here however many phones sit behind it. */
         const val RELAY_PREFIX = "relay-"
 
+        /** The fact that carries the project and the machine's settings - rebuilt for a joining client. */
+        private const val INIT = "init"
+
         /**
          * The order the project's facts are handed over in. Explicit rather than "whatever the map
          * iterates as": the interface builds its first screen out of these, and a sign-in state
@@ -2772,9 +3808,10 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
             // red its owner had damped, and stayed there until somebody at the desk moved it again.
             "calmColors",
             "init",
-            // Right after `init`, which carries the same setting as it stood when the hub warmed up: the
-            // cached `init` is what a joining window is given, so without the later fact a panel reopened
-            // after the switch was flipped would come back with the indicator its owner had hidden.
+            // Right after `init`, which carries the same setting. This fact came first, when the `init` a
+            // joining window was given was the copy from the hub's warm-up and brought back an indicator
+            // its owner had hidden; `init` is built afresh for each client now (see refreshInit), and the
+            // two agree. After it all the same, so the newer word is the last one either way.
             "indicators",
             "auth",
             // Right after the sign-in it qualifies: a client that joins without it cannot draw the menu

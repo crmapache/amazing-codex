@@ -87,6 +87,19 @@ describe('the road on the card of a going run', () => {
     ])
   })
 
+  // Seven stops of one card are seven items of a list, and the item is what tells them apart in a hint.
+  it('names a stop of a list after its item', () => {
+    const run = {
+      snapshot: { stages: [{ id: 'a' }] },
+      steps: [
+        { stageId: 'a', pass: 1, title: 'Plan it', state: 'done', item: { label: 'Titles for the test' } },
+        { stageId: 'a', pass: 2, title: 'Plan it', state: 'waiting', item: { label: '' } },
+      ],
+    } as unknown as ScenarioRun
+
+    expect(roadOf(run).map((stop) => stop.title)).toEqual(['Titles for the test', 'Plan it'])
+  })
+
   it('looks at a finished road from the card it ended on', () => {
     expect(endOf([stop('done'), stop('failed'), stop('skipped'), stop('skipped')])).toBe(1)
     expect(endOf([stop('done'), stop('done')])).toBe(1)

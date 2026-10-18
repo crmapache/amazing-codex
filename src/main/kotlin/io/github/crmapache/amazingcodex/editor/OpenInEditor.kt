@@ -80,7 +80,12 @@ internal object OpenInEditor {
      * file chooser and the clipboard beside this one step aside for the same reason. The index is slower
      * still when it is being built: the lookup waits for it, and nothing else does.
      */
-    fun open(project: Project, path: String, place: Place) {
+    /**
+     * [missing] is told when the path leads to nothing on this disk - a file deleted since the agent named it,
+     * a link written by memory. A click that does nothing at all is the one thing a link may not do, so the
+     * panel says so where it was pressed (see the fileMissing message).
+     */
+    fun open(project: Project, path: String, place: Place, missing: () -> Unit = {}) {
         if (path.isBlank()) return
 
         AppExecutorUtil.getAppExecutorService().execute {
@@ -91,6 +96,7 @@ internal object OpenInEditor {
                     // Never with the path: this buffer travels outwards inside a bug report (see
                     // DiagnosticsLog), and the ordinary log is enough for a link that led nowhere.
                     thisLogger().info("A file link from the panel pointed at nothing")
+                    missing()
                 }
 
                 1 -> files.single().let { file ->
@@ -284,17 +290,14 @@ internal object OpenInEditor {
      * lookup by name, whether it expanded or not. It names a place outside the project, so a project file
      * of the same name is not a worse answer than none: it is the wrong file, opened confidently.
      * `~/.claude/settings.json` used to offer the project's own settings.json files to choose between.
+     *
+     * Asked by the preview of a picture's chip as well (see ImagePreviews), on a pool thread: the chip a
+     * click opens and the picture shown over it are one file, found one way. They used to be found two ways,
+     * and the preview refused every relative path of a project on a WSL share while the click opened it.
      */
-    private fun resolve(project: Project, path: String): List<VirtualFile> {
-        val trimmed = path.trim()
-        if (trimmed.isEmpty()) return emptyList()
-        if (trimmed.startsWith("//") || trimmed.startsWith("\\\\")) return emptyList()
-        if (trimmed.any { it.isISOControl() }) return emptyList()
-
-        val base = project.basePath
-        val written = expandHome(trimmed, homeFor(base))
-        val absolute = File(written).isAbsolute
-        val candidate = if (absolute || base == null) File(written) else File(base, written)
+    fun resolve(project: Project, path: String): List<VirtualFile> {
+        val target = written(path, project.basePath) ?: return emptyList()
+        val candidate = target.file
 
         // refreshAndFind rather than find: a file the agent has just written may not be in the IDE's
         // picture of the disk yet, and the one moment it is asked for is right after it appeared.
@@ -302,8 +305,32 @@ internal object OpenInEditor {
             return listOfNotNull(LocalFileSystem.getInstance().refreshAndFindFileByPath(candidate.absolutePath))
         }
 
-        if (absolute || trimmed.startsWith("~")) return emptyList()
-        return byName(project, trimmed)
+        if (!target.byName) return emptyList()
+        return byName(project, path.trim())
+    }
+
+    /** Where a written path points on disk, and whether a miss there may go on to the lookup by name. */
+    data class Written(val file: File, val byName: Boolean)
+
+    /**
+     * The disk's half of [resolve]: the written path refused, expanded and put under the project's root - or
+     * null when it is refused outright. A network path is refused as WRITTEN: it is the chip, or the agent,
+     * that names a host. The project's own root is not refused for being on one - a project inside WSL always
+     * is, and a path relative to it belongs to the project.
+     *
+     * The arithmetic and nothing else, so that it can be asked without an IDE (see OpenInEditorTest).
+     */
+    fun written(path: String, base: String?, home: String? = homeFor(base)): Written? {
+        val trimmed = path.trim()
+        if (trimmed.isEmpty()) return null
+        if (trimmed.startsWith("//") || trimmed.startsWith("\\\\")) return null
+        if (trimmed.any { it.isISOControl() }) return null
+
+        val expanded = expandHome(trimmed, home)
+        val absolute = File(expanded).isAbsolute
+        val file = if (absolute || base == null) File(expanded) else File(base, expanded)
+
+        return Written(file, byName = !absolute && !trimmed.startsWith("~"))
     }
 
     /**

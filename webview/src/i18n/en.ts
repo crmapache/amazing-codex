@@ -55,7 +55,9 @@ export const en = {
       newChatMode: { title: 'DEFAULT MODE', hint: 'what new tabs start in' },
       composerLayout: { title: 'COMPOSER LAYOUT', hint: 'where the input sits' },
       pasteCollapse: { title: 'PASTED TEXT', hint: 'when a paste folds into a chip' },
+      spellcheck: { title: 'SPELL CHECK', hint: 'underlines under misspelled words' },
       sendKey: { title: 'SENDING A MESSAGE', hint: 'which key sends it' },
+      keys: { title: 'KEYBOARD SHORTCUTS', hint: 'every key the panel answers to' },
       codexConfig: { title: 'CODEX SETTINGS', hint: 'its config.toml - what /config changes' },
       improvePrompt: { title: 'IMPROVE PROMPT', hint: 'what the sparkle button asks for' },
       voice: { title: 'VOICE INPUT', hint: 'dictate instead of typing' },
@@ -106,7 +108,9 @@ export const en = {
       shareEditor: { label: 'Open file and selection', sub: 'What goes along with each message' },
       composerLayout: { label: 'Composer layout', sub: 'Where the input sits' },
       pasteCollapse: { label: 'Pasted text', sub: 'When a paste folds into a chip' },
+      spellcheck: { label: 'Spell check', sub: 'Underline misspelled words' },
       sendKey: { label: 'Sending a message', sub: 'Which key sends it' },
+      keys: { label: 'Keyboard shortcuts', sub: 'Tabs, queue, search and the rest' },
       codexConfig: { label: 'Codex settings', sub: 'Its own config.toml, and this project’s trust' },
       improvePrompt: { label: 'Improve prompt', sub: 'What the sparkle button asks for' },
       voice: { label: 'Voice input', sub: 'Dictate with your own Deepgram key' },
@@ -227,7 +231,19 @@ export const en = {
   shareEditor: {
     label: 'Send the editor along',
     hint: 'Each message carries the file open in the editor, and the lines selected in it - the way Codex’s /ide does it in a terminal',
-    note: 'Only from this panel: a message written on a phone carries nothing of the editor. One message can go without it - press the file’s chip in the input field.',
+    note: 'Only from this panel: a message written on a phone carries nothing of the editor. The file’s chip in the input field has this same switch, and there a single message can go without it, or with it.',
+    on: 'On',
+    off: 'Off',
+  },
+
+  /**
+   * The spell check of the panel's text fields - one switch. The note says who it is for (people writing in
+   * several languages, whose every word in the others came up underlined) and that a phone is not touched.
+   */
+  spellcheck: {
+    label: 'Check spelling',
+    hint: 'Words the checker does not know get a red underline - in the message field and in the panel’s other text fields',
+    note: 'Turn it off if you write in several languages and words in the others come up underlined. A message written on a phone is checked by the phone’s own keyboard, which this switch does not change.',
     on: 'On',
     off: 'Off',
   },
@@ -321,6 +337,12 @@ export const en = {
     empty: 'No past conversations here yet.',
     today: 'TODAY',
     earlier: 'EARLIER',
+    /** The tabs closed by hand above the past conversations - see ClosedTabs.kt. */
+    closed: 'RECENTLY CLOSED',
+    /** On a row of them; the key is named on the latest one alone, the one it brings back. */
+    reopen: (key: string): string => (key ? `Open again where it stood · ${key}` : 'Open again where it stood'),
+    /** Beside the time on a closed fork's row. */
+    fork: 'fork',
     messages: (n: number): string => (n === 1 ? `${n} message` : `${n} messages`),
   },
 
@@ -668,6 +690,7 @@ export const en = {
       stopped: 'Cut short by you',
       undone: 'Not done',
       headGaveUp: 'The main thread could not finish it either',
+      longList: 'The list was too long',
     },
     /** What the IDE said it could not do. */
     outcomes: {
@@ -738,6 +761,20 @@ export const en = {
       /** The heading of a pass of a stage that runs a set number of times, and of one that may stop early. */
       passOf: (pass: number, passes: number): string => `pass ${pass} of ${passes}`,
       passOfUpTo: (pass: number, passes: number): string => `pass ${pass} of up to ${passes}`,
+      /** On a pass of a stage that runs once per item of a list: which item of how many. */
+      itemOf: (index: number, count: number): string => `item ${index} of ${count}`,
+      /** On a pass that is the second go at its item, put off after the first until the rest of the list was done. */
+      secondGo: 'second go',
+      /** On the one pass of such a stage while the main thread has not given its list yet. */
+      listPending: 'waiting for the list',
+      /** On that pass once the list came back empty and the stage was skipped. */
+      listEmpty: 'nothing on the list',
+      /** On a pass whose item the main thread put off until the rest of the list was done. */
+      putOff: 'comes back after the rest',
+      /** What the heading of a stage that runs once per item says about its list. */
+      itemsShort: (n: number): string => (n === 1 ? '1 item' : `${n} items`),
+      listAheadShort: 'list not given yet',
+      listEmptyShort: 'empty list',
       /** In front of what the head said, between the cards. */
       headSaid: 'MAIN THREAD',
       sentBack: (n: number): string => (n === 1 ? 'sent back once' : `sent back ${n} times`),
@@ -870,6 +907,16 @@ export const en = {
       roundsUntilShort: (n: number): string => `×${n}, until done`,
       /** A loop that ends as soon as the head decides there is nothing left to do. */
       untilDone: 'or fewer, if the main thread says it is done',
+      /** A stage that runs once for each item of a list the main thread gives as it begins, rather than a number of times. */
+      perItem: 'once per item of a list',
+      /** The same in the outline, under the stage's name. */
+      perItemShort: 'per item',
+      /** The list such a stage runs once per item of: what its item is called in the prompts, and what the list is. */
+      listLabel: 'THE LIST',
+      itemName: 'name',
+      listHint:
+        'What the list is and what one item of it looks like. The main thread gives the whole list as the stage begins, and the stage runs once for each item.',
+      itemNote: (name: string): string => `Each pass gets its own item wherever a prompt says [[${name}]] - it needs no slot.`,
       cards: 'CARDS',
       addCard: 'Add a card',
       addCardHere: 'Add a card to this stage',
@@ -908,6 +955,13 @@ export const en = {
       duplicateInput: (name: string): string => `Two questions are both called ${name}.`,
       duplicateSlot: (card: string, name: string): string => `${card}: two slots are both called ${name}.`,
       badInputName: (name: string): string => `"${name}" is not a name - use letters, digits, - and _.`,
+      badItemName: (stage: string, name: string): string =>
+        `${stage}: "${name}" is not a name for the item - use letters, digits, - and _.`,
+      noItemList: (stage: string): string => `${stage}: nothing says what the list is.`,
+      itemSlotClash: (card: string, name: string): string =>
+        `${card}: the slot ${name} has the name of the stage's item, which the panel fills itself.`,
+      unusedItem: (stage: string, name: string): string =>
+        `${stage}: no prompt writes [[${name}]], so every pass is told the same.`,
       badSlotName: (card: string, name: string): string =>
         `${card}: "${name}" is not a name - use letters, digits, - and _.`,
     },
@@ -952,6 +1006,51 @@ export const en = {
     /** The modifier is named by the system - Cmd on a Mac, Ctrl elsewhere (see modifierName). */
     modEnter: (mod: string): string => `${mod}+Enter`,
     modEnterSub: 'Enter breaks the line',
+  },
+
+  /**
+   * The cheat sheet of every key the panel answers to (see KeysScreen). The keys themselves are not
+   * words: they are drawn as caps, by the IDE for its own actions and by the page for the rest.
+   */
+  keys: {
+    note: 'The keys work while the focus is in the panel. The tab keys are the ones that switch and close editor tabs in your IDE keymap.',
+    notSet: 'Not set',
+    keymapNote: 'The tab keys, Queue and opening the panel are IDE actions - rebind them in Settings | Keymap.',
+    openKeymap: 'Change in Keymap',
+    groups: { tabs: 'Tabs', message: 'Message field', agent: 'Agent', panel: 'Panel' },
+    rows: {
+      nextTab: 'Next tab',
+      previousTab: 'Previous tab',
+      newTab: 'New tab',
+      closeTab: 'Close tab',
+      searchTabsWhen: 'in the search window, its tabs',
+      closeTabWhen: 'asks first if the agent is working',
+      reopenTab: 'Reopen closed tab',
+      reopenTabWhen: 'the last 20, also in History',
+      openPanel: 'Open the panel',
+      openPanelWhen: 'from anywhere in the IDE',
+      send: 'Send',
+      newLine: 'New line',
+      queue: 'Queue',
+      queueWhen: 'sent once the agent finishes',
+      history: 'Browse sent messages',
+      historyWhen: 'in an empty field',
+      commands: 'Commands',
+      files: 'Files',
+      shell: 'Shell command',
+      shellWhen: 'at the start of a message',
+      deleteWord: 'Delete a word',
+      undo: 'Undo',
+      redo: 'Redo',
+      stop: 'Stop',
+      stopWhen: 'while the agent works',
+      mode: 'Next permission mode',
+      answer: 'Answer by number',
+      answerWhen: 'a permission or a question, with the field empty',
+      search: 'Search conversations',
+      fork: 'Fork from the selection',
+      forkWhen: 'with text selected in the feed',
+    },
   },
 
   improvePrompt: {
@@ -1103,6 +1202,39 @@ export const en = {
     addSub: 'One Codex does not offer',
   },
 
+  /**
+   * Fast mode - Codex's fast service tier: quicker answers that use the limits faster (see feed/fastMode.ts). The
+   * switch in the model menu, the mark on MODEL, the row when it does not turn on, and the phone's sheet. No
+   * multiplier of our own: how much faster, and whether it costs more, is Codex's line about the tier (`tier`).
+   */
+  fast: {
+    label: 'Fast mode',
+    offSub: 'Off · quicker answers that use your limits faster',
+    /** The same, with Codex's own line about the tier ("1.5x speed, increased usage"), as Codex writes it. */
+    offSubTier: (tier: string): string => `Off · Codex’s fast tier: ${tier}`,
+    waitingSub: 'On from the next message · uses your limits faster',
+    onSub: 'On · uses your limits faster',
+    /** On, and not by the panel's ask: Codex's own config (`service_tier`) put it there. */
+    fromSettingsSub: 'On in your Codex settings · turn off for this conversation',
+    unavailableSub: (reason: string): string => `Unavailable. ${reason}`,
+    chipOn: 'Fast mode is on',
+    chipFromSettings: 'Fast mode is on in your Codex settings',
+    chipWaiting: 'Fast mode turns on with the next message',
+    chipUnavailable: (reason: string): string => `Fast mode is unavailable. ${reason}`,
+    row: { label: 'FAST', title: 'Fast mode did not turn on', hint: 'This conversation goes on at standard speed.' },
+    reasons: {
+      notServed: 'Codex ran the turn without the fast tier.',
+      modelNotAllowed: 'This model has no fast tier.',
+      unknown: 'It is unavailable right now.',
+    },
+    phone: {
+      on: 'On',
+      off: 'Off',
+      note: 'Quicker answers that use your limits faster - for this conversation only.',
+      noteTier: (tier: string): string => `Codex’s fast tier: ${tier} - for this conversation only.`,
+    },
+  },
+
   composer: {
     placeholder: 'Ask, or describe a change…',
     placeholderPlan: 'Describe what to plan…',
@@ -1130,9 +1262,21 @@ export const en = {
     voice: 'Dictate',
     voiceStop: 'Stop dictating',
     editor: {
-      /** Hover over the file's chip in the field: it goes along with this message, or it has been left out. */
-      on: (place: string): string => `Codex sees ${place} with this message · click to leave it out`,
-      off: (place: string): string => `${place} is left out of this message · click to send it along`,
+      /** Hover over the file's chip in the field: it goes with this message, it is left out of it, or sending the editor is off. */
+      on: (place: string): string => `Codex sees ${place} with this message · click to choose`,
+      off: (place: string): string => `${place} is left out of this message · click to choose`,
+      muted: (place: string): string => `${place} is not sent - sending the editor is off · click to choose`,
+      /** The chip's menu (see editorMenu): the setting either way, and this one message the other way. */
+      menu: {
+        always: 'Send with every message',
+        alwaysSub: 'The open file and the selected lines, in every tab',
+        skip: 'Leave out of this message',
+        skipSub: 'The next message takes it again',
+        only: 'Send with this message only',
+        onlySub: 'The next message goes without it again',
+        never: 'Never send',
+        neverSub: 'In every tab, until turned back on - the same switch as in Settings',
+      },
     },
   },
 
@@ -1148,6 +1292,8 @@ export const en = {
     scenarios: 'Scenarios',
     closeScenarios: 'Close scenarios',
     closeRun: 'Close this run',
+    /** The hint on the open tab's cross: its key, and the one that opens it again once closed. */
+    closeHint: (close: string, reopen: string): string => `${close} · ${reopen} opens it again`,
     conversations: 'Conversations',
     newSession: 'New session',
     /** The button beside "+": a fork of the conversation on screen, whole - see App.fork. */
@@ -1266,6 +1412,28 @@ export const en = {
   feed: {
     empty: { title: 'Ask Codex about this project', hint: '@ for files · / for commands' },
     you: 'YOU',
+    /**
+     * Over a message the panel said itself instead of YOU - see UserItem.auto. The hint says why the work had
+     * stopped, and that nobody would have come back to say "carry on".
+     */
+    auto: {
+      label: 'PANEL',
+      /** Over the label, the reason - one for each road (see CarryOnReason). */
+      why: {
+        accountSwitch: 'Not written by you: switching the account cut the turn short, and the panel carried it on by itself',
+        limit: 'Not written by you: the usage limit stopped the turn, and the panel carried it on once it could go on',
+        restart: 'Not written by you: Codex was restarted under the conversation and its background agents were lost, so the panel told it to carry on',
+      },
+    },
+    /**
+     * The row at the end of the feed while the IDE waits out a limit to carry the conversation on by itself
+     * (see CarryOnRow) - PANEL stands before these words, so they are the panel's own sentence.
+     */
+    carryOn: {
+      planned: (clock: string): string => `Carries this conversation on by itself at ${clock}, once the limit resets`,
+      guessed: (clock: string): string => `Tries to carry this conversation on by itself at ${clock} - the limit did not say when it resets`,
+      cancel: "Don't carry on",
+    },
     /** The button that appears once the feed has been scrolled away from the newest message. */
     jumpToLatest: 'Jump to latest',
     copyBlock: 'Copy this block',
@@ -1322,6 +1490,15 @@ export const en = {
     /** Said only when a paste is too long to be drawn whole - the copy button still copies all of it. */
     pasteShown: (shown: number, total: number): string => `First ${shown} lines of ${total} · copying takes all of it`,
     fromOutput: 'from output',
+    /**
+     * The picture under the pointer on an image chip (see ImagePreview). `missing` stands in its place when
+     * there is nothing to show; `opens` follows its size on a chip a click opens in the editor.
+     */
+    imagePreview: {
+      missing: 'The picture could not be read - the file is gone, or the message no longer holds it',
+      opens: 'click to open',
+      unopened: 'could not be opened - click to try again',
+    },
 
     think: { chip: 'THINK', thoughts: (n: number): string => `${n} ${n === 1 ? 'thought' : 'thoughts'}` },
 
@@ -1506,6 +1683,20 @@ export const en = {
       textWithCode: (code: number): string => `Codex stopped unexpectedly (exit code ${code}).`,
     },
 
+    /** `/status` (see SessionInfoRow) and the right-click menu's entry, which the browser draws with these words. */
+    session: {
+      label: 'SESSION',
+      id: 'Session ID',
+      terminal: 'In a terminal',
+      copyId: 'Copy Session ID',
+      terminalNote: 'Continues this conversation in a terminal opened in the project folder',
+      terminalNoteOn: (account: string): string =>
+        `Continues this conversation on ${account} in a terminal opened in the project folder`,
+      terminalNoteDefault: (account: string): string =>
+        `Continues this conversation in a terminal opened in the project folder - on the default Codex sign-in, not on ${account}`,
+      unnamedAccount: 'this tab’s account',
+      none: 'No ID yet - the conversation gets one with its first message',
+    },
     outranked: {
       /** A trusted project's own settings demand another sign-in than the one this conversation runs on. */
       account: {
@@ -1595,7 +1786,27 @@ export const en = {
       unconfirmed: 'unconfirmed',
     },
 
-    copy: { copied: 'Copied', click: 'Click to copy', openFile: 'Open in the editor', openFolder: 'Show the folder' },
+    copy: { copied: 'Copied', click: 'Click to copy', openFile: 'Open in the editor', openFolder: 'Show the folder', missing: 'No such file on disk - press to look again' },
+    /**
+     * The list of files a turn changed (see ChangesRow): a row's buttons both ways, the list's own, and what came
+     * of a revert or of bringing it back.
+     */
+    changes: {
+      all: (n: number): string => `Show all (${n})`,
+      fewer: 'Show fewer',
+      revert: 'Revert this file',
+      revertAll: 'Revert all',
+      reverting: 'Reverting…',
+      restore: 'Bring the changes back',
+      restoreAll: 'Bring all back',
+      restoring: 'Bringing back…',
+      reverted: 'Reverted',
+      changed: 'Changed since, left as is',
+      missing: 'The file is gone',
+      failed: "Couldn't write the file",
+      deleted: 'Deleted',
+      movedFrom: (from: string): string => `from ${from}`,
+    },
   },
 
   chrome: {
@@ -1610,6 +1821,9 @@ export const en = {
       label: 'QUEUED',
       hint: (n: number): string =>
         `${n} will fire in order when the run finishes · drag to reorder`,
+      /** A queue that came back with a tab opened again after it was closed while it worked (see SessionQueue.hold). */
+      held: (n: number): string =>
+        `${n} will fire in order after your next message - the turn they waited for was stopped · drag to reorder`,
       /** On the pencil beside a queued message: it goes back into the field to be corrected. */
       edit: 'Edit in the field',
       /**
@@ -1674,7 +1888,17 @@ export const en = {
       stopCommand: 'Stop this command',
       stopCommandTitle: 'Stop this command?',
     },
-    confirm: { cancel: 'Cancel', stop: 'Stop' },
+    confirm: {
+      cancel: 'Cancel',
+      stop: 'Stop',
+      /** The panel's close key over a tab whose agent is still working - see closingWorking in App. */
+      close: 'Close',
+      closeWorking: 'Close a tab that is still working?',
+      closeWorkingNote: (key: string): string =>
+        key
+          ? `The agent stops. ${key} brings the tab back, its queue waiting for your next message.`
+          : 'The agent stops. The tab can be opened again from History, its queue waiting for your next message.',
+    },
     noChats: { title: 'Excited to work together!', button: "Let's start" },
     crash: {
       title: 'The panel hit an error',
@@ -1729,6 +1953,8 @@ export const en = {
     fiveHour: '5h',
     weekly: 'week',
     spending: 'spend',
+    /** Under the figures of an account at its limit: when it can be used again (see usableAgainIn). */
+    usableAgainIn: (left: string): string => `At the limit · usable again in ${left}`,
     row: {
       /** The value on the menu row when there is nothing to switch between. */
       one: 'One account',
@@ -2318,6 +2544,8 @@ export const en = {
     weeklyApps: 'weekly apps',
     weeklyFable: 'weekly Fable',
     extra: 'extra usage',
+    /** A workspace's spending cap for the person - Codex's `workspace_*_usage_limit_reached` (see limitWindowName). */
+    spending: 'spending',
   },
 
   permission: {
@@ -2415,6 +2643,8 @@ export const en = {
     btw: 'ask a quick side question - the work goes on',
     /** Grey after `/btw ` until the question is typed. */
     btwArgument: '<question>',
+    fast: 'toggle fast mode - quicker answers that use your limits faster',
+    status: "this conversation's ID and the command to resume it in a terminal",
     model: 'switch the model for this session',
     effort: 'set how long Codex thinks before acting',
     codeReview: 'review changes with Codex\'s own reviewer',

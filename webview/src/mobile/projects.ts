@@ -140,6 +140,12 @@ export interface Inventory {
    * a fact of an open project (see customModelsOf in facts.ts). Absent from an IDE older than the field.
    */
   customModels?: string[]
+  /**
+   * Whether voice input is switched on at that desk. A phone dictates on that machine's key, and the machine
+   * refuses it while the switch is off (see VoiceGrant) - so the button is not offered then. Absent from an
+   * IDE older than the field, which can only say so by refusing a press.
+   */
+  voice?: boolean
 }
 
 /** What a conversation's mark says about it - the panel's own five states (see sessionState there). */

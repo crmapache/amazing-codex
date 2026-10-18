@@ -1,5 +1,6 @@
 package io.github.crmapache.amazingcodex.search
 
+import io.github.crmapache.amazingcodex.codex.CarryOnWords
 import java.time.Instant
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -116,6 +117,12 @@ internal object TranscriptText {
             .replace(BLANK_LINES, "\n\n")
             .trim()
 
+        // The panel's "carry on", said in the person's name and not by them (see CarryOnWords): one in every tab
+        // an account switch or a limit stopped, and a search for "limit" would find little else. Asked after the
+        // CLI's reminders are off, as the feed asks it (see CARRY_ON in feed/build.ts): a reminder put ahead of the
+        // words would hide the tag from a look at the raw start.
+        if (words.startsWith(CARRY_ON)) return null
+
         return words.takeIf { it.isNotEmpty() }
     }
 
@@ -129,6 +136,7 @@ internal object TranscriptText {
     private const val AGENT_ITEM = "\"AgentMessage\""
     private const val USER_EVENT = "\"user_message\""
     private const val AGENT_EVENT = "\"agent_message\""
+    private const val CARRY_ON = "<${CarryOnWords.TAG}"
 
     internal const val MAX_TEXT_CHARS = 20_000
 

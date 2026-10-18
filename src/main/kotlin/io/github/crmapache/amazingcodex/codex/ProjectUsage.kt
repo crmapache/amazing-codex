@@ -5,6 +5,7 @@ import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.util.Disposer
 import com.intellij.util.concurrency.AppExecutorUtil
 import io.github.crmapache.amazingcodex.codex.accounts.CodexAccounts
+import io.github.crmapache.amazingcodex.stats.TranscriptTokens
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlinx.serialization.json.JsonArray
@@ -252,7 +253,10 @@ internal class ProjectUsage(
     /**
      * Today's tokens - a scan of EVERY project's transcripts rather than a question to the current
      * conversation: it has a cost of its own, so it runs in the background, goes upwards as a separate
-     * message and lives on the rarest round of them all (see CodexPanel.scheduleTokenUpdates).
+     * message and lives on the rarest round of them all (see ProjectCatalog, TOKENS_PERIOD_MINUTES).
+     *
+     * The same reading fills the statistics tab's tokens by day (see TranscriptTokens), so the counter
+     * and the chart never disagree about today.
      */
     fun refreshTodayTokens() {
         if (!isLoggedIn()) return
@@ -266,7 +270,7 @@ internal class ProjectUsage(
             hub.broadcastProject(
                 buildJsonObject {
                     put("type", "usage")
-                    put("todayTokens", CodexTokenUsage.today(workingDirectory))
+                    put("todayTokens", CodexTokenUsage.millions(TranscriptTokens.refresh(workingDirectory)))
                 }.toString(),
             )
         }
@@ -416,6 +420,21 @@ internal class ProjectUsage(
             }.filter { it.isNotEmpty() }.toSet(),
         )
 
+        // Which of them have fast mode - for the switch a model picked without it turns off (see
+        // CodexSessions.setModel), and for the mark, which a tier the model lacks does not light (see
+        // CodexSession.fastReport). "default" among them, as the model it comes to (see CodexShapes.fastModels).
+        CodexAccounts.getInstance().noteFastModels(account, CodexShapes.fastModels(models))
+
+        // And which of them "Default" comes to: a conversation moved off it by a pick says the way back with that
+        // model, where Codex itself has not named its default to it (see CodexSession.defaultModel).
+        CodexAccounts.getInstance().noteDefaultModel(
+            account,
+            models.firstNotNullOfOrNull { element ->
+                (element as? JsonObject)?.takeIf { it["isDefault"]?.jsonPrimitive?.booleanOrNull == true }
+                    ?.let { it["value"]?.jsonPrimitive?.contentOrNull }
+            }.orEmpty(),
+        )
+
         hub.broadcastProject(
             buildJsonObject {
                 put("type", "models")
@@ -443,6 +462,12 @@ internal class ProjectUsage(
                             (model["efforts"] as? JsonArray)?.takeIf { it.isNotEmpty() }?.let { put("efforts", it) }
                             model["standardContext"]?.jsonPrimitive?.intOrNull?.let { put("standardContext", it) }
                             model["longContext"]?.jsonPrimitive?.intOrNull?.let { put("longContext", it) }
+                            // Where the menu offers the fast mode switch at all - only on a model that has it - and
+                            // Codex's own line about the tier, which says how much faster and whether it costs more.
+                            if (model[CodexShapes.SUPPORTS_FAST_MODE]?.jsonPrimitive?.booleanOrNull == true) {
+                                put("fast", true)
+                                model[CodexShapes.FAST_MODE_DESCRIPTION]?.jsonPrimitive?.contentOrNull?.let { put("fastDescription", it) }
+                            }
                         }
                     }
                 }
@@ -456,8 +481,8 @@ internal class ProjectUsage(
      * model - with "1M" models it is five times the usual - and arithmetic of our own on the panel's
      * side would show "the context is full" on an almost empty conversation.
      *
-     * Only a live conversation is asked: a sleeping one's context is empty by definition, while a
-     * one-off ping would answer about its own process.
+     * The conversation itself is asked, asleep or not: Codex's count is of the thread, and a one-off ping
+     * would answer about its own process (see CodexSessions.requestContextUsage).
      */
     fun refreshContext(sessionId: String) {
         sessions.requestContextUsage(

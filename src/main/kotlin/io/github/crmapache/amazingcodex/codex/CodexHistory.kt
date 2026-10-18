@@ -134,6 +134,15 @@ internal object CodexHistory {
         files.remove(id)
     }
 
+    /**
+     * A thread's file where a test stands it: a stand-in for `codex app-server` writes none (see FakeCodex), and a
+     * test has no Codex home of its own to write one in. What a move asks before it resumes a thread (see
+     * CodexSessions.moveTo).
+     */
+    internal fun standIn(id: String, file: File) {
+        files[id] = file
+    }
+
     private fun segmentsIn(folder: File?, id: String): List<File> =
         folder?.listFiles { file -> file.isFile && file.name.endsWith(".jsonl") && "${id}_" in file.name }?.toList().orEmpty()
 
@@ -711,8 +720,7 @@ internal object CodexReplay {
 
                 else -> if (CodexDialect.isTool(item)) {
                     CodexDialect.toolUses(CodexDialect.toolCalls(item), model = "", uuid = id)?.let(lines::add)
-                    val results = CodexDialect.toolResults(item).map { it.copy(content = CodexDialect.clip(it.content, outputLimit)) }
-                    CodexDialect.toolResults(results, uuid = "$id-result")?.let(lines::add)
+                    lines += CodexDialect.resultLines(item, outputLimit)
                 }
             }
         }

@@ -6,8 +6,8 @@ paths:
   - "webview/src/components/AgentStreamView.tsx"
   - "webview/src/feed/workflow.ts"
   - "webview/src/feed/workflow.test.ts"
-  - "src/main/kotlin/io/github/crmapache/amazingclaudecode/claude/WorkflowAgents.kt"
-  - "src/test/kotlin/io/github/crmapache/amazingclaudecode/claude/WorkflowAgentsTest.kt"
+  - "src/main/kotlin/io/github/crmapache/amazingcodex/codex/WorkflowAgents.kt"
+  - "src/test/kotlin/io/github/crmapache/amazingcodex/codex/WorkflowAgentsTest.kt"
   - "webview/src/hooks/useAgentTranscript.ts"
   - "webview/src/hooks/useOpenAgent.ts"
 ---
@@ -82,7 +82,7 @@ paths:
 Строка агента открывает окно над областью вывода (`WorkflowAgentView`): задание целиком, шаги и то, что
 он вернул. Отчёт для этого не годится - он несёт по 400 символов задания и ответа, а у агента со схемой
 первые 400 символов ответа это открывающая скобка его JSON. Настоящий разговор агента CLI пишет себе на
-диск, и оттуда его читает `claude/WorkflowAgents.kt`.
+диск, и оттуда его читает `codex/WorkflowAgents.kt`.
 
 - **Окно, а не раскрытие строки, и решает это длина ответа.** Агент возвращает страницу - сорок находок
   в JSON, отчёт, свой дифф. Развёрнутая под своей строкой, она читалась в колонке с двойным отступом и

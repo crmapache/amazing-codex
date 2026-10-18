@@ -10,6 +10,7 @@ import kotlin.test.assertTrue
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
@@ -146,6 +147,11 @@ class CodexHistoryTest {
         val edit = blockOf(lines[4])
         assertEquals("Edit", edit["name"]?.jsonPrimitive?.content)
         assertEquals("a\nb\nc", edit["input"]!!.jsonObject["new_string"]?.jsonPrimitive?.content)
+        // The patch's file and what became of it ride with its result, as in a live turn: a conversation opened from the
+        // history lists the turn's files with their undo (see feed/changes.ts).
+        val half = lines[5]["toolUseResult"]!!.jsonObject
+        assertEquals("/p/x.ts", half["filePath"]?.jsonPrimitive?.content)
+        assertEquals("update", half["type"]?.jsonPrimitive?.content)
 
         assertEquals("Done.", textOf(lines[6]))
         assertEquals("m1", lines[6]["uuid"]?.jsonPrimitive?.content)
@@ -229,6 +235,38 @@ class CodexHistoryTest {
         val line = parse(CodexReplay.lines(turn(picture), 12_000, closeTurn = false).single())
 
         assertEquals("[Image #1]", textOf(line).trim())
+    }
+
+    /*
+     * The panel writes the caption into the words where the picture stood, numbered across the conversation, and
+     * Codex keeps the words as sent (measured on 0.160: "[Image #1] look" beside the picture). Appended again, the
+     * picture came back as a second chip that named a picture the message never had.
+     */
+    @Test
+    fun `a picture the words name already is not named twice`() {
+        val pictures = """{"type":"image","url":"data:image/png;base64,AAAA"},{"type":"image","url":"data:image/png;base64,BBBB"}"""
+        val said = """{"type":"userMessage","id":"u3","content":[{"type":"text","text":"[Image #6] and [Image #7] side by side","text_elements":[]},$pictures]}"""
+        val half = """{"type":"userMessage","id":"u4","content":[{"type":"text","text":"[Image #3] then one more","text_elements":[]},$pictures]}"""
+
+        assertEquals("[Image #6] and [Image #7] side by side", textOf(parse(CodexReplay.lines(turn(said), 12_000, closeTurn = false).single())))
+        // Codex's terminal or an older panel naming fewer: the rest at the end, numbered on.
+        assertEquals("[Image #3] then one more [Image #4]", textOf(parse(CodexReplay.lines(turn(half), 12_000, closeTurn = false).single())))
+    }
+
+    /**
+     * The panel's own "carry on" comes back from the history with its tag whole - the tag is the only thing a
+     * thread keeps of whose words they were, and the feed draws the card as PANEL by it (CARRY_ON in
+     * feed/build.ts). Codex hides only fragments of its own by name (`<turn_aborted>`, `<environment_context>`
+     * and their kin) from a thread's turns; this one is a message like any other, and nothing here takes it apart.
+     */
+    @Test
+    fun `the panel's own carry-on is replayed with the tag that says it was the panel's`() {
+        val words = CarryOnWords.forAgent(CarryOns.Reason.LIMIT, CarryOnWords.afterLimit("ru", moved = false))
+        val said = """{"type":"userMessage","id":"u3","content":[{"type":"text","text":${JsonPrimitive(words)},"text_elements":[]}]}"""
+        val line = parse(CodexReplay.lines(turn(said), 12_000, closeTurn = false).single())
+
+        assertEquals(words, textOf(line))
+        assertTrue(textOf(line).startsWith("<panel-carry-on reason=\"limit\">"))
     }
 
     private fun blockOf(line: JsonObject): JsonObject =

@@ -263,9 +263,10 @@ describe('chipFile', () => {
     })
   })
 
-  it('opens a pasted picture by the file the shell wrote, and not at all when there is none', () => {
-    expect(chipFile({ kind: 'img', value: 'Image #3', data: 'data:image/png;base64,AA==', path: '/tmp/acc/shot.png' })).toEqual({ path: '/tmp/acc/shot.png' })
-    expect(chipFile({ kind: 'img', value: 'Image #3', data: 'data:image/png;base64,AA==' })).toBeNull()
+  /* A picture opens by a road of its own, and says when it did not (see chipOpening in imagePreview.test.ts). */
+  it('leaves a picture to its own road', () => {
+    expect(chipFile({ kind: 'img', value: 'Image #3', data: 'data:image/png;base64,AA==', path: '/tmp/acc/shot.png' })).toBeNull()
+    expect(chipFile({ kind: 'img', value: 'design/sheet.png' })).toBeNull()
   })
 
   it('opens nothing for what is not a file', () => {

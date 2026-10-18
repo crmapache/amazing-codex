@@ -26,8 +26,10 @@ export const normalizeSendKey = (value: string | undefined): SendKey => (value =
  * the panel's font, and one that falls through to whatever the system has sits in the middle of a line at
  * a size and weight of its own.
  */
-export const modifierName = (): string =>
-  typeof navigator !== 'undefined' && /mac/i.test(navigator.userAgent) ? 'Cmd' : 'Ctrl'
+export const modifierName = (): string => (onMac() ? 'Cmd' : 'Ctrl')
+
+/** Whether the panel is drawn on a Mac - asked of the browser, for the reason given above. */
+export const onMac = (): boolean => typeof navigator !== 'undefined' && /mac/i.test(navigator.userAgent)
 
 /** Both keys as they are written beside their option, and in the Send button's tooltip. */
 export const sendKeyCap = (key: SendKey): string => (key === 'modEnter' ? `${modifierName()}+Enter` : 'Enter')

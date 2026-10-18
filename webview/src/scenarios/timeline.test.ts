@@ -143,6 +143,72 @@ describe('a run read top to bottom', () => {
   })
 })
 
+describe('a stage that runs once per item of a list', () => {
+  const plans = {
+    id: 'p',
+    title: 'Plans',
+    repeat: 1,
+    untilDone: false,
+    each: { name: 'card', description: 'the cards' },
+    cards: [snapshot.stages[0].cards[0]],
+  }
+  const listed = { ...snapshot, stages: [plans, { ...snapshot.stages[0], id: 's2', title: 'Check', repeat: 1, untilDone: false }] }
+  const item = (index: number, count: number) => ({ label: `card ${index}`, value: `https://cards/${index}`, index, count, again: '' })
+  const pass = (index: number, count: number, state: ScenarioRunStep['state'] = 'waiting'): ScenarioRunStep => ({
+    ...step(`p:a:${index}`, 'a', index, state),
+    stageId: 'p',
+    item: item(index, count),
+  })
+
+  // The heading says how long the list is - the one thing a ceiling of passes never said - and nothing about
+  // passes, which a list does not have.
+  it('heads the stage with the length of its list, and its rows with no count of passes', () => {
+    const rows = timelineOf(run({ snapshot: listed, steps: [pass(1, 3, 'running'), pass(2, 3), pass(3, 3), { ...step('s2:a:1', 'a', 1), stageId: 's2' }] }))
+    const heading = rows.find((row) => row.kind === 'stage' && row.stageId === 'p')
+    const first = rows.find((row) => row.kind === 'step' && row.step.stageId === 'p')
+
+    expect(heading?.kind === 'stage' ? [heading.items, heading.passes, heading.untilDone] : null).toEqual([3, 1, false])
+    expect(first?.kind === 'step' ? [first.perItem, first.passes] : null).toEqual([true, 1])
+    expect(rows.find((row) => row.kind === 'stage' && row.stageId === 's2')).not.toHaveProperty('items')
+  })
+
+  it('says the list is not given yet while its one pass waits for it', () => {
+    const rows = timelineOf(run({ snapshot: listed, steps: [{ ...step('p:a:1', 'a', 1, 'judging'), stageId: 'p' }, { ...step('s2:a:1', 'a', 1), stageId: 's2' }] }))
+    const heading = rows.find((row) => row.kind === 'stage' && row.stageId === 'p')
+
+    expect(heading?.kind === 'stage' ? heading.items : undefined).toBeNull()
+  })
+
+  // Nothing to do is not the same as never reached: the stage is behind the run.
+  it('counts a stage whose list came back empty as behind the run', () => {
+    const empty = { ...step('p:a:1', 'a', 1, 'skipped'), stageId: 'p', item: { label: '', value: '', index: 0, count: 0, again: '' } }
+    const rows = timelineOf(run({ snapshot: listed, steps: [empty, { ...step('s2:a:1', 'a', 1, 'running'), stageId: 's2' }] }))
+    const heading = rows.find((row) => row.kind === 'stage' && row.stageId === 'p')
+
+    expect(heading?.kind === 'stage' ? [heading.items, heading.standing] : null).toEqual([0, 'done'])
+  })
+
+  // Said before any item began, the main thread's words about the list are about the whole stage.
+  it('opens the stage with what the main thread said about its list', () => {
+    const rows = timelineOf(
+      run({
+        snapshot: listed,
+        steps: [pass(1, 2), pass(2, 2), { ...step('s2:a:1', 'a', 1), stageId: 's2' }],
+        notes: [{ at: 10, stepKey: 'p:list', text: 'two cards left to plan' }],
+      }),
+    )
+
+    expect(rows.map((row) => (row.kind === 'note' ? row.note.text : row.key))).toEqual([
+      'stage:p',
+      'two cards left to plan',
+      'p:a:1',
+      'p:a:2',
+      'stage:s2',
+      's2:a:1',
+    ])
+  })
+})
+
 describe('a run that ended', () => {
   const begun = (key: string, cardId: string, pass: number, state: ScenarioRunStep['state']): ScenarioRunStep => ({
     ...step(key, cardId, pass, state),

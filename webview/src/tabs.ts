@@ -1,4 +1,5 @@
 import type { Session } from './components/Header'
+import type { TabPlace } from './protocol'
 
 /**
  * The strip holds two kinds of tab, and only one of them is a conversation.
@@ -45,24 +46,31 @@ export const groupOrder = (sessions: Session[]): string[] => {
 }
 
 /**
- * Where a tab that belongs to no conversation stands: how many groups were to its left, and which groups
- * the strip held when that was decided.
- *
- * The snapshot is what makes the place survive the list changing underneath it, and a bare number does
- * not: with the statistics standing second and the conversation before it closed, "second" now points
- * past its former neighbour and the tab drifts to the right on its own. Counting instead the neighbours
- * it was put after, it stays where the hand left it - and a conversation opened afterwards, being nobody
- * it knows, appears to its right.
+ * Where a tab that belongs to no conversation stands - described once, in the protocol, since the place travels to
+ * the IDE and back with a closed tab (see TabPlace there).
  */
-export interface TabPlace {
-  at: number
-  among: string[]
-}
+export type { TabPlace }
 
 /** The place as it stands in today's strip - see TabPlace. */
 export const placeIn = (place: TabPlace, groups: string[]): number => {
   const left = new Set(place.among.slice(0, place.at))
-  return groups.filter((groupId) => left.has(groupId)).length
+  for (let index = groups.length - 1; index >= 0; index -= 1) {
+    if (left.has(groups[index]!)) return index + 1
+  }
+  return 0
+}
+
+/**
+ * A place as it came back from the IDE, which kept it for a closed tab and carried it back unread (see
+ * ClosedTabs.kt) - checked rather than trusted: a page of another version may have written it.
+ */
+export const placeFromWire = (place: unknown): TabPlace | undefined => {
+  if (!place || typeof place !== 'object') return undefined
+
+  const { at, among } = place as { at?: unknown; among?: unknown }
+  if (typeof at !== 'number' || !Number.isInteger(at) || at < 0) return undefined
+  if (!Array.isArray(among) || !among.every((id): id is string => typeof id === 'string')) return undefined
+  return { at, among }
 }
 
 /** Where a tab goes when it opens: the end of the strip, after every conversation. */
@@ -118,6 +126,23 @@ export const stripTabs = (sessions: Session[], panels: PanelTabPlace[]): string[
   return stripOrder(sessions, panels).flatMap((id) =>
     held.has(id) ? [id] : sessions.filter((session) => session.groupId === id).map((session) => session.id),
   )
+}
+
+/**
+ * The tab the panel's next- or previous-tab key moves to (see PanelKeys.kt): the neighbour in the strip as
+ * it is drawn, forks and the panel's own tabs included, and round from the last one to the first.
+ *
+ * Round, the way the IDE's own tab keys go through editor tabs, since those are the keys that do this:
+ * the strip has no "end" a person would want to stop at, and a key that goes dead on the last tab reads
+ * as a key that does not work. A tab that is not in the strip (the screen with no tabs) starts at the
+ * first one, or the last going backwards; an empty strip has nowhere to go.
+ */
+export const tabBeside = (order: string[], current: string, step: 1 | -1): string => {
+  if (order.length === 0) return ''
+
+  const at = order.indexOf(current)
+  if (at < 0) return step > 0 ? order[0]! : order[order.length - 1]!
+  return order[(at + step + order.length) % order.length]!
 }
 
 /**

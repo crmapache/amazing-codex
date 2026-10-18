@@ -64,14 +64,14 @@ describe('restoredDraft', () => {
     expect(restoredDraft({ tokens: [{ kind: 'chip', chip }], quotes: [] })?.tokens).toEqual([{ kind: 'chip', chip }])
   })
 
-  /* The file was swept: the picture comes back as the path the agent can still open, like a reused message. */
+  /* The file was not read back: the picture comes back as a reference to its path, like a reused message. */
   it('turns a picture without bytes into a reference to its file', () => {
     const restored = restoredDraft({
       tokens: [{ kind: 'chip', chip: { kind: 'img', value: 'Image #1', path: '/p/a.png' } }],
       quotes: [],
     })
 
-    expect(restored?.tokens).toEqual([{ kind: 'chip', chip: { kind: 'file', value: '/p/a.png' } }])
+    expect(restored?.tokens).toEqual([{ kind: 'chip', chip: { kind: 'img', value: '/p/a.png' } }])
   })
 
   /* Written by another version of the panel: what does not check out is left out, the rest comes back. */

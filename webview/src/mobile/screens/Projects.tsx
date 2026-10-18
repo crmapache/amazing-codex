@@ -10,6 +10,7 @@ import { dotFor } from './TabsSheet'
 import m from '../mobile.module.css'
 import { useT } from '../../i18n'
 import type { Dict } from '../../i18n/en'
+import { EmptyPlate } from './EmptyPlate'
 
 /**
  * Which card a screen was opened from, and where on the screen that card stood.
@@ -237,11 +238,11 @@ export const Projects = ({
         )}
 
         {projects.length === 0 && reach === 'connected' && (
-          <p className={m.empty}>{t.mobile.sessions.nothingYet}</p>
+          <EmptyPlate title={t.mobile.sessions.nothingYet} inset />
         )}
 
         {projects.length === 0 && reach === 'none' && (
-          <p className={m.empty}>{t.mobile.sessions.nonePaired}</p>
+          <EmptyPlate title={t.mobile.sessions.nonePaired} inset />
         )}
 
         {projects.map((project, index) => {

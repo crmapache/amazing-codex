@@ -20,6 +20,7 @@ import io.github.crmapache.amazingcodex.codex.SessionClient
 import io.github.crmapache.amazingcodex.codex.SessionLaunch
 import io.github.crmapache.amazingcodex.codex.SessionSnapshot
 import io.github.crmapache.amazingcodex.codex.StartingChoice
+import io.github.crmapache.amazingcodex.codex.TurnFiles
 import io.github.crmapache.amazingcodex.feedback.DiagnosticsLog
 import io.github.crmapache.amazingcodex.stats.StatsLedger
 import io.github.crmapache.amazingcodex.net.IdeHttp
@@ -1404,6 +1405,12 @@ internal class RemoteAgent : Disposable {
             // The fact stays: for a project that is open it is live, while this is as fresh as the
             // last knock (see customModelsOf on the phone).
             putJsonArray("customModels") { CodexPreferences.customModels.forEach { add(it) } }
+            // Whether voice input is switched on here. A phone dictates with its own microphone but on this
+            // machine's key, and this machine refuses it while the switch is off (see VoiceGrant) - so with it
+            // off the phone hides the button rather than offering one that answers every press with "switched
+            // off on the machine". Machine-wide like the two above; told again the moment it is flipped (see
+            // VoiceDesk.setEnabled), not only on the next knock.
+            put("voice", CodexPreferences.voiceEnabled)
             putJsonArray("projects") {
                 for ((key, attachment) in projects) {
                     if (attachment.project.isDisposed) continue
@@ -1888,6 +1895,14 @@ internal class RemoteAgent : Disposable {
         private fun fitted(message: String): ByteArray? {
             val whole = envelope(message)
             if (whole.size <= FRAME_BODY_BYTES) return whole
+
+            // What a turn really did to its files can run to thousands of short lines, which no trimming of strings
+            // shortens; the phone has no revert to use them for, and the counts beside them stay (see TurnFiles).
+            TurnFiles.lightened(message)?.let { lighter ->
+                val light = envelope(lighter)
+                if (light.size <= FRAME_BODY_BYTES) return light
+                return fitted(lighter)
+            }
 
             for (spareWords in listOf(true, false)) {
                 for (limit in PHONE_STRING_LIMITS) {

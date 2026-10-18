@@ -1,5 +1,6 @@
 package io.github.crmapache.amazingcodex.codex
 
+import io.github.crmapache.amazingcodex.editor.ChangeRevert
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -14,15 +15,23 @@ import kotlinx.serialization.json.jsonObject
 /** The patches below are the shapes Codex 0.160 gave in live turns (see CodeRewind). */
 class CodeRewindTest {
 
-    private fun update(path: String, diff: String, movedTo: String? = null) =
-        CodeRewind.Change(path, CodeRewind.Kind.UPDATE, movedTo, diff)
+    private fun update(path: String, diff: String, movedTo: String? = null, turn: String = "") =
+        CodeRewind.Change(path, CodeRewind.Kind.UPDATE, movedTo, diff, turn)
+
+    /** [changes] undone over files that hold [files] - the plan's text for [path]. */
+    private fun undone(path: String, files: Map<String, String>, vararg changes: CodeRewind.Change): String? {
+        val plan = CodeRewind.plan(changes.toList()) { files[it] }
+        assertIs<CodeRewind.Plan.Ready>(plan)
+        return plan.files[path]
+    }
 
     @Test
     fun `an update is undone line for line`() {
-        val undone = CodeRewind.undo("one\ntwo\n", "@@ -1 +1,2 @@\n one\n+two\n")
-        assertEquals("one\n", undone?.text)
-        assertEquals(1, undone?.added)
-        assertEquals(0, undone?.removed)
+        val plan = CodeRewind.plan(listOf(update("/p/a.txt", "@@ -1 +1,2 @@\n one\n+two\n"))) { "one\ntwo\n" }
+        assertIs<CodeRewind.Plan.Ready>(plan)
+        assertEquals("one\n", plan.files["/p/a.txt"])
+        assertEquals(0, plan.insertions)
+        assertEquals(1, plan.deletions)
     }
 
     // A move's diff ends with Codex's own line about it, which is no line of the file.
@@ -82,20 +91,79 @@ class CodeRewindTest {
     // A hunk is looked for near its place when lines above it moved since, as long as it is there whole.
     @Test
     fun `a hunk found a little further down still fits`() {
-        val undone = CodeRewind.undo("new head\none\ntwo\n", "@@ -1 +1,2 @@\n one\n+two\n")
-        assertEquals("new head\none\n", undone?.text)
+        val text = undone("/p/a.txt", mapOf("/p/a.txt" to "new head\none\ntwo\nlast\n"), update("/p/a.txt", "@@ -1,2 +1,3 @@\n one\n+two\n last\n"))
+        assertEquals("new head\none\nlast\n", text)
     }
 
     @Test
     fun `a missing last line break is kept the way the diff says`() {
         val diff = "@@ -1,2 +1,2 @@\n one\n-two\n\\ No newline at end of file\n+TWO\n"
-        assertEquals("one\ntwo", CodeRewind.undo("one\nTWO\n", diff)?.text)
+        assertEquals("one\ntwo", undone("/p/a.txt", mapOf("/p/a.txt" to "one\nTWO\n"), update("/p/a.txt", diff)))
     }
 
     @Test
     fun `a deletion of lines is put back where they were`() {
-        val undone = CodeRewind.undo("a\nd\n", "@@ -1,4 +1,2 @@\n a\n-b\n-c\n d\n")
-        assertEquals("a\nb\nc\nd\n", undone?.text)
+        assertEquals(
+            "a\nb\nc\nd\n",
+            undone("/p/a.txt", mapOf("/p/a.txt" to "a\nd\n"), update("/p/a.txt", "@@ -1,4 +1,2 @@\n a\n-b\n-c\n d\n")),
+        )
+    }
+
+    // --- Rewound past what the list of a turn's files put back already (see ChangeRevert) ---------------------------
+
+    /**
+     * The person put a turn back from its list, then rewound to a message before it. The list and the rewind are one
+     * engine, so what the list undid reads as undone: the created file gone, the deleted file back, the patch taken
+     * out - and the turn before it is undone over that.
+     */
+    @Test
+    fun `a turn put back from its list and then rewound past is undone already`() {
+        val changes = listOf(
+            update("/p/a.txt", "@@ -1,2 +1,2 @@\n one\n-two\n+TWO\n", turn = "t1"),
+            update("/p/a.txt", "@@ -1,2 +1,3 @@\n one\n TWO\n+three\n", turn = "t2"),
+            CodeRewind.Change("/p/new.txt", CodeRewind.Kind.ADD, null, "made\n", turn = "t2"),
+            CodeRewind.Change("/p/gone.txt", CodeRewind.Kind.DELETE, null, "kept\n", turn = "t2"),
+        )
+        // The list of t2 put everything back: t2's line out of a.txt, new.txt gone, gone.txt written again.
+        val files = mapOf("/p/a.txt" to "one\nTWO\n", "/p/gone.txt" to "kept\n")
+        val plan = CodeRewind.plan(changes) { files[it] }
+
+        assertIs<CodeRewind.Plan.Ready>(plan)
+        assertEquals(mapOf<String, String?>("/p/a.txt" to "one\ntwo\n"), plan.files)
+    }
+
+    @Test
+    fun `a moved file put back by its list is where it stood already`() {
+        val changes = listOf(update("/p/a.txt", "@@ -1 +1 @@\n-x\n+y\n", movedTo = "/p/b.txt", turn = "t1"))
+        assertEquals(CodeRewind.Plan.None, CodeRewind.plan(changes) { if (it == "/p/a.txt") "x\n" else null })
+    }
+
+    // The allowance is for the turn's own lines found undone, not for anything at all: a file somebody wrote over
+    // after the list put it back still stops the restore before a single file is written.
+    @Test
+    fun `a file changed by something else after the list still stops the restore`() {
+        val changes = listOf(
+            update("/p/a.txt", "@@ -1,2 +1,2 @@\n one\n-two\n+TWO\n", turn = "t1"),
+            CodeRewind.Change("/p/new.txt", CodeRewind.Kind.ADD, null, "made\n", turn = "t2"),
+        )
+        val files = mapOf("/p/a.txt" to "one\nsomething else\n", "/p/new.txt" to "made\n")
+        assertEquals(CodeRewind.Plan.Conflict(listOf("/p/a.txt")), CodeRewind.plan(changes) { files[it] })
+    }
+
+    /**
+     * A turn whose file a formatter rewrote after the patch: its patch alone no longer fits, and what the IDE settled at
+     * the turn's end (see TurnFiles) is what the turn did - the rewind undoes that.
+     */
+    @Test
+    fun `a turn settled against the disk is undone by what it really did`() {
+        val changes = listOf(update("/p/a.txt", "@@ -1 +1 @@\n-a=1\n+a = 2\n", turn = "t1"))
+        val formatted = "a = 2;\n"
+        val settled = listOf(ChangeRevert.Edit.Patch(listOf(ChangeRevert.Hunk(1, listOf("-a=1", "+a = 2;")))))
+
+        assertEquals(CodeRewind.Plan.Conflict(listOf("/p/a.txt")), CodeRewind.plan(changes) { formatted })
+        val plan = CodeRewind.plan(changes, settled = { turn, path -> settled.takeIf { turn == "t1" && path == "/p/a.txt" } }) { formatted }
+        assertIs<CodeRewind.Plan.Ready>(plan)
+        assertEquals("a=1\n", plan.files["/p/a.txt"])
     }
 
     @Test
@@ -120,6 +188,7 @@ class CodeRewindTest {
         val changes = CodeRewind.changesOf(listOf(turn))
 
         assertEquals(listOf("/p/a", "/p/c"), changes.map { it.path })
+        assertEquals(listOf("t", "t"), changes.map { it.turn })
         assertEquals("/p/d", changes.last().movedTo)
         assertEquals(CodeRewind.Kind.UPDATE, changes.last().kind)
     }

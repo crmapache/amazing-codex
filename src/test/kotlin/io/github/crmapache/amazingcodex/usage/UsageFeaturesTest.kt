@@ -81,12 +81,13 @@ class UsageFeaturesTest {
         val types = listOf(
             "newSession", "nameSession", "reorderTabs", "queuePrompt", "takeQueued", "reorderQueue", "stop",
             "bash", "improvePrompt", "setModel", "setEffort", "setMode", "planDecision", "askAnswer",
-            "agentTranscript", "openFile", "clipboardWrite", "pick", "savePastedFile", "resumeSession", "search",
+            "agentTranscript", "openFile", "revertChanges", "clipboardWrite", "pick", "savePastedFile", "resumeSession", "search",
             "searchAi", "voiceStart", "startPairing", "scenarioRun", "scenarioSave", "scenarioDraft",
             "scenarioSchedule", "scenarioQueue", "scenarioAnswer", "saveImage", "mcpAdd", "pluginInstall",
             "accountAdd", "accountUse", "feedbackSend", "setTheme", "setTextSize", "setLanguage",
             "setComposerLayout", "setSendKey", "setPasteCollapse", "setCalmColors", "setHiddenIndicators",
-            "soundSettings", "setShareEditor", "setRestoreTabs", "setImproveInstructions", "setCustomModels",
+            "soundSettings", "setShareEditor", "setRestoreTabs", "setSpellcheck", "setImproveInstructions",
+            "setCustomModels",
             "setDefaultModel", "setDefaultContextMode", "setCodexConfig", "setProjectTrust", "setExecutablePath", "voiceEnabled",
             "setRelayUrl",
         )

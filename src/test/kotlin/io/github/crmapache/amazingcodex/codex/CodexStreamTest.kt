@@ -252,6 +252,27 @@ class CodexStreamTest {
         assertEquals("1800000000", info.text("resetsAt"))
     }
 
+    /**
+     * A session's own budget is a refusal like the limit's - the placeholder answer a scenario run moves on - but
+     * no window of the account's: the five hours the account said were full a moment before are not what stopped
+     * this turn, and their reset is not when it ends. Named by Codex's own code, with no reset at all, so the row
+     * promises none, the account is not filed as refused (see AccountUsage.SHARED_WINDOWS), and a tab plans no
+     * carry-on over it (see CarryOns.endsOnAClock).
+     */
+    @Test
+    fun `a session's own budget is named as itself, with no reset`() {
+        val told = CodexStream(emit = { lines += it }, model = { "gpt-5.5" }, threadId = { "thread-1" }, limitReached = { "five_hour" to 1_800_000_000L })
+        told.turnStarted(json("""{"id":"turn-1"}"""))
+        told.turnCompleted(json("""{"id":"turn-1","status":"failed","error":{"message":"budget","codexErrorInfo":"sessionBudgetExceeded"}}"""))
+
+        val (limit, refusal, result) = emitted()
+        val info = limit["rate_limit_info"]!!.jsonObject
+        assertEquals(CodexErrors.SESSION_BUDGET, info.text("rateLimitType"))
+        assertNull(info["resetsAt"])
+        assertTrue(AgentStream.isLimitRefusal(refusal.toString()))
+        assertEquals("false", result.text("is_error"))
+    }
+
     /** Codex's own step list for the turn is the task strip, sent the way the older whole-list call was. */
     @Test
     fun `a plan update is the task list, and the same list twice is one update`() {
@@ -370,6 +391,53 @@ class CodexStreamTest {
         assertEquals("gpt-5.6-sol", line.text("originalModel"))
         assertEquals("gpt-5.6-codex", line.text("fallbackModel"))
         assertTrue(line.text("content").orEmpty().startsWith("Codex's safeguards flagged this request"))
+    }
+
+    /**
+     * After "sol -> codex" the turn's answers come from codex, and signed by the session's sol they read to the panel
+     * as a second swap, back - a false "codex -> sol, switched by Codex" under the swap Codex had just announced. The
+     * reroute is about its turn: the next one is signed by the thread's own model again.
+     */
+    @Test
+    fun `a rerouted turn's answers are signed by the model it was moved to, until the turn ends`() {
+        stream.turnStarted(json("""{"id":"turn-1"}"""))
+        stream.rerouted("gpt-5.6-sol", "gpt-5.6-codex", "highRiskCyberActivity", turn = "turn-1")
+        stream.itemStarted(running)
+        stream.itemCompleted(ran)
+        stream.itemCompleted(json("""{"type":"reasoning","id":"rs_1","summary":["Looking."],"content":[]}"""))
+        stream.itemCompleted(json("""{"type":"agentMessage","id":"msg_1","text":"Done."}"""))
+        stream.turnCompleted(json("""{"id":"turn-1","status":"completed"}"""))
+
+        val signed = emitted().filter { it.text("type") == "assistant" }.map { it["message"]!!.jsonObject.text("model") }
+        assertEquals(listOf("gpt-5.6-codex", "gpt-5.6-codex", "gpt-5.6-codex"), signed)
+
+        lines.clear()
+        stream.turnStarted(json("""{"id":"turn-2"}"""))
+        stream.itemCompleted(json("""{"type":"agentMessage","id":"msg_2","text":"Back."}"""))
+        assertEquals("gpt-5.6-sol", emitted().single()["message"]!!.jsonObject.text("model"))
+    }
+
+    // A turn whose process died under it never completes, and its reroute must not sign the turns of the next process.
+    @Test
+    fun `a reroute of another turn does not sign this one`() {
+        stream.turnStarted(json("""{"id":"turn-1"}"""))
+        stream.rerouted("gpt-5.6-sol", "gpt-5.6-codex", "highRiskCyberActivity", turn = "turn-1")
+        stream.turnStarted(json("""{"id":"turn-7"}"""))
+        lines.clear()
+        stream.itemCompleted(json("""{"type":"agentMessage","id":"msg_1","text":"Fresh."}"""))
+
+        assertEquals("gpt-5.6-sol", emitted().single()["message"]!!.jsonObject.text("model"))
+        assertEquals("gpt-5.6-sol", stream.answeringModel())
+    }
+
+    // Codex may say the reroute a moment before it says the turn has started: it is still that turn's.
+    @Test
+    fun `a reroute said ahead of its turn's start still signs that turn`() {
+        stream.rerouted("gpt-5.6-sol", "gpt-5.6-codex", "highRiskCyberActivity", turn = "turn-3")
+        assertEquals("gpt-5.6-sol", stream.answeringModel())
+
+        stream.turnStarted(json("""{"id":"turn-3"}"""))
+        assertEquals("gpt-5.6-codex", stream.answeringModel())
     }
 
     @Test

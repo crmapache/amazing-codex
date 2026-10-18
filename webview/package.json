@@ -20,7 +20,7 @@
     "qrcode-generator": "^2.0.4",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "smooth-stream-text": "0.1.2"
+    "smooth-stream-text": "0.2.0"
   },
   "devDependencies": {
     "@types/node": "26.1.2",

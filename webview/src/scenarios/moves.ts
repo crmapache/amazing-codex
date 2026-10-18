@@ -1,4 +1,5 @@
 import { limitWindowName } from '../feed/usage'
+import { clockOrDate } from '../feed/when'
 import type { Dict } from '../i18n/en'
 import type { ScenarioRunLimit, ScenarioRunMove } from '../protocol'
 
@@ -14,9 +15,12 @@ import type { ScenarioRunLimit, ScenarioRunMove } from '../protocol'
 /** An account as a run's timeline names it: the name the person gave it or its address, or the CLI's own sign-in. */
 const accountName = (t: Dict, name: string): string => name || t.accounts.defaultName
 
-/** A moment as the reader's own clock shows it - what one compares against one's own evening. */
-export const clockOf = (at: number): string =>
-  new Date(at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+/**
+ * A moment as the reader's own clock shows it - what one compares against one's own evening - and with its date
+ * when it is a day or more off: a run waiting out a weekly limit or a business seat's monthly spending cap goes
+ * on days or weeks later, and the clock alone named no day (see clockOrDate).
+ */
+export const clockOf = (at: number): string => clockOrDate(at)
 
 /** The sentence for a note of the panel's own (`who: 'panel'`). */
 export const moveText = (t: Dict, move: ScenarioRunMove): string => {

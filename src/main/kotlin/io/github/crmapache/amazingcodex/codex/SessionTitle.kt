@@ -57,6 +57,9 @@ internal object SessionTitle {
      */
     fun describe(text: String): String? {
         val description = text.trim()
+        // The panel's own "carry on" (see CarryOnWords) - often the first message of the process it raises,
+        // and the one a tab still waiting for its name would otherwise be named after.
+        if (description.startsWith("<${CarryOnWords.TAG}")) return null
         if (description.startsWith("/")) return describeCommand(description)
         if (description.length < MIN_LENGTH) return null
 

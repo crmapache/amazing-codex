@@ -40,7 +40,9 @@ export const pt: Dict = {
       newChatMode: { title: 'MODO PADRÃO', hint: 'com o que as novas abas começam' },
       composerLayout: { title: 'LAYOUT DO CAMPO', hint: 'onde fica o campo de escrita' },
       pasteCollapse: { title: 'TEXTO COLADO', hint: 'quando uma colagem vira um chip' },
+      spellcheck: { title: 'ORTOGRAFIA', hint: 'sublinhar palavras com erro' },
       sendKey: { title: 'ENVIAR UMA MENSAGEM', hint: 'qual tecla envia' },
+      keys: { title: 'ATALHOS DE TECLADO', hint: 'cada tecla a que o painel responde' },
       codexConfig: { title: 'CONFIGURAÇÕES DO CODEX', hint: 'o config.toml dele - o que o /config muda' },
       improvePrompt: { title: 'MELHORAR O PROMPT', hint: 'o que o botão da estrela pede' },
       voice: { title: 'ENTRADA POR VOZ', hint: 'ditar em vez de digitar' },
@@ -86,7 +88,9 @@ export const pt: Dict = {
       shareEditor: { label: 'Arquivo aberto e seleção', sub: 'O que vai junto com cada mensagem' },
       composerLayout: { label: 'Layout do campo', sub: 'Onde fica o campo de escrita' },
       pasteCollapse: { label: 'Texto colado', sub: 'Quando uma colagem vira um chip' },
+      spellcheck: { label: 'Ortografia', sub: 'Sublinhar palavras com erro' },
       sendKey: { label: 'Enviar uma mensagem', sub: 'Qual tecla envia' },
+      keys: { label: 'Atalhos de teclado', sub: 'Abas, fila, busca e o resto' },
       codexConfig: { label: 'Configurações do Codex', sub: 'O config.toml dele e a confiança neste projeto' },
       improvePrompt: { label: 'Melhorar o prompt', sub: 'O que o botão da estrela pede' },
       voice: { label: 'Entrada por voz', sub: 'Dite com a sua própria chave da Deepgram' },
@@ -174,7 +178,15 @@ export const pt: Dict = {
   shareEditor: {
     label: 'Enviar o editor junto',
     hint: 'Cada mensagem leva o arquivo aberto no editor e as linhas selecionadas nele, como o /ide do Codex faz no terminal',
-    note: 'Só a partir deste painel: uma mensagem escrita no celular não leva nada do editor. Uma mensagem pode ir sem ele: clique no chip do arquivo no campo de entrada.',
+    note: 'Só a partir deste painel: uma mensagem escrita no celular não leva nada do editor. O chip do arquivo no campo de entrada tem o mesmo interruptor, e ali uma única mensagem pode ir sem ele ou, ao contrário, com ele.',
+    on: 'Ligado',
+    off: 'Desligado',
+  },
+
+  spellcheck: {
+    label: 'Verificar a ortografia',
+    hint: 'Palavras que o corretor não conhece ganham um sublinhado vermelho, no campo da mensagem e nos outros campos de texto do painel',
+    note: 'Desative se você escreve em vários idiomas e as palavras dos outros aparecem sublinhadas. Uma mensagem escrita no celular é verificada pelo teclado do próprio celular, que este botão não altera.',
     on: 'Ligado',
     off: 'Desligado',
   },
@@ -253,6 +265,9 @@ export const pt: Dict = {
     empty: 'Ainda não há conversas anteriores aqui.',
     today: 'HOJE',
     earlier: 'ANTES',
+    closed: 'FECHADAS RECENTEMENTE',
+    reopen: (key) => (key ? `Reabrir no mesmo lugar · ${key}` : 'Reabrir no mesmo lugar'),
+    fork: 'bifurcação',
     messages: (n) => (n === 1 ? `${n} mensagem` : `${n} mensagens`),
   },
 
@@ -496,6 +511,7 @@ export const pt: Dict = {
       stopped: 'Cortado por você',
       undone: 'Não concluído',
       headGaveUp: 'A thread principal também não conseguiu terminar',
+      longList: 'A lista era longa demais',
     },
     outcomes: {
       scenarioBroken: 'Este cenário não roda como está - abra e veja o que falta.',
@@ -546,6 +562,14 @@ export const pt: Dict = {
       tokens: 'tokens',
       passOf: (pass, passes) => `passada ${pass} de ${passes}`,
       passOfUpTo: (pass, passes) => `passada ${pass} de no máximo ${passes}`,
+      itemOf: (index, count) => `item ${index} de ${count}`,
+      secondGo: 'segunda tentativa',
+      listPending: 'esperando a lista',
+      listEmpty: 'nada na lista',
+      putOff: 'volta depois do resto',
+      itemsShort: (n) => (n === 1 ? '1 item' : `${n} itens`),
+      listAheadShort: 'lista ainda não dada',
+      listEmptyShort: 'lista vazia',
       headSaid: 'FIO PRINCIPAL',
       sentBack: (n) => (n === 1 ? 'devolvido uma vez' : `devolvido ${n} vezes`),
       takenOver: (why) => `A thread principal assumiu: ${why}`,
@@ -648,6 +672,13 @@ export const pt: Dict = {
       roundsShort: (n: number): string => `×${n}`,
       roundsUntilShort: (n: number): string => `×${n}, até pronto`,
       untilDone: 'ou menos, se a thread principal disser que está pronto',
+      perItem: 'uma vez por item de uma lista',
+      perItemShort: 'por item',
+      listLabel: 'A LISTA',
+      itemName: 'nome',
+      listHint:
+        'O que é a lista e como é um item dela. A thread principal dá a lista inteira quando a etapa começa, e a etapa roda uma vez por item.',
+      itemNote: (name) => `Cada passada recebe o próprio item onde o texto diz [[${name}]] - não precisa de espaço.`,
       cards: 'CARTÕES',
       addCard: 'Adicionar um cartão',
       addCardHere: 'Adicionar um cartão a esta etapa',
@@ -681,6 +712,10 @@ export const pt: Dict = {
       duplicateInput: (name) => `Duas perguntas têm o mesmo nome: ${name}.`,
       duplicateSlot: (card, name) => `${card}: dois espaços têm o mesmo nome: ${name}.`,
       badInputName: (name) => `"${name}" não é um nome - use letras, dígitos, - e _.`,
+      badItemName: (stage, name) => `${stage}: "${name}" não serve como nome do item - use letras, dígitos, - e _.`,
+      noItemList: (stage) => `${stage}: nada diz o que é a lista.`,
+      itemSlotClash: (card, name) => `${card}: o espaço ${name} tem o nome do item da etapa, que o painel preenche sozinho.`,
+      unusedItem: (stage, name) => `${stage}: nenhum texto escreve [[${name}]], então toda passada recebe o mesmo.`,
       badSlotName: (card, name) => `${card}: "${name}" não é um nome - use letras, dígitos, - e _.`,
     },
   },
@@ -708,6 +743,47 @@ export const pt: Dict = {
     enterSub: 'Shift+Enter quebra a linha',
     modEnter: (mod: string): string => `${mod}+Enter`,
     modEnterSub: 'Enter quebra a linha',
+  },
+
+  keys: {
+    note: 'As teclas funcionam enquanto o foco está no painel. As de abas são as que trocam e fecham abas do editor no mapa de teclas do seu IDE.',
+    notSet: 'Não definido',
+    keymapNote: 'As teclas de abas, a fila e abrir o painel são ações do IDE - redefina em Settings | Keymap.',
+    openKeymap: 'Alterar no Keymap',
+    groups: { tabs: 'Abas', message: 'Campo da mensagem', agent: 'Agente', panel: 'Painel' },
+    rows: {
+      nextTab: 'Próxima aba',
+      previousTab: 'Aba anterior',
+      newTab: 'Nova aba',
+      closeTab: 'Fechar a aba',
+      searchTabsWhen: 'na janela de busca, as abas dela',
+      closeTabWhen: 'pergunta antes se o agente estiver trabalhando',
+      reopenTab: 'Reabrir aba fechada',
+      reopenTabWhen: 'as últimas 20, também no Histórico',
+      openPanel: 'Abrir o painel',
+      openPanelWhen: 'de qualquer lugar do IDE',
+      send: 'Enviar',
+      newLine: 'Nova linha',
+      queue: 'Na fila',
+      queueWhen: 'vai quando o agente terminar',
+      history: 'Percorrer as enviadas',
+      historyWhen: 'com o campo vazio',
+      commands: 'Comandos',
+      files: 'Arquivos',
+      shell: 'Comando de terminal',
+      shellWhen: 'no início de uma mensagem',
+      deleteWord: 'Apagar uma palavra',
+      undo: 'Desfazer',
+      redo: 'Refazer',
+      stop: 'Parar',
+      stopWhen: 'enquanto o agente trabalha',
+      mode: 'Próximo modo de permissão',
+      answer: 'Responder por número',
+      answerWhen: 'a uma permissão ou pergunta, com o campo vazio',
+      search: 'Buscar nas conversas',
+      fork: 'Fork a partir da seleção',
+      forkWhen: 'com texto selecionado no feed',
+    },
   },
 
   improvePrompt: {
@@ -847,6 +923,32 @@ export const pt: Dict = {
     addSub: 'Um que o Codex não oferece',
   },
 
+  fast: {
+    label: 'Modo veloz',
+    offSub: 'Desligado · respostas mais rápidas que gastam seus limites mais rápido',
+    offSubTier: (tier) => `Desligado · nível rápido do Codex: ${tier}`,
+    waitingSub: 'Ligado a partir da próxima mensagem · gasta seus limites mais rápido',
+    onSub: 'Ligado · gasta seus limites mais rápido',
+    fromSettingsSub: 'Ligado nas suas configurações do Codex · desligue para esta conversa',
+    unavailableSub: (reason) => `Indisponível. ${reason}`,
+    chipOn: 'O modo veloz está ligado',
+    chipFromSettings: 'O modo veloz está ligado nas suas configurações do Codex',
+    chipWaiting: 'O modo veloz liga com a próxima mensagem',
+    chipUnavailable: (reason) => `O modo veloz está indisponível. ${reason}`,
+    row: { label: 'VELOZ', title: 'O modo veloz não ligou', hint: 'Esta conversa segue na velocidade normal.' },
+    reasons: {
+      notServed: 'O Codex fez o turno sem o nível rápido.',
+      modelNotAllowed: 'Este modelo não tem nível rápido.',
+      unknown: 'Ele está indisponível agora.',
+    },
+    phone: {
+      on: 'Ligado',
+      off: 'Desligado',
+      note: 'Respostas mais rápidas que gastam seus limites mais rápido - só nesta conversa.',
+      noteTier: (tier) => `Nível rápido do Codex: ${tier} - só nesta conversa.`,
+    },
+  },
+
   composer: {
     placeholder: 'Pergunte, ou descreva uma mudança…',
     placeholderPlan: 'Descreva o que planejar…',
@@ -871,8 +973,19 @@ export const pt: Dict = {
     voice: 'Ditar',
     voiceStop: 'Terminar o ditado',
     editor: {
-      on: (place) => `O Codex vê ${place} com esta mensagem · clique para deixar de fora`,
-      off: (place) => `${place} fica de fora desta mensagem · clique para enviar junto`,
+      on: (place) => `O Codex vê ${place} com esta mensagem · clique para escolher`,
+      off: (place) => `${place} fica de fora desta mensagem · clique para escolher`,
+      muted: (place) => `${place} não é enviado: o envio do editor está desligado · clique para escolher`,
+      menu: {
+        always: 'Enviar com cada mensagem',
+        alwaysSub: 'O arquivo aberto e as linhas selecionadas, em todas as abas',
+        skip: 'Não enviar com esta mensagem',
+        skipSub: 'A próxima mensagem volta a levá-lo',
+        only: 'Enviar só com esta mensagem',
+        onlySub: 'A próxima volta a ir sem ele',
+        never: 'Nunca enviar',
+        neverSub: 'Em todas as abas, até ligar de novo: o mesmo interruptor das configurações',
+      },
     },
   },
 
@@ -887,6 +1000,7 @@ export const pt: Dict = {
     scenarios: 'Cenários',
     closeScenarios: 'Fechar os cenários',
     closeRun: 'Fechar esta execução',
+    closeHint: (close, reopen) => `${close} · ${reopen} reabre`,
     conversations: 'Conversas',
     newSession: 'Nova conversa',
     fork: 'Bifurcar esta conversa: uma aba nova que continua daqui, enquanto esta fica como está',
@@ -981,6 +1095,19 @@ export const pt: Dict = {
   feed: {
     empty: { title: 'Pergunte ao Codex sobre este projeto', hint: '@ para arquivos · / para comandos' },
     you: 'VOCÊ',
+    auto: {
+      label: 'PAINEL',
+      why: {
+        accountSwitch: 'Não foi você que escreveu: a troca de conta interrompeu o turno, e o painel o continuou sozinho',
+        limit: 'Não foi você que escreveu: o limite de uso parou o turno, e o painel o continuou sozinho assim que deu',
+        restart: 'Não foi você que escreveu: o Codex reiniciou por baixo da conversa, os agentes em segundo plano se perderam, e o painel mandou continuar',
+      },
+    },
+    carryOn: {
+      planned: (clock: string): string => `Vai continuar esta conversa sozinho às ${clock}, quando o limite reiniciar`,
+      guessed: (clock: string): string => `Vai tentar continuar esta conversa sozinho às ${clock} - o limite não disse quando reinicia`,
+      cancel: 'Não continuar',
+    },
     jumpToLatest: 'Ir para a mais recente',
     copyBlock: 'Copiar este bloco',
     copyReply: 'Copiar a resposta inteira',
@@ -1016,6 +1143,11 @@ export const pt: Dict = {
     copyPaste: 'Copiar o texto colado',
     pasteShown: (shown, total) => `Primeiras ${shown} linhas de ${total} · copiar leva tudo`,
     fromOutput: 'da saída',
+    imagePreview: {
+      missing: 'Não foi possível ler a imagem: o arquivo não existe mais ou a mensagem não a guarda mais',
+      opens: 'clique para abrir',
+      unopened: 'não foi possível abrir: clique para tentar de novo',
+    },
 
     think: { chip: 'PENSA', thoughts: (n) => `${n} ${n === 1 ? 'ideia' : 'ideias'}` },
 
@@ -1139,6 +1271,19 @@ export const pt: Dict = {
       textWithCode: (code) => `O Codex encerrou de forma inesperada (código ${code}).`,
     },
 
+    session: {
+      label: 'SESSÃO',
+      id: 'ID da sessão',
+      terminal: 'No terminal',
+      copyId: 'Copiar ID da sessão',
+      terminalNote: 'Continua esta conversa em um terminal aberto na pasta do projeto',
+      terminalNoteOn: (account: string): string =>
+        `Continua esta conversa na conta ${account} em um terminal aberto na pasta do projeto`,
+      terminalNoteDefault: (account: string): string =>
+        `Continua esta conversa em um terminal aberto na pasta do projeto, com o login padrão do Codex e não na conta ${account}`,
+      unnamedAccount: 'desta aba',
+      none: 'Ainda sem ID: a conversa recebe um com a primeira mensagem',
+    },
     outranked: {
       account: {
         label: 'LOGIN',
@@ -1203,7 +1348,23 @@ export const pt: Dict = {
       unconfirmed: 'não confirmado',
     },
 
-    copy: { copied: 'Copiado', click: 'Clique para copiar', openFile: 'Abrir no editor', openFolder: 'Mostrar a pasta' },
+    copy: { copied: 'Copiado', click: 'Clique para copiar', openFile: 'Abrir no editor', openFolder: 'Mostrar a pasta', missing: 'Esse arquivo não está no disco - clique para verificar de novo' },
+    changes: {
+      all: (n) => `Mostrar todos (${n})`,
+      fewer: 'Mostrar menos',
+      revert: 'Reverter este arquivo',
+      revertAll: 'Reverter tudo',
+      reverting: 'Revertendo…',
+      restore: 'Trazer as alterações de volta',
+      restoreAll: 'Trazer tudo de volta',
+      restoring: 'Trazendo de volta…',
+      reverted: 'Revertido',
+      changed: 'Alterado depois, deixado como está',
+      missing: 'O arquivo não existe mais',
+      failed: 'Não foi possível gravar o arquivo',
+      deleted: 'Excluído',
+      movedFrom: (from) => `de ${from}`,
+    },
   },
 
   chrome: {
@@ -1217,6 +1378,7 @@ export const pt: Dict = {
     queue: {
       label: 'NA FILA',
       hint: (n) => `${n} vão sair em ordem quando a rodada terminar · arraste para reordenar`,
+      held: (n) => `${n} vão sair em ordem depois da sua próxima mensagem - a rodada que esperavam foi parada · arraste para reordenar`,
       edit: 'Editar no campo',
       editing: (key, button) => `Sendo editada no campo · ${key} ou “${button}” a devolve para cá`,
     },
@@ -1270,7 +1432,16 @@ export const pt: Dict = {
       stopCommand: 'Parar este comando',
       stopCommandTitle: 'Parar este comando?',
     },
-    confirm: { cancel: 'Cancelar', stop: 'Parar' },
+    confirm: {
+      cancel: 'Cancelar',
+      stop: 'Parar',
+      close: 'Fechar',
+      closeWorking: 'Fechar uma aba que ainda está trabalhando?',
+      closeWorkingNote: (key) =>
+        key
+          ? `O agente para. ${key} traz a aba de volta, com a fila esperando a sua próxima mensagem.`
+          : 'O agente para. A aba pode ser reaberta pelo Histórico, com a fila esperando a sua próxima mensagem.',
+    },
     noChats: { title: 'Animado para trabalhar com você!', button: 'Vamos começar' },
     crash: {
       title: 'O painel esbarrou num erro',
@@ -1304,6 +1475,7 @@ export const pt: Dict = {
     fiveHour: '5h',
     weekly: 'semana',
     spending: 'gastos',
+    usableAgainIn: (left) => `Limite atingido · disponível de novo em ${left}`,
     row: {
       one: 'Uma conta',
       adding: 'Fazendo login…',
@@ -1808,6 +1980,7 @@ export const pt: Dict = {
     weeklyApps: 'semanal de apps',
     weeklyFable: 'semanal do Fable',
     extra: 'de uso extra',
+    spending: 'de gastos',
   },
 
   permission: {
@@ -1885,6 +2058,8 @@ export const pt: Dict = {
     config: 'configurações do Codex - abre no menu',
     btw: 'uma pergunta rápida à parte - o trabalho continua',
     btwArgument: '<pergunta>',
+    fast: 'ligar ou desligar o modo veloz - respostas mais rápidas que gastam seus limites mais rápido',
+    status: 'o ID desta conversa e o comando para continuá-la no terminal',
     model: 'trocar o modelo desta sessão',
     effort: 'definir quanto o Codex pensa antes de agir',
     codeReview: 'revisar as mudanças com o revisor do próprio Codex',

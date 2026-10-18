@@ -36,7 +36,7 @@ describe('an untouched tab', () => {
   })
 
   it('is not one with something waiting to be said', () => {
-    const queue = [{ id: 'q-1', text: 'and then deploy', attach: '', images: 0 }]
+    const queue = [{ id: 'q-1', text: 'and then deploy', images: 0 }]
 
     expect(isUntouchedTab({ panel: { ...initialPanelState, queue } })).toBe(false)
   })

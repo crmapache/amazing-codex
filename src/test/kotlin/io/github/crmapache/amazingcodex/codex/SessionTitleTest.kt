@@ -67,6 +67,15 @@ class SessionTitleTest {
         assertNull(SessionTitle.describe("  ok  "))
     }
 
+    // The panel's "carry on" is often the first message of the process it raises - and a tab still waiting
+    // for its name would be named after the switch or the limit rather than after its work.
+    @Test
+    fun `the panel's own carry-on names nothing`() {
+        for (reason in CarryOns.Reason.entries) {
+            assertNull(SessionTitle.describe(CarryOnWords.forAgent(reason, CarryOnWords.afterAccountSwitch("en"))))
+        }
+    }
+
     // "/compact" says what was done to the conversation, not what it is about - and the question may
     // only be asked once, so it goes to the next message instead. With arguments too: "/compact keep the
     // API decisions" is still housekeeping, however much it says.

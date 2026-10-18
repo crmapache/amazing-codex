@@ -1,3 +1,4 @@
+import { isPastedImage, kindOfPath } from './reference'
 import type { UserItem, UserToken } from './types'
 
 /**
@@ -17,8 +18,10 @@ export interface Reuse {
   tokens: UserToken[]
   /**
    * How many pasted images cannot come back. Their bytes live in the feed only while the panel that sent
-   * them is the panel on screen: a conversation read off the disk keeps the caption "[Image #2]" and
-   * nothing else - the transcript never held the picture (see replayedMessage).
+   * them is the panel on screen: a conversation read off the disk is drawn from its text, where a pasted
+   * picture is the caption "[Image #2]" and nothing else (see replayedMessage). The bytes do stand in the
+   * message's line of the transcript, but the IDE hands them out only shrunk, for a preview under the
+   * pointer (see imagePreview.ts) - not as the picture to send again.
    *
    * Counted rather than passed on silently, because silence here is a lie the person acts on: a message
    * whose picture is gone looks complete in the field, goes out with a caption pointing at nothing, and
@@ -30,11 +33,13 @@ export interface Reuse {
 /**
  * The message as the field can take it back.
  *
- * A pasted image with its bytes still here goes back as itself - it will travel as an attachment again.
- * One that has only the file the shell wrote under it (see PastedFiles.kt) goes back as that file: the
- * agent reads it with a tool instead of being handed the bytes, which is a step down but a step that
- * genuinely carries the picture - and it is exactly what copying the message into the clipboard has
- * always given (see clipboardText). One that has neither is left out and counted.
+ * A picture picked in the IDE's dialog - or read back off the transcript as `@design/sheet.png` - goes back
+ * as itself: the chip is its own path, and it travels as `@path` again. A pasted image with its bytes still
+ * here goes back as itself too - it will travel as an attachment again. One that has only the file the shell
+ * wrote under it (see PastedFiles.kt) goes back as a picture of that file: the agent reads it with a tool
+ * instead of being handed the bytes, which is a step down but a step that genuinely carries the picture -
+ * and it is exactly what copying the message into the clipboard has always given (see clipboardText). One
+ * that has neither is left out and counted.
  */
 export const reusableMessage = (item: Pick<UserItem, 'tokens'>): Reuse => {
   const tokens: UserToken[] = []
@@ -47,13 +52,13 @@ export const reusableMessage = (item: Pick<UserItem, 'tokens'>): Reuse => {
     }
 
     const { chip } = token
-    if (chip.data) {
+    if (chip.data || !isPastedImage(chip)) {
       tokens.push(token)
       continue
     }
 
     if (chip.path) {
-      tokens.push({ kind: 'chip', chip: { kind: 'file', value: chip.path } })
+      tokens.push({ kind: 'chip', chip: { kind: kindOfPath(chip.path), value: chip.path } })
       continue
     }
 

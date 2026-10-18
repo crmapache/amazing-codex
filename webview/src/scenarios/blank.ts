@@ -1,4 +1,12 @@
-import type { Scenario, ScenarioCard, ScenarioCardSlot, ScenarioInput, ScenarioScope, ScenarioStage } from '../protocol'
+import type {
+  Scenario,
+  ScenarioCard,
+  ScenarioCardSlot,
+  ScenarioInput,
+  ScenarioScope,
+  ScenarioStage,
+  ScenarioStageEach,
+} from '../protocol'
 
 /**
  * What a fresh scenario, stage, card or slot is made of.
@@ -32,6 +40,12 @@ export const blankInput = (): ScenarioInput => ({
   placeholder: '',
   required: false,
 })
+
+/** What the item of a fresh list is called in the prompts until somebody names it - `[[item]]`. */
+export const ITEM_NAME = 'item'
+
+/** The list a stage gets when it is switched to running once per item: named, and waiting to be described. */
+export const blankEach = (): ScenarioStageEach => ({ name: ITEM_NAME, description: '' })
 
 export const blankStage = (title: string): ScenarioStage => ({
   id: freshId(),

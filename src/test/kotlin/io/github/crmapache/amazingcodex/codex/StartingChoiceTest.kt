@@ -41,7 +41,7 @@ class StartingChoiceTest : BasePlatformTestCase() {
             onEvent = { _, _ -> },
             onError = { _, _ -> },
             onFinished = {},
-            onBorn = { _, bornEffort, bornModel, bornContext, _ ->
+            onBorn = { _, bornEffort, bornModel, bornContext, _, _ ->
                 effort = bornEffort
                 model = bornModel
                 bornContextMode = bornContext
@@ -145,7 +145,7 @@ class StartingChoiceTest : BasePlatformTestCase() {
             onEvent = { _, _ -> },
             onError = { _, _ -> },
             onFinished = {},
-            onBorn = { id, _, _, context, _ -> born[id] = context },
+            onBorn = { id, _, _, context, _, _ -> born[id] = context },
         )
 
         sessions.setContextMode("main", ModelContexts.STANDARD)
@@ -242,7 +242,7 @@ class StartingChoiceTest : BasePlatformTestCase() {
             onEvent = { _, _ -> },
             onError = { _, _ -> },
             onFinished = {},
-            onBorn = { _, bornEffort, bornModel, _, _ ->
+            onBorn = { _, bornEffort, bornModel, _, _, _ ->
                 effort = bornEffort
                 model = bornModel
             },
@@ -271,7 +271,7 @@ class StartingChoiceTest : BasePlatformTestCase() {
             onEvent = { _, _ -> },
             onError = { _, _ -> },
             onFinished = {},
-            onBorn = { _, _, _, _, _ -> },
+            onBorn = { _, _, _, _, _, _ -> },
         )
 
         assertNull(sessions.planned("plain"))

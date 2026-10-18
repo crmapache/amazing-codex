@@ -279,6 +279,12 @@ describe('localCommand', () => {
     expect(entry).toMatchObject({ group: 'panel', local: true, argumentHint: en.commands.btwArgument })
   })
 
+  // The CLI's /status is a screen and refuses under a stream; the panel's answers with the conversation's id.
+  it('keeps /status for the panel', () => {
+    expect(localCommand(en, '/status')).toEqual({ name: 'status', argument: '' })
+    expect(buildCommands(en, []).find((command) => command.id === 'status')).toMatchObject({ group: 'panel', local: true })
+  })
+
   // Alone the CLI prints a usage text in a stream; with key=value it does exactly what was asked.
   it('opens the settings screen for a bare /config and leaves key=value to the CLI', () => {
     expect(localCommand(en, '/config')).toEqual({ name: 'config', argument: '' })

@@ -21,6 +21,11 @@ export interface UsageFacts {
   models?: ModelUsageWindow[]
   /** Whether the plan's limit is being passed for money right now - see ExtraUsage. */
   extra?: ExtraUsage
+  /**
+   * The backend's word on the plan's own usage - true when it said the account may work, false when it said
+   * not, absent when nothing is known (see the `usage` message). The one recovery signal Codex documents.
+   */
+  ordinaryUsage?: boolean
   /** The current model's context window: with the large ones it is a million, not two hundred thousand. */
   contextWindow?: number
   /** Today's tokens across every project - the same "tok" as in a terminal. */
@@ -76,6 +81,7 @@ export const usageOf = (book: UsageBook, account: string): UsageFacts => {
     week: own.week,
     models: own.models,
     extra: own.extra,
+    ordinaryUsage: own.ordinaryUsage,
     contextWindow: own.contextWindow ?? book.shared.contextWindow,
     todayTokens: own.todayTokens ?? book.shared.todayTokens,
   }
@@ -106,6 +112,10 @@ export const mergeUsage = (current: UsageFacts, message: UsageMessage): UsageFac
         // Extra usage arrives whole or not at all: its two halves are put together on the plugin's side
         // (see ProjectUsage.putExtra), and merging them field by field here would only take them apart.
         extra: message.extra ?? current.extra,
+        // A said null is news - the IDE has no word from the backend now, or took a "yes" back - while an
+        // absent field is a message about something else (see the `usage` message).
+        ordinaryUsage:
+          message.ordinaryUsage === undefined ? current.ordinaryUsage : (message.ordinaryUsage ?? undefined),
         // ?? will not do here - a 0 is not nullish, it would stick in the state forever and the context
         // gauge below would divide by zero for good.
         contextWindow:
@@ -135,6 +145,11 @@ const limitWindowNames = (t: Dict): Record<string, string> => ({
   // models whose usage the plan counts apart - the same window `model_scoped` reports as Fable's week.
   seven_day_overage_included: t.limits.weeklyFable,
   overage: t.limits.extra,
+  // Codex's reasons for a workspace's spending cap stopping the work - the person's own cap, set in the
+  // workspace by an owner (see CodexShapes.SPEND_CAP_REASONS). The workspace out of credits has no word here:
+  // "the credits limit is used up - waiting for it to reset" would promise a reset nothing schedules.
+  workspace_owner_usage_limit_reached: t.limits.spending,
+  workspace_member_usage_limit_reached: t.limits.spending,
 })
 
 export const limitWindowName = (t: Dict, window: string | undefined): string =>
@@ -275,11 +290,11 @@ export const contextGlow = (percent: number): { strong: string; soft: string } =
  * knows yet: a window that has just reset has no next reset time until the very first turn, and
  * "resets soon" would then mean exactly the opposite of the truth.
  */
-export const timeLeft = (resets: string): string | null => {
+export const timeLeft = (resets: string, now: number = Date.now()): string | null => {
   const resetMs = resets ? new Date(resets).getTime() : Number.NaN
   if (Number.isNaN(resetMs)) return null
 
-  const minutes = Math.round((resetMs - Date.now()) / 60_000)
+  const minutes = Math.round((resetMs - now) / 60_000)
   if (minutes <= 0) return null
 
   const hours = Math.floor(minutes / 60)
@@ -288,6 +303,51 @@ export const timeLeft = (resets: string): string | null => {
   // A weekly window is measured in days for most of its life, and "97h 12m" is a number one has to
   // divide in one's head before it means anything.
   return `${Math.floor(hours / 24)}d ${hours % 24}h`
+}
+
+/**
+ * The limits an account is measured by as a whole, each as whether it is spent and when it starts over: the
+ * plan's two windows - or, on a Codex business seat that has neither, the workspace's spending cap, the only
+ * limit there is (see spendingWindow). A model's own week (Fable) is not among them: it refuses that model alone.
+ * Codex's own word on the cap is taken over its share, which is in whole percent (see ExtraUsage.reached).
+ */
+const planLimits = (facts: UsageFacts): { full: boolean; resets: string }[] => {
+  if (facts.session || facts.week) {
+    return [facts.session, facts.week]
+      .filter((window): window is UsageWindow => window !== undefined)
+      .map((window) => ({ full: window.percent >= 100, resets: window.resets }))
+  }
+
+  const cap = facts.extra
+  if (!cap || cap.active || cap.enabled === false || (cap.percent === undefined && cap.reached === undefined)) return []
+  return [{ full: cap.reached ?? (cap.percent ?? 0) >= 100, resets: cap.resets ?? '' }]
+}
+
+/**
+ * How long until an account at its limit takes work again - null when it is not at one, or when nobody can say.
+ *
+ * Asked on the accounts screen about an account that is not the one in use (feedback from 0.13.36: account A
+ * at 100%, the person moved to B, and wants to know when A comes back - without switching to it, which is the
+ * one thing that cannot be done to find out). Only the limits the whole account is measured by count (see
+ * planLimits): on a business seat that is the spending cap, which starts over with its month. Both windows
+ * full - the later reset, since the earlier one opens nothing while the other still refuses. Extra usage being
+ * spent past the limit means the account works on, billed on top, so it is not waiting for anything; and a full
+ * window whose reset the server did not name has no answer to give.
+ *
+ * Nor is there one once the backend has said the account may work (`ordinaryUsage`): that is the one recovery
+ * signal Codex documents, and it beats a share in whole percent - the IDE reads it the same way when it decides
+ * whether the account takes work (see AccountUsage.standing on the plugin's side).
+ */
+export const usableAgainIn = (facts: UsageFacts, now: number = Date.now()): string | null => {
+  if (facts.extra?.active === true || facts.ordinaryUsage === true) return null
+
+  const full = planLimits(facts).filter((limit) => limit.full)
+  if (full.length === 0) return null
+
+  const resets = full.map((limit) => (limit.resets ? new Date(limit.resets).getTime() : Number.NaN))
+  if (resets.some(Number.isNaN)) return null
+
+  return timeLeft(new Date(Math.max(...resets)).toISOString(), now)
 }
 
 /**

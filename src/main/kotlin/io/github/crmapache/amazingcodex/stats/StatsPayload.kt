@@ -2,6 +2,7 @@ package io.github.crmapache.amazingcodex.stats
 
 import com.intellij.openapi.application.ApplicationNamesInfo
 import java.time.LocalDate
+import java.time.ZoneId
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -92,6 +93,14 @@ internal object StatsPayload {
                                 putJsonObject("models") { for ((name, count) in record.models) put(name, count) }
                             }
                         }
+                    }
+                }
+
+                // Every Claude Code session on the machine rather than this book's turns - see TranscriptTokens.
+                put("tokensReading", TranscriptTokens.isReading())
+                putJsonObject("tokens") {
+                    for ((day, hours) in snapshot.tokensByDay(ZoneId.systemDefault())) {
+                        putJsonArray(day) { hours.forEach { add(it) } }
                     }
                 }
 

@@ -29,6 +29,12 @@ import kotlinx.serialization.json.longOrNull
  * so on back to the first file. Anything that reads a thread off the disk goes through here: read file by
  * file, the history brought back exactly the turns the person rewound to be rid of, and a segment's name read
  * as a thread id of its own.
+ *
+ * A fork points back the same way, across threads. Measured on 0.163: `thread/fork` writes a first file of the
+ * fork's own that starts with the same `history_base` (and `forked_from_id` beside it), naming the source's file
+ * and where the source stood when the fork was made - and holds nothing of what it inherited. Codex 0.160 copied
+ * the source's lines into the fork's file instead; both read the same through here. Read as a file of its own, a
+ * fork made on 0.163 had no model, no last count of its window and none of the questions it inherited.
  */
 internal object CodexRollout {
 
@@ -74,7 +80,27 @@ internal object CodexRollout {
 
     private val known = ConcurrentHashMap<String, List<File>>()
 
-    /** A segment's own first line says where it was cut from - null for a thread's first file. */
+    /**
+     * The file under [root] a base calls [key] (see [Name.key]) - of [thread] or of any other: a revert's base is a
+     * file of the same thread, a fork's is a file of its source, the source's first file or, for a source reverted
+     * before the fork, one of its segments. Remembered by path, and looked for again once that file is gone.
+     */
+    fun fileByKey(root: File, thread: String, key: String): File? {
+        filesOf(root, thread).firstOrNull { nameOf(it)?.key == key }?.let { return it }
+        keyed[key]?.takeIf { it.isFile && it.path.startsWith(root.path) }?.let { return it }
+
+        val found = runCatching {
+            root.walkTopDown().maxDepth(4)
+                .filter { it.isFile && it.name.startsWith("rollout-") && it.name.endsWith(".jsonl") && key in it.name }
+                .firstOrNull { nameOf(it)?.key == key }
+        }.getOrNull()
+        found?.let { keyed[key] = it }
+        return found
+    }
+
+    private val keyed = ConcurrentHashMap<String, File>()
+
+    /** A segment's own first line says where it was cut from, a fork's where it branched off - null for any other first file. */
     internal data class Base(val key: String, val endByte: Long)
 
     internal fun baseOf(file: File): Base? {
@@ -91,9 +117,10 @@ internal object CodexRollout {
     internal data class Part(val file: File, val endByte: Long?, val skipFirst: Boolean)
 
     /**
-     * The files [file]'s history is read from, oldest first. [byKey] finds a file of the same thread by what a
-     * segment calls it (see [Name.key]). A base that cannot be found ends the climb there: what is left is still
-     * the thread's latest words, and an empty history would be the worse answer.
+     * The files [file]'s history is read from, oldest first. [byKey] finds the file a base calls by its key (see
+     * [Name.key], [fileByKey]) - of the same thread for a revert, of the source for a fork. A base that cannot be
+     * found ends the climb there: what is left is still the thread's latest words, and an empty history would be
+     * the worse answer.
      */
     internal fun partsOf(file: File, byKey: (String) -> File?): List<Part> {
         val parts = ArrayList<Part>()
@@ -113,19 +140,20 @@ internal object CodexRollout {
 
     /**
      * [block] over the history of the thread [file] belongs to, as Codex would resume it - the file's own
-     * lines when it was never reverted, which is nearly always.
+     * lines when it was never reverted and is no fork made on 0.163, which is nearly always.
      */
     fun <T> useLines(file: File, block: (Sequence<String>) -> T): T {
         val name = nameOf(file)
-        val root = file.parentFile?.parentFile?.parentFile?.parentFile
+        val root = rootOf(file)
         if (name == null || root == null || (name.segment == null && !file.readsAsSegment())) return file.useLines(block = block)
 
-        val siblings = filesOf(root, name.thread).associateBy { nameOf(it)?.key }
-        val parts = partsOf(file) { key -> siblings[key] ?: filesOf(root, name.thread, fresh = true).firstOrNull { nameOf(it)?.key == key } }
-        return useParts(parts, block)
+        return useParts(partsOf(file) { key -> fileByKey(root, name.thread, key) }, block)
     }
 
-    /** A first file never starts with a base - read as one anyway when it somehow does, rather than trusted by name. */
+    /** The sessions folder a rollout file is filed under by day - `<root>/<year>/<month>/<day>/<file>`. */
+    fun rootOf(file: File): File? = file.parentFile?.parentFile?.parentFile?.parentFile
+
+    /** A first file starts with a base only when it is a fork's - read as one by what it says, not trusted by name. */
     private fun File.readsAsSegment(): Boolean = baseOf(this) != null
 
     internal fun <T> useParts(parts: List<Part>, block: (Sequence<String>) -> T): T {

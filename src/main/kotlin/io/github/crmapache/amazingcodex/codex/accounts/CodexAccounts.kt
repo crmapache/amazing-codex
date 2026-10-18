@@ -315,6 +315,56 @@ internal class CodexAccounts {
         return catalogues[accountId]?.let { ModelNames.holds(it, model) }
     }
 
+    /**
+     * Which models of an account's catalogue have fast mode - a fast tier among their `serviceTiers` (see
+     * CodexShapes.fastModels) - by model, compared the way ModelNames compares: Codex names a model by one exact
+     * id, the one the menu picks, a thread runs on and its answers are signed with. "default" is one of them, as
+     * the model it comes to.
+     */
+    private val fastModels = ConcurrentHashMap<String, Map<String, Boolean>>()
+
+    /**
+     * What this account's catalogue says about fast mode - value, full name, and whether it has it. Null from a
+     * catalogue that marks no model either way: a Codex older than the tiers says nothing, rather than "none".
+     */
+    fun noteFastModels(accountId: String, models: List<Triple<String, String, Boolean>>?) {
+        if (models == null) {
+            fastModels.remove(accountId)
+            return
+        }
+
+        fastModels[accountId] = buildMap {
+            for ((value, _, fast) in models) put(ModelNames.key(value), fast)
+            // The full name answers too where it is another spelling - with Codex it is the same id, and the value wins.
+            for ((_, resolved, fast) in models) if (resolved.isNotEmpty()) putIfAbsent(ModelNames.key(resolved), fast)
+        }
+    }
+
+    /**
+     * Whether [model] has fast mode on this account - null when the catalogue has not said: no catalogue yet, or one
+     * that does not name the model (one added by hand for another provider). Asked when a model is picked - one
+     * without it turns fast mode off (see CodexSessions.setModel) - and when a turn's tier is told (see
+     * CodexSession.fastReport). "Do not know" must leave alone what was asked for in both.
+     */
+    fun hasFastMode(accountId: String, model: String): Boolean? = fastModels[accountId]?.get(ModelNames.key(model))
+
+    /** The model each account's catalogue marks as its default - see [defaultModel]. In memory, like [catalogues]. */
+    private val defaultModels = ConcurrentHashMap<String, String>()
+
+    /**
+     * The model this account's catalogue last marked `isDefault` (the config's own model where the list has it -
+     * see CodexShapes.models). Empty forgets it: a catalogue that marks none says nothing about it.
+     */
+    fun noteDefaultModel(accountId: String, model: String) {
+        if (model.isEmpty()) defaultModels.remove(accountId) else defaultModels[accountId] = model
+    }
+
+    /**
+     * What "Default" comes to on this account, by its catalogue - null until a catalogue has said. What a conversation
+     * sends for "Default" when nothing nearer knows (see CodexSession.defaultModel).
+     */
+    fun defaultModel(accountId: String): String? = defaultModels[accountId]
+
     /** What this account was last left on, so a new tab on it does not launch with another plan's model. */
     fun rememberChoice(id: String, model: String? = null, effort: String? = null) {
         state.rememberChoice(id, model, effort)
@@ -383,6 +433,25 @@ internal class CodexAccounts {
             AccountStore.usageProbeEnvironment(base, storeDir, configDir = probeConfigDir)
         }
     }
+
+    /**
+     * The two Codex homes a terminal would have to be given to run as [accountId] in [workingDirectory] - the
+     * account's drawer and the ordinary home, as a process of it gets them (see AccountStore.environmentFor) - or
+     * null for the default sign-in and for an account that would not resolve there (see [environmentFor]).
+     *
+     * For naming them in a line a person pastes (see ResumeLine), so the same refusals and nothing more: no drawer
+     * is synced and no process started - this is asked on whichever thread the panel's `/status` arrived on.
+     */
+    fun terminalHomes(accountId: String, workingDirectory: String?): Pair<String, String>? {
+        if (accountId.isEmpty()) return null
+        val storeDir = state.account(accountId)?.storeDir ?: return null
+        if (isRemote(workingDirectory)) return null
+        if (AccountStore.refusalFor(storeDir) != null || !File(storeDir).isDirectory) return null
+        return storeDir to HostOs.configDirectory().absolutePath
+    }
+
+    /** What a person calls [accountId]: their own name for it, else its address - empty when it has neither. */
+    fun labelOf(accountId: String): String = state.account(accountId)?.let { it.alias.ifBlank { it.email } }.orEmpty()
 
     /** The map for a process, or null when the account will not resolve and nothing may be started. */
     fun variablesFor(accountId: String, workingDirectory: String?): Map<String, String>? =

@@ -439,7 +439,6 @@ const Grower = ({
       value={value}
       placeholder={placeholder}
       maxLength={maxLength}
-      spellCheck
       rows={4}
       onChange={keys.onChange}
       onKeyDown={keys.onKeyDown}

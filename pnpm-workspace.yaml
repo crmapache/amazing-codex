@@ -18,3 +18,5 @@ packages:
   - webview
   - relay
   - feedback-service
+minimumReleaseAgeExclude:
+  - smooth-stream-text@0.2.0

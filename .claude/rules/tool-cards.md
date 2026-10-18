@@ -5,7 +5,7 @@ paths:
   - "webview/src/components/items/Caret.tsx"
   - "webview/src/feed/tools.ts"
   - "webview/src/feed/tools.test.ts"
-  - "src/main/kotlin/io/github/crmapache/amazingclaudecode/webview/IdeTypography.kt"
+  - "src/main/kotlin/io/github/crmapache/amazingcodex/webview/IdeTypography.kt"
 ---
 
 ## Правка видна сразу, а не за двумя стрелками

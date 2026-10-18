@@ -13,7 +13,6 @@ class SessionQueueTest {
     private fun entry(id: String, text: String = id, images: Int = 0) = SessionQueue.Entry(
         id = id,
         text = text,
-        attach = "",
         images = List(images) { ImageAttachment("image/png", "bytes") },
         echo = null,
         remote = false,
@@ -195,5 +194,56 @@ class SessionQueueTest {
         val (taken, _) = queue.take("main")!!
 
         assertEquals(2, taken.images.size)
+    }
+
+    /* The queue of a tab opened again after a close waited for a turn the close killed: it waits for the person. */
+    @Test
+    fun `a held queue waits until it is released, and empty it holds nothing`() {
+        queue.hold("main", listOf(entry("q1"), entry("q2")))
+        assertTrue(queue.isHeld("main"))
+        assertEquals(listOf("q1", "q2"), ids(queue.of("main")))
+
+        assertTrue(queue.release("main"))
+        assertFalse(queue.isHeld("main"))
+        assertFalse(queue.release("main"))
+
+        queue.hold("fork", listOf(entry("q3")))
+        queue.remove("fork", "q3")
+        assertFalse(queue.isHeld("fork"))
+    }
+
+    /**
+     * A hold belongs to the messages that came back with the tab. Emptied any way at all, the queue holds nothing,
+     * and a message queued into it afterwards - from a phone, into a free tab - is an ordinary one: it goes.
+     */
+    @Test
+    fun `a held queue emptied any way holds nothing that is queued after`() {
+        val emptied = mapOf<String, (String) -> Unit>(
+            "removed" to { id -> queue.remove(id, "q1") },
+            "taken out" to { id -> queue.takeOut(id, "q1") },
+            "fired" to { id -> queue.take(id) },
+            "cut back" to { id -> queue.removeAll(id, setOf("q1")) },
+        )
+        for ((how, empty) in emptied) {
+            queue.hold(how, listOf(entry("q1")))
+            empty(how)
+            queue.add(how, entry("q2"))
+            assertFalse(queue.isHeld(how), how)
+        }
+
+        // Not emptied - one taken out to be edited and put back among the rest - it stays held.
+        queue.hold("kept", listOf(entry("q1"), entry("q2")))
+        queue.takeOut("kept", "q1")
+        queue.add("kept", entry("q1"), before = "q2")
+        assertTrue(queue.isHeld("kept"))
+    }
+
+    @Test
+    fun `clearing a conversation lets go of its hold`() {
+        queue.hold("main", listOf(entry("q1")))
+        queue.clear("main")
+        queue.add("main", entry("q2"))
+
+        assertFalse(queue.isHeld("main"))
     }
 }

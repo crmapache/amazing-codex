@@ -52,7 +52,6 @@ export const ImprovePrompt = ({ instructions, builtIn, onChange }: ImprovePrompt
           className={s.instructions}
           value={text}
           placeholder={builtIn}
-          spellCheck
           onChange={keys.onChange}
           onKeyDown={keys.onKeyDown}
           onBlur={() => save(text)}

@@ -337,4 +337,100 @@ class SessionRegistryTest {
 
         assertEquals(listOf(CodexSessions.MAIN_SESSION, "a", "b"), registry.tabs().map { it.id })
     }
+
+    // A closed tab comes back where it stood (see ClosedTabs): its group's head to the front, its forks under it
+    // again; a fork after the last of its left neighbours still there; a lone tab among the groups it stood after.
+    @Test
+    fun `the head of a group comes back in front of the forks it left behind`() {
+        val registry = SessionRegistry()
+        registry.open("a")
+        registry.open("f1", parentId = "a")
+        registry.open("b")
+        registry.close("a")
+
+        assertTrue(registry.reopen("a", "A", SessionSnapshot.TITLE_LLM, null, "a", 0, listOf(CodexSessions.MAIN_SESSION), emptyList()))
+
+        assertEquals(listOf(CodexSessions.MAIN_SESSION, "a", "f1", "b"), registry.tabs().map { it.id })
+        assertEquals(0, registry.tabs().first { it.id == "a" }.depth)
+    }
+
+    @Test
+    fun `a fork comes back after its left neighbour in its group`() {
+        val registry = SessionRegistry()
+        registry.open("a")
+        registry.open("f1", parentId = "a")
+        registry.open("f2", parentId = "a")
+        registry.open("f3", parentId = "a")
+        registry.close("f2")
+
+        assertTrue(registry.reopen("f2", "F2", SessionSnapshot.TITLE_LLM, "a", "a", 1, listOf(CodexSessions.MAIN_SESSION), listOf("a", "f1")))
+
+        assertEquals(listOf(CodexSessions.MAIN_SESSION, "a", "f1", "f2", "f3"), registry.tabs().map { it.id })
+        val back = registry.tabs().first { it.id == "f2" }
+        assertEquals("a", back.groupId)
+        assertEquals("a", back.parentId)
+    }
+
+    // Closed after its head, the fork had no left neighbour in the group to remember - and its head is back first.
+    @Test
+    fun `a fork with no left neighbour comes back right after its group's head`() {
+        val registry = SessionRegistry()
+        registry.open("a")
+        registry.open("f1", parentId = "a")
+        registry.open("f2", parentId = "a")
+        registry.close("a")
+        registry.close("f1")
+
+        registry.reopen("a", "A", SessionSnapshot.TITLE_LLM, null, "a", 0, listOf(CodexSessions.MAIN_SESSION), emptyList())
+        registry.reopen("f1", "F1", SessionSnapshot.TITLE_LLM, "a", "a", 1, listOf(CodexSessions.MAIN_SESSION), emptyList())
+
+        assertEquals(listOf(CodexSessions.MAIN_SESSION, "a", "f1", "f2"), registry.tabs().map { it.id })
+    }
+
+    @Test
+    fun `a lone tab comes back among the groups it stood after, counted rather than indexed`() {
+        val registry = SessionRegistry()
+        registry.open("a")
+        registry.open("b")
+        registry.open("c")
+        registry.close("b")
+        // The tab that stood first is gone too: "after main and a" is now "after a".
+        registry.close(CodexSessions.MAIN_SESSION)
+
+        assertTrue(registry.reopen("b", "B", SessionSnapshot.TITLE_USER, null, "b", 0, listOf(CodexSessions.MAIN_SESSION, "a"), emptyList()))
+
+        assertEquals(listOf("a", "b", "c"), registry.tabs().map { it.id })
+        assertEquals(SessionSnapshot.TITLE_USER, registry.titleSource("b"))
+    }
+
+    @Test
+    fun `a fork whose group is gone stands on its own`() {
+        val registry = SessionRegistry()
+        registry.open("b")
+
+        assertTrue(registry.reopen("f", "F", SessionSnapshot.TITLE_LLM, "a", "a", 2, listOf(CodexSessions.MAIN_SESSION), listOf("a")))
+
+        val back = registry.tabs().first { it.id == "f" }
+        assertEquals(listOf(CodexSessions.MAIN_SESSION, "f", "b"), registry.tabs().map { it.id })
+        assertEquals("f", back.groupId)
+        assertEquals(0, back.depth)
+        assertNull(back.parentId)
+        assertFalse(registry.reopen("f", "F", SessionSnapshot.TITLE_LLM, null, "f", 0, emptyList(), emptyList()))
+    }
+
+    @Test
+    fun `a lone tab stays after its neighbour when another came back to the left of them`() {
+        val registry = SessionRegistry()
+        registry.open("r")
+        registry.open("e")
+        registry.close(CodexSessions.MAIN_SESSION)
+        registry.open("s")
+        // "s" was closed after "e", while main was gone; main has come back to the front since.
+        registry.close("s")
+        registry.reopen(CodexSessions.MAIN_SESSION, "M", SessionSnapshot.TITLE_LLM, null, CodexSessions.MAIN_SESSION, 0, emptyList(), emptyList())
+
+        registry.reopen("s", "S", SessionSnapshot.TITLE_LLM, null, "s", 0, listOf("r", "e"), emptyList())
+
+        assertEquals(listOf(CodexSessions.MAIN_SESSION, "r", "e", "s"), registry.tabs().map { it.id })
+    }
 }

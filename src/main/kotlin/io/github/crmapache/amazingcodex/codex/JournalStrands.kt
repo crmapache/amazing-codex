@@ -38,6 +38,9 @@ internal object JournalStrands {
         }
 
         val parent = event.text("parent_tool_use_id") ?: return null
+        // A subagent's patch of a file is no step of its own stream but a row of the turn's list of changed files (see
+        // CodexDialect.resultLines): thinned on the way to a phone as a step, the phone's list would lose files.
+        if ((event["toolUseResult"] as? JsonObject)?.containsKey("filePath") == true) return null
         return SessionJournal.Strand("agent:$parent", SessionJournal.Strand.Kind.DETAIL)
     }
 

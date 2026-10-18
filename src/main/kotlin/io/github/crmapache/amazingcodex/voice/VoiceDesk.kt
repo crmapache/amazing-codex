@@ -6,6 +6,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.util.concurrency.AppExecutorUtil
 import io.github.crmapache.amazingcodex.codex.CodexPreferences
+import io.github.crmapache.amazingcodex.codex.CodexSessionHub
 import io.github.crmapache.amazingcodex.toolwindow.CodexPanels
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
@@ -73,6 +74,9 @@ internal class VoiceDesk(
         if (!enabled) VoiceDictation.getInstance().cancel()
         VoiceHotkeys.getInstance().refresh()
         announce()
+        // A paired phone draws its microphone button by this switch (see RemoteAgent.inventoryBody), and
+        // left to its next knock it would go on offering the button for up to half a minute.
+        CodexSessionHub.everyHub { it.inventoryChanged() }
     }
 
     fun setLanguage(code: String) {

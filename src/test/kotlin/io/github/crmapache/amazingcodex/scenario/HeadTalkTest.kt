@@ -253,4 +253,82 @@ class HeadTalkTest {
         assertTrue("One exception" !in HeadTalk.opening(plain, "/repo", emptyMap(), 1))
         assertTrue("One exception" in HeadTalk.opening(handing, "/repo", emptyMap(), 1))
     }
+    // The one launch argument with words in it the panel did not write: the reason the head gave for coming
+    // back to an item. It has to obey the rule above all the same.
+    @Test
+    fun `a second go is told what the first ran into without breaking its launch argument`() {
+        val said = HeadTalk.cardBriefing("Notion asked to \"sign in\" -\nthe brief\u0027s draft is in /tmp/plan.md")
+
+        assertTrue(said.startsWith(HeadTalk.CARD_BRIEFING))
+        assertTrue("second go" in said)
+        assertTrue("/tmp/plan.md" in said)
+        assertTrue('\n' !in said)
+        assertTrue('"' !in said)
+        assertTrue('\'' !in said)
+        assertEquals(HeadTalk.CARD_BRIEFING, HeadTalk.cardBriefing(""))
+    }
+
+    private val listed = Stage(
+        id = "g",
+        title = "Plans",
+        each = StageEach(name = "card", description = "The children of the umbrella, in planning order."),
+        cards = listOf(Card(id = "p", title = "Plan it", prompt = "/rr-plan [[card]]")),
+    )
+
+    @Test
+    fun `the list is asked for with what it is and where its values land`() {
+        val said = HeadTalk.listRequest(listed, listed.each!!, number = 1, stages = 2, prompts = listed.cards.map { it to it.prompt })
+
+        assertTrue("The children of the umbrella, in planning order." in said)
+        assertTrue("/rr-plan [[card]]" in said)
+        assertTrue("\"items\"" in said)
+        assertTrue("at most $MAX_STAGE_ITEMS" in said)
+        assertTrue("An empty list is an answer too" in said)
+    }
+
+    @Test
+    fun `a pass of a list is handed over by its item, which is not asked for`() {
+        val item = RunItem(label = "Titles for the test", value = "https://example.com/7", index = 3, count = 7)
+        val said = HeadTalk.handover(
+            stage = listed,
+            card = listed.cards[0],
+            index = 3,
+            total = 7,
+            pass = 3,
+            passes = 1,
+            prompt = "/rr-plan https://example.com/7",
+            retries = 2,
+            item = item,
+        )
+
+        assertTrue("item 3 of 7: Titles for the test" in said)
+        assertTrue("the panel has written it in: https://example.com/7" in said)
+        assertTrue("There are none for you to fill" in said)
+        assertTrue("Slots you must fill" !in said)
+
+        val again = HeadTalk.handover(listed, listed.cards[0], 8, 8, 8, 1, "/rr-plan x", 2, item = item.copy(again = "Notion would not let it in"))
+        assertTrue("a second go at item 3 of 7" in again)
+        assertTrue("Notion would not let it in" in again)
+    }
+
+    // Offered only where it can be taken: an item on its first go. Elsewhere it would be an answer the
+    // engine has to turn down.
+    @Test
+    fun `putting an item off is offered only where it may be`() {
+        val offered = HeadTalk.verdictRequest(card, listOf("Brief in a draft: Notion asked to sign in."), ok = true, nudgesLeft = 1, putOff = true)
+        val plain = HeadTalk.verdictRequest(card, listOf("Done."), ok = true, nudgesLeft = 1)
+
+        assertTrue("\"later\"" in offered)
+        assertTrue("\"later\"" !in plain)
+    }
+
+    @Test
+    fun `the opening says which stages run per item, and that the count grows`() {
+        val scenario = Scenario(name = "Umbrella", stages = listOf(listed, Stage(id = "c", title = "Check", cards = listOf(card))))
+        val said = HeadTalk.opening(scenario, "/repo", emptyMap(), 2)
+
+        assertTrue("The stage \"Plans\" runs once for each item of a list" in said)
+        assertTrue("2 for now" in said)
+        assertTrue("runs once for each item" !in HeadTalk.opening(Scenario(name = "Night", stages = listOf(Stage(id = "g", cards = listOf(card)))), "/repo", emptyMap(), 1))
+    }
 }

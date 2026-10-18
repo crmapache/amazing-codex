@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { SearchHit } from '../protocol'
-import { chatHits, groupByChat, rowOf, snippetPieces } from './search'
+import { chatHits, chordWait, groupByChat, rowOf, searchTabBeside, searchTabOfKey, snippetPieces } from './search'
 import type { FeedItem } from './types'
 
 const hit = (overrides: Partial<SearchHit>): SearchHit => ({
@@ -105,5 +105,46 @@ describe('a hit is found in the feed', () => {
 
   it('never by the words for an answer - those always carry their name', () => {
     expect(rowOf(items, hit({ uuid: 'unknown', speaker: 'claude', text: 'Because of the role.' }))).toBeUndefined()
+  })
+})
+
+describe('the window keys', () => {
+  // The panel's next and previous tab keys walk the window's tabs while it is open, round the end like the strip.
+  it('steps between the tabs round the end both ways', () => {
+    expect(searchTabBeside('chat', 1)).toBe('project')
+    expect(searchTabBeside('project', 1)).toBe('ai')
+    expect(searchTabBeside('ai', 1)).toBe('chat')
+    expect(searchTabBeside('chat', -1)).toBe('ai')
+    expect(searchTabBeside('ai', -1)).toBe('project')
+  })
+
+  it('reads the digit by its key, on the row and on the keypad, and nothing past the third', () => {
+    expect(['Digit1', 'Digit2', 'Digit3'].map(searchTabOfKey)).toEqual(['chat', 'project', 'ai'])
+    expect(searchTabOfKey('Numpad2')).toBe('project')
+    expect(searchTabOfKey('Digit4')).toBeUndefined()
+    expect(searchTabOfKey('KeyC')).toBeUndefined()
+  })
+
+  // Off a Mac the chord is Ctrl+Alt, and on Windows the right Alt reaches the page as just that: the browser decides.
+  it('leaves a press that typed a character to the field, and does the chord for one that typed nothing', () => {
+    const done: string[] = []
+    const wait = chordWait()
+
+    // Spanish right Alt + 2: the browser puts "@" into the field before the key comes up.
+    wait.press('Digit2', () => done.push('tab 2'))
+    wait.typed()
+    expect(wait.release('Digit2')).toBe(false)
+
+    // Ctrl+Alt+2 that types nothing - any layout, Russian included - switches as the key comes up.
+    wait.press('Digit2', () => done.push('tab 2'))
+    expect(wait.release('Digit2')).toBe(true)
+
+    // The key that comes up is the one pressed, or the press is not answered by it.
+    wait.press('KeyC', () => done.push('match case'))
+    expect(wait.release('ControlLeft')).toBe(false)
+    expect(wait.release('KeyC')).toBe(true)
+    expect(wait.release('KeyC')).toBe(false)
+
+    expect(done).toEqual(['tab 2', 'match case'])
   })
 })

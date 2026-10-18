@@ -1,4 +1,4 @@
-import { memo, useMemo } from 'react'
+import { memo, useCallback, useMemo } from 'react'
 import { LinkedText } from './LinkedText'
 import { Caret } from './Caret'
 import { CopyButton } from './CopyButton'
@@ -11,9 +11,11 @@ import { reusableMessage } from '../../feed/reuse'
 import { rewindable } from '../../feed/rewind'
 import type { Chip, ChipKind, UserItem } from '../../feed/types'
 import type { CardState } from '../../hooks/useCardState'
-import { useOpenFile } from '../../hooks/useOpenFile'
+import { useOpenFile, useOpenPicture } from '../../hooks/useOpenFile'
+import { useSaidImages } from '../../hooks/useSaidImages'
+import { chipOpening, chipPreview, markPreview, pastedOrdinals } from '../../imagePreview'
 import { editorLabel } from '../../feed/editorContext'
-import type { EditorRef } from '../../protocol'
+import type { EditorRef, PreviewPlace } from '../../protocol'
 import { EditorIcon } from '../EditorChip'
 import s from '../feed.module.css'
 import { useT } from '../../i18n'
@@ -101,7 +103,11 @@ export const UserCard = ({
   return (
   <div className={s.user}>
     <div className={s.userHead}>
-      <span className={s.label}>{userLabel ?? t.feed.you}</span>
+      {/* A message the panel said itself wears its own word, and the hint says why (see UserItem.auto): YOU
+          over words nobody typed is the one thing this head may not say. */}
+      <span className={s.label} data-tooltip={!userLabel && item.auto && item.auto !== 'unknown' ? t.feed.auto.why[item.auto] : undefined}>
+        {userLabel ?? (item.auto ? t.feed.auto.label : t.feed.you)}
+      </span>
       <span className={s.time}>{item.time}</span>
       <div className={s.spacer} />
 
@@ -166,6 +172,7 @@ export const UserCard = ({
     <SentTokens
       className={s.userBody}
       tokens={item.tokens}
+      uuid={item.uuid}
       onOpenLink={onOpenLink}
       isOpen={(index) => cards.isOpen(`${item.id}:paste:${index}`)}
       onToggle={(index) => cards.toggle(`${item.id}:paste:${index}`)}
@@ -182,20 +189,37 @@ export const UserCard = ({
  * Shared with the run's timeline (see ScenarioRunTab): what the person writes to a run's main thread comes
  * out of the same field as a chat message, files, pictures and pasted text included, and reads the same way
  * there. Whether a folded paste is open is the caller's to keep - the feed keeps it with every other card.
+ *
+ * [uuid] is the message's line in the transcript: a pasted picture whose bytes the feed no longer holds is
+ * read back from there for the preview under the pointer (see useSaidImages).
  */
 export const SentTokens = ({
   tokens,
+  uuid,
   className,
   onOpenLink,
   isOpen,
   onToggle,
 }: {
   tokens: UserItem['tokens']
+  uuid?: string
   className?: string
   onOpenLink: (url: string) => void
   isOpen: (index: number) => boolean
   onToggle: (index: number) => void
-}) => (
+}) => {
+  const sessionId = useSaidImages()
+  // Worked out once per message rather than per chip and per render: the feed repaints on every chunk of a
+  // printing answer, and a new place object each time would wake every memoised chip in it.
+  const places = useMemo(
+    () =>
+      pastedOrdinals(tokens).map((image): PreviewPlace | null =>
+        image >= 0 && sessionId && uuid ? { kind: 'said', sessionId, uuid, image } : null,
+      ),
+    [tokens, sessionId, uuid],
+  )
+
+  return (
   <div className={className}>
     {tokens.map((token, index) =>
       token.kind === 'text' ? (
@@ -211,11 +235,12 @@ export const SentTokens = ({
           onToggle={() => onToggle(index)}
         />
       ) : (
-        <ChipView key={index} chip={token.chip} />
+        <ChipView key={index} chip={token.chip} elsewhere={places[index]} />
       ),
     )}
   </div>
-)
+  )
+}
 
 /**
  * What the editor showed when the message went - the file, and how many lines of it were selected. The
@@ -315,19 +340,35 @@ const TextToken = ({
 }
 
 /**
- * An attachment chip inside a sent message.
+ * An attachment chip inside a sent message - and inside a queued one (see Queue).
  *
  * A memo component of its own for the sake of a collapsed paste: its caption and tooltip are computed
  * from the text itself, while the feed repaints on every chunk of a printing answer. The chip meanwhile
  * does not change at all - and recomputing it a hundred times a second serves nothing.
+ *
+ * A picture's chip shows the picture under the pointer (see imagePreview.ts). [elsewhere] is where the
+ * message keeps it when the chip itself does not - its line in the transcript, its bytes in the queue.
  */
-const ChipView = memo(({ chip }: { chip: Chip }) => {
+export const ChipView = memo(({ chip, elsewhere }: { chip: Chip; elsewhere?: PreviewPlace | null }) => {
   const t = useT()
   const openFile = useOpenFile()
+  const openPicture = useOpenPicture()
+  const behind = useMemo(() => chipPreview(chip, elsewhere), [chip, elsewhere])
+  // A picture opens by a road of its own, whatever holds it - a file, the page's bytes, the queue, the
+  // transcript (see useOpenPicture): a conversation brought back after a restart is all pictures without
+  // a file, and the click's failure has to be told over the chip that was pressed.
+  const opening = useMemo(() => chipOpening(chip, elsewhere), [chip, elsewhere])
+  const picture = openPicture ? opening : null
   const file = openFile ? chipFile(chip) : null
+  const opens = file !== null || picture !== null
+  const preview = useMemo(() => (behind && opens ? { ...behind, opens } : behind), [behind, opens])
+  const mark = useCallback((node: HTMLElement | null) => {
+    if (node) markPreview(node, preview)
+  }, [preview])
   // No attribute at all when there is nothing to add (see chipTitle): an empty one is still a hover, and
-  // an empty box under the pointer reads as something that failed to load.
-  const title = chipTitle(chip)
+  // an empty box under the pointer reads as something that failed to load. And none on a picture's chip:
+  // the picture is its hover, and says what a click does under itself.
+  const title = preview ? '' : chipTitle(chip)
   // What the chip means in the clipboard travels beside it: copied as it looks, `App.tsx` is a name with
   // no path in it, while what the agent was handed is the path itself (see copiedText).
   const copy = { [COPY_ATTRIBUTE]: clipboardText({ kind: 'chip', chip }) }
@@ -341,15 +382,19 @@ const ChipView = memo(({ chip }: { chip: Chip }) => {
    * The hover says what a click does, the way it does on every path that opens (see PathLink) - unless
    * the name had to be cut, and then the hover is the only place the whole of it exists (see chipTitle).
    */
-  if (file && openFile) {
+  if ((file && openFile) || (picture && openPicture)) {
     return (
       <button
+        ref={mark}
         type="button"
         className={`${s.chip} ${CHIP_CLASS[chip.kind]} ${s.chipOpens}`}
         aria-label={`${t.feed.copy.openFile}: ${chip.value}`}
-        data-tooltip={title || t.feed.copy.openFile}
+        data-tooltip={preview ? undefined : title || t.feed.copy.openFile}
         {...copy}
-        onClick={() => openFile(file)}
+        onClick={(event) => {
+          if (file && openFile) openFile(file)
+          else if (picture && openPicture) openPicture(picture, event.currentTarget)
+        }}
       >
         {chipLabel(chip)}
       </button>
@@ -357,7 +402,7 @@ const ChipView = memo(({ chip }: { chip: Chip }) => {
   }
 
   return (
-    <span className={`${s.chip} ${CHIP_CLASS[chip.kind]}`} data-tooltip={title || undefined} {...copy}>
+    <span ref={mark} className={`${s.chip} ${CHIP_CLASS[chip.kind]}`} data-tooltip={title || undefined} {...copy}>
       {/* There is deliberately no attachment type icon - see renderChipNode in Composer: the chip here is
           a reminder of what was sent, and the colour of the kind is reminder enough. */}
       {chipLabel(chip)}

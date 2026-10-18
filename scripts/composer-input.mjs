@@ -293,6 +293,33 @@ await caretAt(3)
 await composeWord(['n', 'ni', 'nihao'], '你好')
 check('an input method works in the middle too', await text(), 'start 你好end')
 
+/**
+ * A word, a paste, a word. The paste used to leave an empty text node behind the chip, and the browser
+ * dropped the next composition after its first letter, keeping that letter as text: "wocao" came out as
+ * "w我草" (reported from IntelliJ IDEA). Only after something typed - in an empty field there was nothing
+ * for the paste to split. See insertAtRange in composerDom.ts.
+ */
+await clear()
+await page.click(FIELD)
+await composeWord(['w', 'wo'], '我')
+await page.evaluate(() => {
+  const transfer = new DataTransfer()
+  transfer.setData('text/plain', 'line one of the paste\nline two of the paste\n')
+  document
+    .querySelector('[contenteditable="true"]')
+    .dispatchEvent(new ClipboardEvent('paste', { clipboardData: transfer, bubbles: true }))
+})
+await sleep(300)
+await composeWord(['w', 'wo', 'woc', 'woca', 'wocao'], '我草')
+// What stands behind the chip - the chip's own caption is no business of this check.
+const afterChip = await page.$eval(FIELD, (node) => {
+  const chip = [...node.childNodes].findLast((child) => child.nodeType === 1)
+  let tail = ''
+  for (let next = chip?.nextSibling; next; next = next.nextSibling) tail += next.textContent
+  return tail
+})
+check('a word composed after a paste keeps no stray letter', afterChip, ' 我草')
+
 await sendFiles(['src/panel/Composer.tsx', 'src/panel/Feed.tsx', 'README.md'])
 await clear()
 await page.click(FIELD)

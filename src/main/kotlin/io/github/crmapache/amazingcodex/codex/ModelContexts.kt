@@ -23,13 +23,31 @@ internal object ModelContexts {
     fun normalize(mode: String): String = if (mode.trim().lowercase() == LONG) LONG else STANDARD
 
     /** Raw window value handed to Codex. Null means the cache does not know this model. */
-    fun window(workingDirectory: String?, model: String, mode: String): Int? {
-        val contexts = read(workingDirectory)
-        val resolved = model.takeUnless { it.isBlank() || it == "default" }
-            ?: CodexSettings.effective(workingDirectory, "model").takeIf { it.isNotBlank() }
-        val limits = resolved?.let(contexts::get) ?: contexts.values.firstOrNull() ?: return null
-        return if (normalize(mode) == LONG) limits.long else limits.standard
-    }
+    fun window(workingDirectory: String?, model: String, mode: String): Int? =
+        limitsOf(read(workingDirectory), resolve(workingDirectory, model))?.let { if (normalize(mode) == LONG) it.long else it.standard }
+
+    /**
+     * The window Codex reports for [model] in [mode] (`modelContextWindow` of `thread/tokenUsage/updated`): the raw
+     * one less the cache's own margin, 258,400 of 272,000. What the context meter divides by when Codex's last count
+     * was made under another window - another process, another mode (see CodexShapes.contextOf). Null where the
+     * cache does not know the model: then no window was handed to Codex either, and its own count stays true.
+     */
+    fun effectiveWindow(workingDirectory: String?, model: String, mode: String): Int? =
+        limitsOf(read(workingDirectory), resolve(workingDirectory, model))
+            ?.let { if (normalize(mode) == LONG) it.longEffective else it.standardEffective }
+
+    /** "default" as the config names it - the caller knows better when it can (see CodexSession.nextModel). */
+    private fun resolve(workingDirectory: String?, model: String): String =
+        model.takeUnless { it.isBlank() || it == ModelNames.DEFAULT }
+            ?: CodexSettings.effective(workingDirectory, "model")
+
+    /**
+     * The limits of [model] in [contexts]. A model the cache does not name has none: another model's window handed
+     * to it would be a guess sent to Codex as a setting. Only "default" nobody could resolve falls back to the
+     * cache's first model, as before - Long has to mean something on a tab that never named its model.
+     */
+    internal fun limitsOf(contexts: Map<String, Limits>, model: String): Limits? =
+        if (model.isBlank()) contexts.values.firstOrNull() else contexts[model]
 
     fun read(workingDirectory: String?): Map<String, Limits> {
         val file = File(CodexHome.of(workingDirectory).configDirectory, "models_cache.json")

@@ -87,5 +87,54 @@
                  (see SendAbsolutePathAction.offeredIn). -->
             <add-to-group group-id="CutCopyPasteGroup" anchor="after" relative-to-action="CopyReferencePopupGroup"/>
         </action>
+
+        <!-- The panel's own keys (see PanelKeys). In no menu: they live in Settings | Keymap under the
+             plugin, and in Find Action. Each works only while the focus is in the panel - everywhere else
+             the same key stays with whatever owns it. The ids are filed in people's keymaps once rebound:
+             do not rename them. -->
+        <!-- The tab keys are the IDE's own, by reference: the keys that move between and close editor tabs
+             in this person's keymap do it to the panel's tabs, and follow when the keymap changes. -->
+        <action id="AmazingCodex.NextTab"
+                class="io.github.crmapache.amazingcodex.toolwindow.NextTabAction"
+                text="Amazing Codex GUI: Next Tab"
+                description="Show the next tab of the Codex panel"
+                use-shortcut-of="NextTab"/>
+        <action id="AmazingCodex.PreviousTab"
+                class="io.github.crmapache.amazingcodex.toolwindow.PreviousTabAction"
+                text="Amazing Codex GUI: Previous Tab"
+                description="Show the previous tab of the Codex panel"
+                use-shortcut-of="PreviousTab"/>
+        <action id="AmazingCodex.CloseTab"
+                class="io.github.crmapache.amazingcodex.toolwindow.CloseTabAction"
+                text="Amazing Codex GUI: Close Tab"
+                description="Close the tab the Codex panel shows"
+                use-shortcut-of="CloseContent"/>
+        <!-- A new tab and the closed one back: the browser's pair, Ctrl+T and Ctrl+Shift+T (Cmd on a Mac).
+             Ctrl+T is Update Project and Ctrl+Shift+T Go to Test in the editor, and stay so there: these are
+             disabled outside the panel. -->
+        <action id="AmazingCodex.NewTab"
+                class="io.github.crmapache.amazingcodex.toolwindow.NewTabAction"
+                text="Amazing Codex GUI: New Tab"
+                description="Start a new conversation in the Codex panel">
+            <keyboard-shortcut first-keystroke="control T" keymap="$default"/>
+            <keyboard-shortcut first-keystroke="meta T" keymap="Mac OS X" replace-all="true"/>
+            <keyboard-shortcut first-keystroke="meta T" keymap="Mac OS X 10.5+" replace-all="true"/>
+        </action>
+        <action id="AmazingCodex.ReopenTab"
+                class="io.github.crmapache.amazingcodex.toolwindow.ReopenTabAction"
+                text="Amazing Codex GUI: Reopen Closed Tab"
+                description="Open again the tab of the Codex panel closed last">
+            <keyboard-shortcut first-keystroke="control shift T" keymap="$default"/>
+            <keyboard-shortcut first-keystroke="meta shift T" keymap="Mac OS X" replace-all="true"/>
+            <keyboard-shortcut first-keystroke="meta shift T" keymap="Mac OS X 10.5+" replace-all="true"/>
+        </action>
+        <!-- Alt+Enter beside Enter: Enter sends into the running turn, this waits for it to finish. In the
+             editor Alt+Enter stays the intentions' - the action is disabled there. -->
+        <action id="AmazingCodex.QueueMessage"
+                class="io.github.crmapache.amazingcodex.toolwindow.QueueMessageAction"
+                text="Amazing Codex GUI: Queue Message"
+                description="Send the message after the agent finishes its current work">
+            <keyboard-shortcut first-keystroke="alt ENTER" keymap="$default"/>
+        </action>
     </actions>
 </idea-plugin>

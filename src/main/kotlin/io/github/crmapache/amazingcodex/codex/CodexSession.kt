@@ -67,6 +67,8 @@ internal class CodexSession(
     effort: String = "",
     contextMode: String = ModelContexts.STANDARD,
     permissionMode: String = "",
+    /** Whether this conversation asks for the fast service tier - see [fastMode]. */
+    fastMode: Boolean? = null,
     /**
      * Which account this conversation runs on. Empty is Codex's ordinary sign-in.
      *
@@ -106,6 +108,18 @@ internal class CodexSession(
     private val onTurnEnded: () -> Unit = {},
     /** A turn started without a message of ours - an approved plan's implementation, a queued steer. */
     private val onTurnStarted: () -> Unit = {},
+    /**
+     * Who says what this conversation still has to say (see [unsent]) once a turn is over. Null: the conversation
+     * says it itself, the moment the turn ends - a scenario's head and cards, which nothing else drives.
+     *
+     * Set: whoever drives it says it, by [sayUnsent], and this is how the conversation asks for that when the
+     * words land after the turn has already been said to be over (a steer refused a moment too late). A tab's
+     * conversation is driven by its hub, and the hub has a queue of its own and one pass that decides what goes
+     * next (see CodexSessionHub.sayNext). Said by the conversation as well, both went at the same end of a turn -
+     * the hub's queue first, since the end is announced before the conversation looks at its own - and the
+     * second `turn/start` raced the first.
+     */
+    private val onUnsentWaiting: (() -> Unit)? = null,
     /** What the agent is told about where it runs - see CodexLaunch.PANEL_BRIEFING. */
     briefing: String = CodexLaunch.PANEL_BRIEFING,
     /**
@@ -144,6 +158,16 @@ internal class CodexSession(
      * never comes.
      */
     private val onBackground: ((String) -> Unit)? = null,
+    /**
+     * The files the person put back since the agent last heard of it - told to the agent before its next turn (see
+     * [startTurn]). The tab's own, handed in so it outlives this process (see CodexSessions).
+     */
+    private val putBack: PutBack = PutBack(),
+    /**
+     * What this run of the IDE settled of the tab's turns against the disk (see TurnFiles) - what a rewind past such a
+     * turn undoes in place of its patches (see [codePlan]). The tab's own, like [putBack].
+     */
+    private val settled: TurnFiles.Settled = TurnFiles.Settled(),
 ) : Disposable {
 
     /** Every role gets the project's shared `.claude` contract when its process actually opens. */
@@ -160,6 +184,12 @@ internal class CodexSession(
     /** The person's turn is running: something was sent and the turn has not completed. */
     @Volatile
     private var busy = false
+
+    /**
+     * The files the turn under way patched, held against the disk at its end - see TurnFiles. Fed only from the thread
+     * that reads the process's output.
+     */
+    private val turnFiles = TurnFiles()
 
     /** The thread Codex is running now - known from turn/start's answer or turn/started, whichever is first. */
     @Volatile
@@ -186,6 +216,36 @@ internal class CodexSession(
 
     var contextMode: String = ModelContexts.normalize(contextMode)
         private set
+
+    /**
+     * What this conversation asks of Codex's speed: true for the fast service tier (ServiceTiers.FAST - "Fast" in
+     * Codex's catalogue, quicker answers that use the plan's limits faster), false for the standard one, null
+     * for whatever Codex's own config says (`service_tier`). Null is where every new tab starts: the panel
+     * never turns a paid speed on by itself, nor overrides one the person set in Codex.
+     *
+     * The ask, not the answer - that is [serviceTier], which Codex says. Sent with every turn and every open of
+     * the thread, not once: Codex keeps a tier given to a turn for the turns after it, but only in that process -
+     * a thread resumed by the next one comes up on the config's tier again (measured on 0.163).
+     */
+    @Volatile
+    var fastMode: Boolean? = fastMode
+        private set
+
+    /**
+     * The service tier Codex says the thread runs on - from the answer that opened it, then from
+     * `thread/settings/updated`, which Codex sends whenever a turn changes it (measured on 0.163). What the
+     * panel's fast mark shows, so a tier set in Codex's config is never invisible.
+     */
+    @Volatile
+    private var serviceTier: String? = null
+
+    /**
+     * The tier this process last carried to Codex - with the thread's open or a turn's start (see [tierOnWire]) -
+     * or null while it has carried none. What Codex says of the tier answers THAT ask: one changed since (mid-turn,
+     * say) has not reached it, and the turn running on the old tier is no refusal of it (see [fastReport]).
+     */
+    @Volatile
+    private var tierSent: String? = null
 
     @Volatile
     private var executableStamp: CodexExecutable.Stamp? = null
@@ -239,14 +299,40 @@ internal class CodexSession(
     private val turnOfMessage = ConcurrentHashMap<String, String>()
 
     /**
+     * The person's messages of each turn, in the order Codex took them in - the one that began it, then the ones
+     * written into it - by the panel's names, null for one the panel did not name (the turn a decided plan asks
+     * for). Codex never hears those names: its thread knows a message as the n-th of the person's in its turn,
+     * and this is how that n is told (see [placeOf]).
+     */
+    private val messagesOfTurn = ConcurrentHashMap<String, MutableList<String?>>()
+
+    /** [uuid] taken into [turn] by Codex - see [messagesOfTurn]. */
+    private fun noteTaken(turn: String, uuid: String?) {
+        val messages = messagesOfTurn.computeIfAbsent(turn) { ArrayList() }
+        synchronized(messages) { messages += uuid }
+    }
+
+    /**
      * The names of the messages this conversation was given, in the order it was given them - what tells a
      * message a client has seen from one it has not (see [movedPast]).
      */
     private val delivered = ArrayList<String>()
 
-    /** The model the thread actually runs on, as Codex said when it opened it - the menu's empty "default". */
+    /**
+     * The model the thread runs on, as Codex last said it or was told it: the answer that opened the thread, the
+     * model a `turn/start` carried (Codex keeps it "for this turn and subsequent turns"), and the model of every
+     * `thread/settings/updated`. Not the pick: a model chosen in the middle of a turn reaches Codex only with the
+     * next `turn/start`, and until then the turn goes on answering in this one (see [signedModel]).
+     */
     @Volatile
     private var threadModel: String = ""
+
+    /**
+     * What Codex runs on a tab that asks for no model, in its own words: the model of a `thread/start` that carried
+     * none. What "Default" is sent as once the thread has been moved off it (see [modelOnWire]).
+     */
+    @Volatile
+    private var defaultSaid: String = ""
 
     /** The thread is open and turns can be started. Until then everything waits in [whenOpen]. */
     @Volatile
@@ -256,17 +342,138 @@ internal class CodexSession(
     /** Whether the last turn was sent in plan mode - leaving it has to be said, it is sticky. */
     private var planSent = false
 
+    /**
+     * The thread this process is about to open was planning in the process before it - a plan carried over (see
+     * [adopt]). Opening a thread forgets [planSent], since a new process has said nothing yet; this keeps the next
+     * turn saying that it leaves plan mode, so whatever Codex keeps of the mode across processes it is told.
+     */
+    private var planCarried = false
+
     /** An explicit effort was sent at some point - choosing "auto" afterwards has to clear it. */
     private var effortSent = false
 
     /**
      * A message on its way: the person's words, the pictures, the editor note that goes with them, and the
-     * name the panel gave it (see [turnOfMessage]).
+     * name the panel gave it (see [turnOfMessage]). [afterPlan] marks the turn a decided plan asks for rather
+     * than words the person wrote (see [answerPermission]).
      */
-    private data class Outgoing(val text: String, val images: List<ImageAttachment>, val context: String?, val uuid: String? = null)
+    data class Outgoing(
+        val text: String,
+        val images: List<ImageAttachment>,
+        val context: String?,
+        val uuid: String? = null,
+        val afterPlan: AfterPlan? = null,
+    )
 
-    /** Messages written into a turn that would not take them in (see [steer]): sent when it ends. */
+    /**
+     * The turn a decided plan asks for. Not a message of the person's: it is started as it stands, never read for
+     * a command (a remark beginning with a slash is still a remark), and the approval also leaves plan mode.
+     */
+    enum class AfterPlan {
+        /** Approved: "Implement the plan.", out of plan mode - what Codex's terminal answers an approval with. */
+        IMPLEMENT,
+
+        /** "Keep planning" with the person's remark: the remark is the next planning turn. */
+        REMARK,
+    }
+
+    /**
+     * What this conversation still has to say once the turn under way is over, in order: the turn a decided plan
+     * asks for, and the messages written into a turn that would not take them in (see [steer]). Said before
+     * anything the hub has queued - see [onUnsentWaiting].
+     */
     private val afterTurn = ArrayList<Outgoing>()
+
+    /**
+     * What this conversation still has to say (see [afterTurn]). The person sent it, and its card is in the feed -
+     * so a tab closed before the turn's end keeps it for when it is opened again (see CodexSessionHub.keepClosed),
+     * as it keeps what was queued, and a conversation moved to another account takes it along (see [takeUnsent]).
+     * Without that it went with the process, unsaid and unmentioned.
+     */
+    fun unsent(): List<Outgoing> = synchronized(afterTurn) { afterTurn.toList() }
+
+    /**
+     * [unsent], taken out of this conversation: it is going on in another one, the same thread under a new process
+     * (see CodexSessions.moveTo and [adopt]).
+     */
+    fun takeUnsent(): List<Outgoing> = synchronized(afterTurn) { afterTurn.toList().also { afterTurn.clear() } }
+
+    /**
+     * Say the first of [unsent] now, as a turn of its own - asked by whoever drives this conversation when it is
+     * free (see [onUnsentWaiting]). False when there is nothing to say, or a turn is under way already: then it
+     * waits for that turn's end.
+     *
+     * True also when the process would not come up: [start] has said why, and the message stays first in line -
+     * nothing queued behind it would get any further.
+     */
+    fun sayUnsent(): Boolean {
+        if (busy) return false
+        val next = synchronized(afterTurn) { afterTurn.removeFirstOrNull() } ?: return false
+        if (server == null && start() == null) {
+            synchronized(afterTurn) { afterTurn.add(0, next) }
+            return true
+        }
+        say(next)
+        return true
+    }
+
+    /**
+     * A plan waiting for a decision, as one process hands it to the next: Codex's turn that proposed it, the card's
+     * request, and what the end of that turn is told from (see CodexStream.TurnSoFar).
+     *
+     * Codex has ended that turn already - the plan is in the thread - and the decision is the panel's to carry out
+     * with a turn of its own (see [answerPermission]), so any process over the same thread can carry it out. Without
+     * this a conversation moved to another account lost the card: the move set the plan aside, and the person was
+     * left to ask for it again.
+     */
+    data class HeldPlan(
+        val turn: JsonObject,
+        val request: PermissionChannel.ToolPermission,
+        val soFar: CodexStream.TurnSoFar,
+    ) {
+        val requestId: String get() = request.requestId
+    }
+
+    /** Whether a plan holds this conversation and Codex runs nothing (see [heldPlanTurn]). */
+    val waitsOnPlan: Boolean get() = heldPlanTurn != null
+
+    /**
+     * The plan waiting for a decision, taken out of this conversation without a word to anyone - it is going on in
+     * the conversation that replaces this one (see [adopt]). Null when no plan waits. Its card stays on every
+     * screen, live, and nothing is told to have ended.
+     */
+    fun handOverPlan(): HeldPlan? {
+        val turn = heldPlanTurn ?: return null
+        val (requestId, pending) = awaitingPermission.entries.firstOrNull { it.value.kind == Kind.PLAN } ?: return null
+        heldPlanTurn = null
+        awaitingPermission.remove(requestId)
+        busy = false
+        return HeldPlan(turn, pending.request, stream.turnSoFar())
+    }
+
+    /**
+     * What the conversation this one replaces was holding (see CodexSessions.moveTo): the messages it still had to
+     * say, ahead of anything of this one's, the plan waiting for a decision, and the names its messages went by
+     * ([names], see [messageNames]). The plan holds this conversation as it held that one, process or no process -
+     * deciding it raises one (see [sayUnsent]).
+     */
+    fun adopt(plan: HeldPlan?, unsent: List<Outgoing>, names: MessageNames? = null) {
+        if (unsent.isNotEmpty()) synchronized(afterTurn) { afterTurn.addAll(0, unsent) }
+        names?.let { known ->
+            known.turns.forEach { (uuid, turn) -> turnOfMessage.putIfAbsent(uuid, turn) }
+            known.inTurns.forEach { (turn, messages) -> messagesOfTurn.putIfAbsent(turn, ArrayList(messages)) }
+            synchronized(delivered) { delivered.addAll(0, known.delivered.filter { it !in delivered }) }
+        }
+        plan ?: return
+
+        stream.resumeTurn(plan.soFar)
+        awaitingPermission[plan.requestId] = Pending(Kind.PLAN, serverId = null, request = plan.request)
+        heldPlanTurn = plan.turn
+        // The thread was planning: the turn after the decision has to say it is leaving plan mode, or a new process
+        // that never sent it would leave the mode unsaid (see [startTurn]).
+        planCarried = true
+        busy = true
+    }
 
     /** The name the person gave, as this process last wrote it into the thread - see [nameAfterPerson]. */
     @Volatile
@@ -304,9 +511,10 @@ internal class CodexSession(
 
     private val stream = CodexStream(
         emit = ::emit,
-        model = ::currentModel,
+        model = ::signedModel,
         threadId = { conversationId.orEmpty() },
         limitReached = { lastLimit?.takeIf { System.currentTimeMillis() - it.heardAt < LIMIT_MEMORY_MS }?.let { it.window to it.resetsAt } },
+        fastMode = ::fastReport,
     )
 
     /** The account's limit as it last said a window was full - see CodexStream.limitReached. */
@@ -328,6 +536,29 @@ internal class CodexSession(
     /** The agents this conversation spawned, by their threads' ids - kept only for [onBackground]. */
     private val helpers = ConcurrentHashMap<String, Helper>()
 
+    /**
+     * Every agent this conversation spawned, and the agents those spawned, by their threads' ids. An agent of this
+     * conversation's own carries the call of this feed its work belongs under (the subagent card, see
+     * CodexDialect.agentCall) - null until the spawn's item has said which agent it made, which may come after the
+     * agent's own thread has started; an agent of an agent carries the thread above it, and goes under that one's card
+     * (see [cardOf]).
+     *
+     * Kept for every conversation, a tab's too, for one thing only: an agent's patches are the turn's changed files as
+     * much as the conversation's own (see [subagentNotification]). Nothing of the agent's work is told to a tab beyond
+     * that - see [onBackground] on why.
+     */
+    private class Spawned(val above: String?, @Volatile var callId: String? = null)
+
+    private val spawned = ConcurrentHashMap<String, Spawned>()
+
+    /**
+     * A spawned agent's patches that ended after this conversation's turn had: said, as the results the panel lists,
+     * once the next turn of this conversation starts - the turn's list was closed when they came, and the owner's
+     * decision is that they belong to the next one. Codex never wakes the parent for its agent (measured on 0.160), so
+     * that next turn is the person's.
+     */
+    private val laterChanges = ArrayList<String>()
+
     /** What each server request asked, by our id for it - see [answerPermission]. */
     private val awaitingPermission = ConcurrentHashMap<String, Pending>()
 
@@ -343,6 +574,14 @@ internal class CodexSession(
     /** The last token counts Codex reported, for the context meter asked after the fact. */
     @Volatile
     private var lastTokenUsage: JsonObject? = null
+
+    /**
+     * Whether [lastTokenUsage] is what the process up now counted. False for a count read from the thread's file and
+     * for one kept from the process before: their window is the one THAT process ran with, and the next could have
+     * another - see [contextNow].
+     */
+    @Volatile
+    private var usageLive = false
 
 
     private var titleAsked = false
@@ -373,6 +612,15 @@ internal class CodexSession(
 
     val isBusy: Boolean get() = isRunning && busy
 
+    /**
+     * Whether Codex itself is running a turn of this conversation - [isBusy] short of a plan waiting for a
+     * decision (see [heldPlanTurn]). That turn has ended in Codex: the panel holds its end back so the plan can
+     * still be answered, and there is nothing for an interrupt to cut. An interrupt of a running turn is what
+     * Codex files as `<turn_aborted>` ("the user interrupted the previous turn on purpose") - the one thing the
+     * panel's "carry on" after an account switch is about (see CodexSessions.moveTo).
+     */
+    val runsATurn: Boolean get() = isBusy && heldPlanTurn == null
+
     // --- Sending ---------------------------------------------------------------------------------
 
     /**
@@ -396,14 +644,31 @@ internal class CodexSession(
         }
         uuid?.let { synchronized(delivered) { delivered += it } }
         // A message that is not an answer to a waiting plan sets the plan aside, as typing past it does in
-        // Codex's terminal: the plan is withdrawn and its turn ends before this one begins.
+        // Codex's terminal: the plan is withdrawn and its turn ends before this one begins - and this one begins
+        // at once, so the conversation is not said to be free in between (see [releasePlanTurn]).
         if (heldPlanTurn != null) {
             withdrawPlans()
-            releasePlanTurn(drain = false)
+            releasePlanTurn(followed = true)
         }
         busy = true
         whenOpen { deliver(Outgoing(text, images, context, uuid)) }
         return true
+    }
+
+    /** One of [unsent], said as the turn it starts - see [sayUnsent] and [drainAfterTurn]. */
+    private fun say(next: Outgoing) {
+        if (next.afterPlan == AfterPlan.IMPLEMENT && PermissionModes.normalize(permissionMode.orEmpty()) == PermissionModes.PLAN) {
+            permissionMode = PermissionModes.ACCEPT_EDITS
+        }
+        busy = true
+        onTurnStarted()
+        whenOpen {
+            when (next.afterPlan) {
+                null -> deliver(next)
+                AfterPlan.IMPLEMENT -> startTurn(CodexLaunch.IMPLEMENT_PLAN, emptyList(), emptyList())
+                AfterPlan.REMARK -> startTurn(next.text, emptyList(), emptyList())
+            }
+        }
     }
 
     /**
@@ -440,14 +705,41 @@ internal class CodexSession(
     ) {
         val srv = server ?: return endTurn()
         val thread = conversationId ?: return endTurn()
+
+        // A press on a turn's list still on its way through the IDE (see PutBack.pressed): the turn waits for its answer,
+        // or the note about it would miss this very turn.
+        if (!putBack.afterPresses { startTurn(text, images, skills, context, uuid) }) return
+
+        // Files put back from the panel since the agent last heard (see PutBack): said into the thread first, so the turn
+        // reads them as they are now rather than as it remembers them. The turn goes after the answer either way - a
+        // thread that would not take the note still takes the person's message.
+        putBack.take(workingDirectory.orEmpty())?.let { note ->
+            srv.request(
+                "thread/inject_items",
+                developerMessage(thread, note),
+                onResult = { startTurn(text, images, skills, context, uuid) },
+                onError = { error ->
+                    DiagnosticsLog.note(DiagnosticsLog.AGENT, "codex would not take the note about files put back")
+                    thisLogger().info("Codex did not take the note about files put back: ${error.message}")
+                    startTurn(text, images, skills, context, uuid)
+                },
+            )
+            return
+        }
         val policy = PermissionModes.policyOf(permissionMode)
+        // The model this turn is given is the one it and the turns after it run on - Codex keeps it, there is no
+        // refusing it but failing the turn. Taken as the thread's model the moment it is sent, so the turn's very
+        // first answer is signed by it; a turn Codex would not start leaves the thread where it was.
+        val carried = modelOnWire()
+        val modelBefore = threadModel
+        carried?.let { threadModel = it }
 
         val params = buildJsonObject {
             put("threadId", thread)
             put("input", inputOf(text, images, skills, context))
             put("approvalPolicy", policy.approval)
             put("sandboxPolicy", policy.sandboxPolicy(CodexConfigDesk.workspaceWrite(workingDirectory)))
-            modelOnWire()?.let { put("model", it) }
+            carried?.let { put("model", it) }
             val wired = EffortLevels.wire(effort)
             when {
                 wired != null -> {
@@ -455,6 +747,10 @@ internal class CodexSession(
                     effortSent = true
                 }
                 effortSent -> put("effort", JsonNull)
+            }
+            tierOnWire()?.let { tier ->
+                put("serviceTier", tier)
+                tierSent = tier
             }
             // The panel draws the reasoning, so it asks for a summary of it - unless the person's own config
             // says what kind they want (`model_reasoning_summary`), which then decides by itself.
@@ -465,7 +761,7 @@ internal class CodexSession(
                 putJsonObject("collaborationMode") {
                     put("mode", if (policy.plan) "plan" else "default")
                     putJsonObject("settings") {
-                        put("model", currentModel())
+                        put("model", carried ?: threadModel)
                         EffortLevels.wire(effort)?.let { put("reasoning_effort", it) } ?: put("reasoning_effort", JsonNull)
                         put("developer_instructions", JsonNull)
                     }
@@ -483,11 +779,13 @@ internal class CodexSession(
                 AppServer.text(turn?.get("id")).takeIf { it.isNotEmpty() }?.let { id ->
                     if (activeTurn == null) activeTurn = id
                     uuid?.let { turnOfMessage[it] = id }
+                    noteTaken(id, uuid)
                     if (interruptWanted) interruptNow(null)
                 }
             },
             onError = { error ->
                 DiagnosticsLog.note(DiagnosticsLog.AGENT, "codex refused to start a turn")
+                if (carried != null && threadModel == carried) threadModel = modelBefore
                 onError("Codex did not start the turn: ${error.message}")
                 endTurn()
             },
@@ -511,13 +809,19 @@ internal class CodexSession(
                 put("input", inputOf(text, images, skills, context))
                 put("expectedTurnId", turn)
             },
-            onResult = { uuid?.let { turnOfMessage[it] = turn } },
+            onResult = {
+                uuid?.let { turnOfMessage[it] = turn }
+                noteTaken(turn, uuid)
+            },
             onError = {
                 // The note goes along with the words it was taken for, so a message sent after the turn
                 // still says what the editor showed when it was written.
                 synchronized(afterTurn) { afterTurn += Outgoing(text, images, context, uuid) }
-                // The turn may have ended between the send and the refusal: then nobody else will drain.
-                if (activeTurn == null) drainAfterTurn()
+                // The turn may have ended between the send and the refusal: then its end has been and gone, and
+                // nobody will say this unless asked to now. Unless another turn is on its way already - one out
+                // of the hub's queue, started at that end - and then this waits for that one's end instead: a
+                // second `turn/start` beside one not yet answered is two turns at once.
+                if (activeTurn == null && !busy) onUnsentWaiting?.invoke() ?: drainAfterTurn()
             },
         )
     }
@@ -607,21 +911,27 @@ internal class CodexSession(
      */
     private fun clear() {
         val srv = server ?: return endTurn()
+        val carried = modelOnWire()
         srv.request(
             "thread/start",
-            threadParams(),
+            threadParams(carried),
             onResult = { result ->
                 val thread = (result as? JsonObject)?.get("thread") as? JsonObject
                 val id = AppServer.text(thread?.get("id"))
                 if (id.isNotEmpty()) {
                     conversationId = id
+                    noteOpenedModel(result as? JsonObject, carried, started = true)
                     hasHistory = false
                     lastTokenUsage = null
+                    usageLive = false
                     titleAsked = false
                     awaitingPermission.clear()
                     // A new conversation: nothing said into the old one is anything a rewind here can name.
                     turnOfMessage.clear()
+                    messagesOfTurn.clear()
                     synchronized(delivered) { delivered.clear() }
+                    // Nor anything the old agent was still to hear about its files.
+                    putBack.forget()
                     emit(CodexDialect.conversationReset(id))
                 }
                 endTurn()
@@ -647,7 +957,7 @@ internal class CodexSession(
 
         val srv = server ?: return
         val thread = conversationId ?: return
-        CodexTitles.ask(srv, workingDirectory, currentModel(), description) { title ->
+        CodexTitles.ask(srv, workingDirectory, nextModel(), description) { title ->
             if (title.isBlank() || conversationId != thread) return@ask
             // Asked again: the person may have named the tab in the seconds the model took, and a name
             // given by hand is never overwritten by the model's - not on the tab, and not in Codex's
@@ -979,10 +1289,50 @@ internal class CodexSession(
      * The model for the next turn. Codex takes it with the turn itself (`turn/start` carries it and keeps
      * it), so there is nothing to send now and nothing that can refuse now: a model this account cannot
      * run fails the turn it is used in, and that error reaches the feed like any other.
+     *
+     * A turn running now goes on answering in the model it was started on, and its answers are signed so (see
+     * [signedModel]): the pick is Codex's only from the next `turn/start`.
      */
     fun setModel(model: String, onApplied: (ModelChange) -> Unit = {}) {
         this.model = model
         onApplied(ModelChange(applied = true, model = model))
+    }
+
+    /**
+     * Fast mode for THIS conversation, on or off. Nothing to send now: the tier rides with the next turn (see
+     * [fastMode]), which is also when Codex says whether it took.
+     */
+    fun setFastMode(on: Boolean) {
+        fastMode = on
+    }
+
+    /**
+     * Fast mode as the panel's dialect says it when the thread opens and at a turn's end (`fast_mode_state`,
+     * `fast_mode_disabled_reason` - see feed/fastMode.ts).
+     *
+     * On when Codex runs the thread on a fast tier, whoever put it there - this conversation's ask or Codex's own
+     * config - so that a paid speed is never invisible; but not on a model without the tier, whatever the thread
+     * says it runs on: Codex drops such a tier from every request ("is not advertised as supported for model ...
+     * and will be omitted from requests", 0.163). Which model has it the catalogue says (see CodexAccounts.hasFastMode);
+     * one it has not described is taken at Codex's word.
+     *
+     * The reason is said only for an ask of this conversation, and only once Codex has heard it: an ask newer than
+     * the last request that carried a tier is [ASK_PENDING] - "nothing to judge yet" - rather than a refusal.
+     * Heard and not served is [MODEL_WITHOUT_TIER] when the catalogue says why, [NOT_SERVED] otherwise. Codex itself
+     * never refuses a tier with an error, so this is the only place the panel learns it did not take.
+     */
+    private fun fastReport(): Pair<String, String?> {
+        val modelHasIt = CodexAccounts.getInstance().hasFastMode(accountId, nextModel())
+        val on = ServiceTiers.isFast(serviceTier) && modelHasIt != false
+        val asked = tierOnWire()
+        val reason = when {
+            asked == null -> null
+            asked != tierSent -> ASK_PENDING
+            fastMode != true || on -> null
+            modelHasIt == false -> MODEL_WITHOUT_TIER
+            else -> NOT_SERVED
+        }
+        return (if (on) "on" else "off") to reason
     }
 
     fun setEffort(effort: String) {
@@ -993,7 +1343,11 @@ internal class CodexSession(
         contextMode = ModelContexts.normalize(mode)
     }
 
-    fun contextWindow(model: String = this.model, mode: String = contextMode): Int? =
+    /**
+     * The raw window this conversation's process is launched with (`-c model_context_window`), for the model its next
+     * turn runs on - "default" resolved the way it will be sent (see [nextModel]), not the cache's first model.
+     */
+    fun contextWindow(model: String = nextModel(), mode: String = contextMode): Int? =
         ModelContexts.window(workingDirectory, model, mode)
 
     fun executableChanged(): Boolean = executableStamp?.let { it != CodexExecutable.currentStamp() } == true
@@ -1126,9 +1480,24 @@ internal class CodexSession(
         onFailure("Codex cannot stop a single task; stop the turn instead.")
     }
 
-    /** How full the context window is: Codex's own last count and the model's window. */
+    /**
+     * How full the context window is now: what Codex last counted, against the window Codex counted it in while the
+     * process that counted it is the one up - its turn runs in that window, whatever was picked since - and against
+     * the window of the conversation's own model and mode otherwise.
+     *
+     * The second half is what a switch to Long or to a model with another window needs. The count is kept across
+     * the restart such a switch makes, and with it Codex's window from the process before: asked for right after
+     * the switch, this answered with the old window as an exact figure, and the meter undid the switch at once.
+     * A model the cache does not know was launched with no window of ours, so Codex's own still holds for it.
+     */
+    private fun contextNow(): Pair<Int, Int>? = CodexShapes.contextOf(
+        lastTokenUsage,
+        windowNow = if (usageLive) null else ModelContexts.effectiveWindow(workingDirectory, nextModel(), contextMode),
+    )
+
+    /** How full the context window is: Codex's own last count and the window it is in now - see [contextNow]. */
     fun requestContextUsage(onResult: (JsonObject) -> Unit, onFailure: (String) -> Unit = {}) {
-        val (used, max) = CodexShapes.contextOf(lastTokenUsage) ?: return onFailure("no usage yet")
+        val (used, max) = contextNow() ?: return onFailure("no usage yet")
         onResult(
             buildJsonObject {
                 put("totalTokens", used)
@@ -1143,7 +1512,7 @@ internal class CodexSession(
         srv.request(
             "account/rateLimits/read",
             onResult = { result ->
-                onUsage(CodexShapes.usageAnswer(result as? JsonObject, CodexShapes.contextOf(lastTokenUsage)?.second))
+                onUsage(CodexShapes.usageAnswer(result as? JsonObject, contextNow()?.second))
             },
             onError = { onFailure(it.message) },
         )
@@ -1156,20 +1525,31 @@ internal class CodexSession(
      * turn as interrupted, which is what clears the panel. A process that does not even confirm is worth
      * offering to kill - [onTimeout].
      */
-    fun interrupt(onTimeout: () -> Unit = {}) {
-        synchronized(afterTurn) { afterTurn.clear() }
-        if (server == null) return
-        // A card's helpers stop with it, as Claude Code's background agents stop with its turn: the card is
-        // told afterwards that they did not survive (see HeadTalk.CARD_CARRY_ON), and that has to be true.
-        if (onBackground != null) interruptHelpers()
+    fun interrupt(
+        onTimeout: () -> Unit = {},
+        /**
+         * What was written into the turn and is still to be said (see [unsent]) stays: the stop is not the
+         * person's but a move's, and the conversation that replaces this one says it (see CodexSessions.moveTo).
+         * The person's own Stop takes it away with the turn.
+         */
+        keepUnsent: Boolean = false,
+    ) {
+        if (!keepUnsent) synchronized(afterTurn) { afterTurn.clear() }
 
         // Stop over a plan nobody has decided: Codex has nothing running, only the panel's turn stands on
-        // the card. The plan is withdrawn and the turn ends as stopped.
+        // the card. The plan is withdrawn and the turn ends as stopped - with or without a process: a plan
+        // carried over to a conversation whose process is not up yet holds it all the same (see [adopt]).
         if (heldPlanTurn != null) {
+            if (server != null && onBackground != null) interruptHelpers()
             withdrawPlans()
             releasePlanTurn(drain = false)
             return
         }
+
+        if (server == null) return
+        // A card's helpers stop with it, as Claude Code's background agents stop with its turn: the card is
+        // told afterwards that they did not survive (see HeadTalk.CARD_CARRY_ON), and that has to be true.
+        if (onBackground != null) interruptHelpers()
 
         val turn = activeTurn ?: stream.activeTurn
         if (turn == null) {
@@ -1280,7 +1660,11 @@ internal class CodexSession(
             val plan = codePlan(srv, thread, turn)
             if (plan !is CodeRewind.Plan.Ready) return Rewind.Outcome.Refused(Rewind.Refusal.CODE, Rewind.detailOf(Rewind.codeOf(plan)))
             return CodeRewind.apply(plan).fold(
-                onSuccess = { written -> Rewind.Outcome.Done(false, "", Rewind.Files.RESTORED, written) },
+                onSuccess = { written ->
+                    // The conversation goes on remembering the turns whose files just went back: it is told (see PutBack).
+                    written.forEach { putBack.note(it, PutBack.Way.REWOUND) }
+                    Rewind.Outcome.Done(false, "", Rewind.Files.RESTORED, written)
+                },
                 onFailure = { error -> Rewind.Outcome.Refused(Rewind.Refusal.CODE, error.message.orEmpty()) },
             )
         }
@@ -1324,6 +1708,38 @@ internal class CodexSession(
      */
     fun turnOf(uuid: String): String? = turnOfMessage[uuid]
 
+    /**
+     * Where the message the panel named [uuid] stands in the thread: the turn it began or was written into, and
+     * its place among the person's messages of that turn, 0 for the one that began it. What a sent message is
+     * found by in the thread's file - for a picture whose bytes the feed no longer holds (see ThreadPictures):
+     * Codex names the message by an id of its own and never hears the panel's. Null for a message this
+     * conversation was not given, a message read from the history among them - that one already carries
+     * Codex's id.
+     */
+    fun placeOf(uuid: String): Pair<String, Int>? {
+        val turn = turnOfMessage[uuid] ?: return null
+        val messages = messagesOfTurn[turn] ?: return null
+        val at = synchronized(messages) { messages.indexOf(uuid) }
+        return if (at >= 0) turn to at else null
+    }
+
+    /**
+     * The names the panel gave this conversation's messages, as one process hands them to the next (see
+     * CodexSessions.moveTo and [adopt]): the thread goes on, and so must what a rewind, a fork and a picture name
+     * its messages by - the move used to leave them behind with the process.
+     */
+    class MessageNames internal constructor(
+        internal val turns: Map<String, String>,
+        internal val delivered: List<String>,
+        internal val inTurns: Map<String, List<String?>>,
+    )
+
+    fun messageNames(): MessageNames = MessageNames(
+        turns = HashMap(turnOfMessage),
+        delivered = synchronized(delivered) { delivered.toList() },
+        inTurns = messagesOfTurn.mapValues { (_, messages) -> synchronized(messages) { messages.toList() } },
+    )
+
     /** The first message the panel sent into [turn] - the one that began it, when it was this conversation's. */
     private fun firstMessageOf(turn: String): String? = synchronized(delivered) { delivered.firstOrNull { turnOfMessage[it] == turn } }
 
@@ -1362,7 +1778,7 @@ internal class CodexSession(
     /** Undoing the patches of [turn] and every later turn, worked out against the files as they are now. */
     private fun codePlan(srv: AppServer, thread: String, turn: String): CodeRewind.Plan {
         val turns = turnsFrom(srv, thread, turn)
-        return CodeRewind.plan(CodeRewind.changesOf(turns)) { path ->
+        return CodeRewind.plan(CodeRewind.changesOf(turns), settled = settled::of) { path ->
             java.io.File(path).takeIf { it.isFile }?.readText(Charsets.UTF_8)
         }
     }
@@ -1423,6 +1839,7 @@ internal class CodexSession(
     private fun cutBack(thread: String, target: String, turn: String, refs: List<CodexHistory.TurnRef>) {
         val dropped = refs.dropWhile { it.id != turn }.map { it.id }.toSet()
         turnOfMessage.entries.removeIf { it.value in dropped }
+        messagesOfTurn.keys.removeAll(dropped)
         synchronized(delivered) {
             val at = delivered.indexOf(target)
             if (at >= 0) delivered.subList(at, delivered.size).clear() else delivered.clear()
@@ -1431,9 +1848,11 @@ internal class CodexSession(
         lastEndedTurn = refs.takeWhile { it.id != turn }.lastOrNull()?.id
         CodexHistory.forget(thread)
 
-        // How full the window is now: the count Codex wrote after the last turn that stays.
+        // How full the window is now: the count Codex wrote after the last turn that stays - in whatever window the
+        // process that wrote it had (see [contextNow]).
         lastTokenUsage = CodexHistory.lastTokenUsage(CodexHistory.transcriptFile(workingDirectory, thread))
-        CodexShapes.contextOf(lastTokenUsage)?.let { (used, max) -> onContext(used, max) }
+        usageLive = false
+        contextNow()?.let { (used, max) -> onContext(used, max) }
     }
 
     /** A request answered on this thread - never the one reading [srv]'s answers, or it waits on itself. */
@@ -1457,22 +1876,49 @@ internal class CodexSession(
 
     fun restart(): Boolean {
         if (server == null) return false
+        // The same conversation over a new process (an MCP server added, as a rule - and that waits for the turn's
+        // end, which is exactly when this still has something to say): what it had to say goes on with it. [stop]
+        // lets it go, as it should for a tab closed or a conversation replaced.
+        val unsaid = takeUnsent()
         stop()
+        if (unsaid.isNotEmpty()) synchronized(afterTurn) { afterTurn.addAll(0, unsaid) }
         return start() != null
+    }
+
+    /**
+     * Whether what this conversation's process still says is passed on - see [mute]. Read on the thread that
+     * reads its output, set by whoever closes the tab.
+     */
+    @Volatile
+    private var muted = false
+
+    /**
+     * Nothing this conversation's process says from now on is passed on: its tab is closed, or holds another
+     * conversation now. [stop] already cuts the process off by forgetting it (see [start] - only the process this
+     * conversation holds is heard), so this matters for a conversation muted while its process is still the one it
+     * holds: a notification already read off the pipe would land under the tab's id - in whatever the tab holds
+     * by then, the same tab opened again or a past conversation opened in it. A conversation that goes on in its
+     * tab under a new process is not muted (see CodexSessions.close).
+     */
+    fun mute() {
+        muted = true
     }
 
     fun stop() {
         val srv = server ?: return
         abandonAsides()
         abandonHelpers()
+        spawned.clear()
         // A plan left undecided goes with the process; its turn is told to have ended, or the panel would
-        // stand on a card nothing can answer any more.
+        // stand on a card nothing can answer any more. A move hands it on first (see [handOverPlan]).
         heldPlanTurn?.let(stream::turnCompleted)
         heldPlanTurn = null
         server = null
         busy = false
         open = false
         activeTurn = null
+        // The count stays the conversation's; its window was this process's (see [contextNow]).
+        usageLive = false
         synchronized(waitingForThread) { waitingForThread.clear() }
         synchronized(afterTurn) { afterTurn.clear() }
         awaitingPermission.clear()
@@ -1489,13 +1935,25 @@ internal class CodexSession(
         onTurnEnded()
     }
 
-    /** The held end of a plan-mode turn, told now - see [heldPlanTurn]. */
-    private fun releasePlanTurn(drain: Boolean) {
+    /**
+     * The held end of a plan-mode turn, told now - see [heldPlanTurn].
+     *
+     * [followed]: the caller starts the next turn itself, this very moment (a message typed past the plan), so the
+     * conversation is not said to be free in between. Said free, the hub's pass would send what it has queued into
+     * that gap, and the message would go into a second turn beside the queued one. Otherwise the turn is over, and
+     * what this conversation still has to say goes first ([drain], see [turnOver]) - the turn the decision asks for
+     * among it, put there by the decision (see [answerPermission]).
+     */
+    private fun releasePlanTurn(followed: Boolean = false, drain: Boolean = true) {
         val turn = heldPlanTurn ?: return
         heldPlanTurn = null
-        stream.turnCompleted(turn)
-        endTurn()
-        if (drain) drainAfterTurn()
+        tellTurnEnd(turn)
+        activeTurn = null
+        when {
+            followed -> Unit
+            drain -> turnOver()
+            else -> endTurn()
+        }
     }
 
     private fun withdrawPlans() {
@@ -1503,13 +1961,21 @@ internal class CodexSession(
         plans.forEach { id -> if (awaitingPermission.remove(id) != null) onPermissionWithdrawn(id) }
     }
 
+    /**
+     * A turn is over. Said to be over, and then what this conversation still has to say (see [unsent]) goes before
+     * anything else: by whoever drives it, in the pass the end sets off (see [onUnsentWaiting]), or by the
+     * conversation itself when nothing does. Never both: the hub's pass and the conversation's own drain both
+     * answered one end, and two turns were started at once - the hub's queue in front.
+     */
+    private fun turnOver() {
+        endTurn()
+        if (onUnsentWaiting == null) drainAfterTurn()
+    }
+
     private fun drainAfterTurn() {
-        val next = synchronized(afterTurn) {
-            if (afterTurn.isEmpty()) null else afterTurn.removeAt(0)
-        } ?: return
-        busy = true
-        onTurnStarted()
-        whenOpen { deliver(next) }
+        if (busy) return
+        val next = synchronized(afterTurn) { afterTurn.removeFirstOrNull() } ?: return
+        say(next)
     }
 
     // --- Permissions --------------------------------------------------------------------------------
@@ -1575,11 +2041,17 @@ internal class CodexSession(
 
             Kind.PLAN -> {
                 closeCard(pending.request.toolUseId, if (allow) "Plan approved." else message, isError = !allow)
-                // The planning turn ends here, as far as the panel knows; what was waiting for its end waits
-                // on behind the turn that follows, if one does.
-                val followed = allow || message.isNotBlank()
-                releasePlanTurn(drain = !followed)
-                if (allow) implementPlan() else followUp(message)
+                // The planning turn ends here, as far as the panel knows, and the turn the decision asks for is the
+                // first thing said after it - ahead of what was written into the planning turn, and of the hub's
+                // queue. It goes by the same road those do (see [turnOver]): started from here on a timer, as it
+                // was, it lost the race to a queued message the end had just let out, and two turns went at once.
+                val next = when {
+                    allow -> Outgoing(CodexLaunch.IMPLEMENT_PLAN, emptyList(), null, afterPlan = AfterPlan.IMPLEMENT)
+                    message.isNotBlank() -> Outgoing(message, emptyList(), null, afterPlan = AfterPlan.REMARK)
+                    else -> null
+                }
+                next?.let { synchronized(afterTurn) { afterTurn.add(0, it) } }
+                releasePlanTurn()
             }
 
             Kind.PERMISSIONS -> srv?.respond(
@@ -1602,44 +2074,6 @@ internal class CodexSession(
     }
 
     fun isAwaitingPermission(requestId: String): Boolean = awaitingPermission.containsKey(requestId)
-
-    /**
-     * The approved plan is carried out in a turn of its own - Codex's plan mode ends its turn with the
-     * plan, and its terminal answers an approval with exactly this.
-     *
-     * Deferred a moment on purpose: the approval is followed at once by the mode change that frees the
-     * conversation from planning (see SessionPermissions.decidePlan), and the implementing turn must go out
-     * in the mode that follows, not in plan mode.
-     */
-    private fun implementPlan() {
-        AppExecutorUtil.getAppScheduledExecutorService().schedule(
-            {
-                if (PermissionModes.normalize(permissionMode.orEmpty()) == PermissionModes.PLAN) {
-                    permissionMode = PermissionModes.ACCEPT_EDITS
-                }
-                if (server == null) return@schedule
-                busy = true
-                onTurnStarted()
-                whenOpen { startTurn(CodexLaunch.IMPLEMENT_PLAN, emptyList(), emptyList()) }
-            },
-            PLAN_FOLLOW_UP_DELAY_MS,
-            TimeUnit.MILLISECONDS,
-        )
-    }
-
-    /** "Keep planning" with a remark: the remark is the next planning turn. */
-    private fun followUp(message: String) {
-        if (message.isBlank() || server == null) return
-        AppExecutorUtil.getAppScheduledExecutorService().schedule(
-            {
-                busy = true
-                onTurnStarted()
-                whenOpen { startTurn(message, emptyList(), emptyList()) }
-            },
-            PLAN_FOLLOW_UP_DELAY_MS,
-            TimeUnit.MILLISECONDS,
-        )
-    }
 
     private fun closeCard(toolUseId: String?, content: String, isError: Boolean) {
         val id = toolUseId ?: return
@@ -1670,6 +2104,8 @@ internal class CodexSession(
         }
 
         val epoch = PROCESS_EPOCHS.incrementAndGet()
+        // A turn the last process left without its end is no base of anything this one does (see TurnFiles).
+        turnFiles.forget()
         lateinit var created: AppServer
         created = AppServer(
             label = "conversation",
@@ -1677,8 +2113,8 @@ internal class CodexSession(
             workingDirectory = workingDirectory,
             environment = CodexLaunch.environment(environment),
             arguments = CodexLaunch.serverArguments(contextWindow()),
-            onNotification = { method, params -> if (server === created) notification(method, params) },
-            onServerRequest = { id, method, params -> if (server === created) serverRequest(epoch, id, method, params) },
+            onNotification = { method, params -> if (server === created && !muted) notification(method, params) },
+            onServerRequest = { id, method, params -> if (server === created && !muted) serverRequest(epoch, id, method, params) },
             onDiagnostic = { line ->
                 DiagnosticsLog.note(DiagnosticsLog.STDERR, line)
                 onDiagnostic(line)
@@ -1695,6 +2131,12 @@ internal class CodexSession(
         executableStamp = CodexExecutable.stamp(executable)
         startedAt = System.currentTimeMillis()
         open = false
+        // A new process has heard no tier and said none: what the last one ran on is no news about this one.
+        tierSent = null
+        serviceTier = null
+        // Nor has it counted anything: the count kept from the last one is this conversation's, its window that
+        // process's (see [contextNow]).
+        usageLive = false
         // The settings every turn of this conversation goes by, read while the thread opens (see
         // CodexConfigDesk.workspaceWrite) - the first turn should not have to go without them.
         CodexConfigDesk.warm(workingDirectory)
@@ -1731,11 +2173,13 @@ internal class CodexSession(
     private fun exited(process: AppServer, code: Int, requested: Boolean) {
         if (server === process) abandonAsides()
         if (server === process) abandonHelpers()
+        if (server === process) spawned.clear()
         if (server === process) server = null
         val wasBusy = busy
         busy = false
         open = false
         activeTurn = null
+        if (server == null) usageLive = false
         synchronized(waitingForThread) { waitingForThread.clear() }
         // The questions it was asking died with it: said out loud, so a card answered afterwards goes as
         // an ordinary message rather than into a process that is gone.
@@ -1777,26 +2221,27 @@ internal class CodexSession(
         // there is no fork-without-a-thread to come back to, as there was with Claude Code.
         val fork = if (conversationId == null) runCatching { forkOrigin }.getOrNull() else null
         forkLaunched = fork
+        val carried = modelOnWire()
         val (method, params) = when {
             conversationId != null -> "thread/resume" to buildJsonObject {
                 put("threadId", conversationId)
-                threadSettings(this)
+                threadSettings(this, carried)
                 put("excludeTurns", true)
             }
             fork?.at != null -> "thread/fork" to buildJsonObject {
                 put("threadId", fork.source)
                 put("lastTurnId", fork.at)
-                threadSettings(this)
+                threadSettings(this, carried)
                 put("excludeTurns", true)
             }
-            else -> "thread/start" to threadParams()
+            else -> "thread/start" to threadParams(carried)
         }
 
         srv.request(
             method,
             params,
             timeoutSeconds = THREAD_OPEN_TIMEOUT_SECONDS,
-            onResult = { result -> threadOpened(result as? JsonObject) },
+            onResult = { result -> threadOpened(result as? JsonObject, carried, started = method == "thread/start") },
             onError = { error ->
                 DiagnosticsLog.note(DiagnosticsLog.AGENT, "codex could not open the conversation ($method)")
                 onError("Codex could not open the conversation: ${error.message}")
@@ -1806,21 +2251,40 @@ internal class CodexSession(
         )
     }
 
-    private fun threadParams(): JsonObject = buildJsonObject {
-        threadSettings(this)
+    /** The tier this conversation asks for, as Codex names it - nothing when it leaves that to the config. */
+    private fun tierOnWire(): String? = fastMode?.let { if (it) ServiceTiers.FAST else ServiceTiers.STANDARD }
+
+    private fun threadParams(carried: String?): JsonObject = buildJsonObject {
+        threadSettings(this, carried)
         put("serviceName", CodexLaunch.CLIENT_TITLE)
     }
 
-    private fun threadSettings(builder: kotlinx.serialization.json.JsonObjectBuilder) = with(builder) {
+    /** What every open of the thread carries; [carried] is the model it asks for (see [modelOnWire]), none for "default". */
+    private fun threadSettings(builder: kotlinx.serialization.json.JsonObjectBuilder, carried: String?) = with(builder) {
         val policy = PermissionModes.policyOf(permissionMode)
         workingDirectory?.let { put("cwd", it) }
-        modelOnWire()?.let { put("model", it) }
+        carried?.let { put("model", it) }
+        tierOnWire()?.let { tier ->
+            put("serviceTier", tier)
+            tierSent = tier
+        }
         put("approvalPolicy", policy.approval)
         put("sandbox", policy.sandboxMode)
         put("developerInstructions", ClaudeProjectConfig.appendTo(baseBriefing, workingDirectory))
     }
 
-    private fun threadOpened(result: JsonObject?) {
+    /**
+     * The model the thread came up on, as Codex answered the open: what it runs on from here. A new thread opened
+     * without a model ([started], nothing [carried]) says, in passing, what "Default" is (see [defaultSaid]) - a
+     * resumed or forked one may well come up on the model its history ran on, which says nothing about that.
+     */
+    private fun noteOpenedModel(result: JsonObject?, carried: String?, started: Boolean) {
+        val said = AppServer.text(result?.get("model"))
+        threadModel = said.ifEmpty { carried ?: threadModel }
+        if (started && carried == null && said.isNotEmpty()) defaultSaid = said
+    }
+
+    private fun threadOpened(result: JsonObject?, carried: String?, started: Boolean) {
         val thread = result?.get("thread") as? JsonObject
         val id = AppServer.text(thread?.get("id"))
         if (id.isEmpty()) {
@@ -1830,8 +2294,10 @@ internal class CodexSession(
         }
 
         conversationId = id
-        threadModel = AppServer.text(result?.get("model"))
-        planSent = false
+        noteOpenedModel(result, carried, started)
+        serviceTier = AppServer.text(result?.get("serviceTier")).ifEmpty { null }
+        planSent = planCarried
+        planCarried = false
         effortSent = false
 
         // A fork's thread is born: what it came from is put down by its id, for the seam and for the tab that
@@ -1846,10 +2312,11 @@ internal class CodexSession(
         emit(
             CodexDialect.systemInit(
                 threadId = id,
-                model = currentModel(),
+                model = signedModel(),
                 cwd = AppServer.text(result?.get("cwd")).ifEmpty { workingDirectory },
                 permissionMode = permissionMode ?: PermissionModes.ACCEPT_EDITS,
                 slashCommands = CodexCommands.BUILT_IN + CodexSkills.of(workingDirectory).keys,
+                fastMode = fastReport(),
             ),
         )
 
@@ -1872,21 +2339,7 @@ internal class CodexSession(
             } else {
                 srv.request(
                     "thread/inject_items",
-                    buildJsonObject {
-                        put("threadId", id)
-                        put("items", buildJsonArray {
-                            addJsonObject {
-                                put("type", "message")
-                                put("role", "developer")
-                                putJsonArray("content") {
-                                    addJsonObject {
-                                        put("type", "input_text")
-                                        put("text", "$introduction\n\n$instructions")
-                                    }
-                                }
-                            }
-                        })
-                    },
+                    developerMessage(id, "$introduction\n\n$instructions"),
                     onResult = { releaseWaiting() },
                     onError = { error ->
                         DiagnosticsLog.note(DiagnosticsLog.AGENT, "codex would not take updated developer instructions")
@@ -1911,9 +2364,28 @@ internal class CodexSession(
                 val remembered = CodexHistory.lastTokenUsage(CodexHistory.transcriptFile(workingDirectory, id)) ?: return@submit
                 if (lastTokenUsage != null || conversationId != id) return@submit
                 lastTokenUsage = remembered
-                CodexShapes.contextOf(remembered)?.let { (used, max) -> onContext(used, max) }
+                // Counted by whichever process wrote the file, in its window (see [contextNow]).
+                usageLive = false
+                contextNow()?.let { (used, max) -> onContext(used, max) }
             }
         }
+    }
+
+    /** One developer message put into [thread]'s history, as `thread/inject_items` takes it. */
+    private fun developerMessage(thread: String, text: String): JsonObject = buildJsonObject {
+        put("threadId", thread)
+        put("items", buildJsonArray {
+            addJsonObject {
+                put("type", "message")
+                put("role", "developer")
+                putJsonArray("content") {
+                    addJsonObject {
+                        put("type", "input_text")
+                        put("text", text)
+                    }
+                }
+            }
+        })
     }
 
     /** The thread is ready for turns: everything that waited for it goes now. */
@@ -1944,9 +2416,13 @@ internal class CodexSession(
         if (thread.isNotEmpty() && thread != conversationId) {
             val aside = asideThreads[thread]
             val helper = helpers[thread]
+            val child = spawned[thread]
             when {
                 aside != null -> asideNotification(aside, method, params)
-                helper != null -> helperNotification(thread, helper, method, params)
+                helper != null || child != null -> {
+                    helper?.let { helperNotification(thread, it, method, params) }
+                    child?.let { subagentNotification(thread, method, params) }
+                }
                 else -> CodexTitles.notification(method, params)
             }
             return
@@ -1963,16 +2439,34 @@ internal class CodexSession(
                     onTurnStarted()
                 }
                 if (interruptWanted) interruptNow(null)
+                // What a spawned agent patched after the last turn had ended goes into this one's list (see [laterChanges]).
+                synchronized(laterChanges) { laterChanges.toList().also { laterChanges.clear() } }.forEach(::emit)
+            }
+
+            // A thread Codex started in this process. An agent spawned by this conversation - or by one of its agents -
+            // is known by its parent from here, even before the spawn's own item says which agent it made.
+            "thread/started" -> (params["thread"] as? JsonObject)?.let { started ->
+                val id = AppServer.text(started["id"]).ifEmpty { return@let }
+                val parent = AppServer.text(started["parentThreadId"])
+                when {
+                    parent.isEmpty() -> Unit
+                    parent == conversationId -> spawned.putIfAbsent(id, Spawned(above = null))
+                    spawned.containsKey(parent) -> spawned.putIfAbsent(id, Spawned(above = parent))
+                }
             }
 
             "item/started" -> (params["item"] as? JsonObject)?.let { item ->
                 rememberCalls(item)
+                // Read before the patch lands - the file as the turn found it (see TurnFiles).
+                turnFiles.started(item)
                 stream.itemStarted(item)
             }
 
             "item/completed" -> (params["item"] as? JsonObject)?.let { item ->
+                turnFiles.completed(item)
                 CodexApps.authenticationFailure(item)?.let(onAppAuthRequired)
                 noteSpawned(item)
+                noteAgentsOf(item)
                 val plan = stream.itemCompleted(item)
                 itemCalls.remove(AppServer.text(item["id"]))
                 plan?.let(::proposePlan)
@@ -1985,6 +2479,7 @@ internal class CodexSession(
 
             "thread/tokenUsage/updated" -> (params["tokenUsage"] as? JsonObject)?.let { usage ->
                 lastTokenUsage = usage
+                usageLive = true
                 stream.tokenUsage(usage["last"] as? JsonObject)
                 CodexShapes.contextOf(usage)?.let { (used, max) -> onContext(used, max) }
             }
@@ -1997,9 +2492,8 @@ internal class CodexSession(
                     activeTurn = null
                     return
                 }
-                stream.turnCompleted(turn)
-                endTurn()
-                drainAfterTurn()
+                tellTurnEnd(turn)
+                turnOver()
             }
 
             "error" -> {
@@ -2013,7 +2507,16 @@ internal class CodexSession(
                 AppServer.text(params["fromModel"]),
                 AppServer.text(params["toModel"]),
                 AppServer.text(params["reason"]),
+                turn = AppServer.text(params["turnId"]),
             )
+
+            // What the thread runs on now - said whenever a turn changed it (measured on 0.163). The tier and the model
+            // are Codex's word on what runs: the model is what the answers are signed by (see [signedModel]); the pick
+            // stays the conversation's own (see [model]), and the effort is not read at all.
+            "thread/settings/updated" -> (params["threadSettings"] as? JsonObject)?.let { settings ->
+                if ("serviceTier" in settings) serviceTier = AppServer.text(settings["serviceTier"]).ifEmpty { null }
+                AppServer.text(settings["model"]).takeIf { it.isNotEmpty() }?.let { threadModel = it }
+            }
 
             // The echo of a name this process wrote is nothing new. The model's name is the model's. Any other
             // name was given somewhere else - another Codex client, a terminal - and only a person names a
@@ -2071,6 +2574,67 @@ internal class CodexSession(
             "warning", "configWarning", "deprecationNotice", "guardianWarning" -> {
                 val message = AppServer.text(params["message"]).ifEmpty { AppServer.text(params["summary"]) }
                 if (message.isNotBlank()) onDiagnostic(message)
+            }
+        }
+    }
+
+    /**
+     * The end of [turn] said to the panel: first what the turn really did to its files where its patches do not say it
+     * (see TurnFiles) - while the turn's list is still open - and then the turn's result. A stopped turn too: Codex closes
+     * it with `turn/completed` as well.
+     */
+    private fun tellTurnEnd(turn: JsonObject) {
+        turnFiles.settle()?.let { settlement ->
+            settled.put(AppServer.text(turn["id"]), settlement.files)
+            emit(settlement.line)
+        }
+        stream.turnCompleted(turn)
+    }
+
+    /**
+     * The agents a spawn of this conversation made, under the call that made them - the subagent card their patches are
+     * listed with (see [spawned]).
+     */
+    private fun noteAgentsOf(item: JsonObject) {
+        if (AppServer.text(item["type"]) != "collabAgentToolCall" || AppServer.text(item["tool"]) != "spawnAgent") return
+        val callId = AppServer.text(item["id"]).ifEmpty { return }
+        val threads = ((item["receiverThreadIds"] as? JsonArray).orEmpty().map { AppServer.text(it) } +
+            (item["agentsStates"] as? JsonObject)?.keys.orEmpty()).filter { it.isNotEmpty() }.distinct()
+        for (thread in threads) spawned.getOrPut(thread) { Spawned(above = null) }.callId = callId
+    }
+
+    /** The card of this feed an agent's work goes under: its own spawn's, or the one of the agent above it. */
+    private fun cardOf(thread: String): String? {
+        var at = spawned[thread]
+        var steps = 0
+        while (at != null && steps++ < MAX_AGENT_DEPTH) {
+            at.callId?.let { return it }
+            at = at.above?.let(spawned::get)
+        }
+        return null
+    }
+
+    /**
+     * What a spawned agent's own thread says that this conversation keeps: its patches. They are files this turn
+     * changed, as the panel lists them (see feed/changes.ts) - each file a result under the agent's card, with the change
+     * itself in the result, since the agent's call is no card of this feed (see CodexDialect.resultLines). While this
+     * conversation's turn is open they go into its list; after its end, into the next turn's (see [laterChanges]). And
+     * they are held against the disk with the turn's own (see TurnFiles).
+     */
+    private fun subagentNotification(thread: String, method: String, params: JsonObject) {
+        val item = params["item"] as? JsonObject ?: return
+        if (AppServer.text(item["type"]) != "fileChange") return
+        when (method) {
+            "item/started" -> turnFiles.started(item)
+            "item/completed" -> {
+                turnFiles.completed(item)
+                val card = cardOf(thread) ?: return
+                val lines = CodexDialect.resultLines(item, parentToolUseId = card)
+                if (stream.activeTurn != null) {
+                    lines.forEach(::emit)
+                } else {
+                    synchronized(laterChanges) { laterChanges += lines }
+                }
             }
         }
     }
@@ -2254,7 +2818,7 @@ internal class CodexSession(
         val asked = (params["questions"] as? JsonArray)?.mapNotNull { it as? JsonObject }.orEmpty()
         val (input, ids) = CodexDialect.askInput(asked)
 
-        CodexDialect.toolUses(listOf(CodexDialect.ToolCall(itemId, CodexLaunch.ASK_TOOL, input)), currentModel(), uuid = itemId)
+        CodexDialect.toolUses(listOf(CodexDialect.ToolCall(itemId, CodexLaunch.ASK_TOOL, input)), stream.answeringModel(), uuid = itemId)
             ?.let(::emit)
 
         return Pending(
@@ -2337,11 +2901,60 @@ internal class CodexSession(
         onToolPermission(request)
     }
 
-    private fun emit(line: String) = onEvent(line)
+    private fun emit(line: String) {
+        if (!muted) onEvent(line)
+    }
 
-    private fun modelOnWire(): String? = model.takeIf { it.isNotEmpty() && it != DEFAULT_MODEL }
+    /**
+     * Lines in the panel's dialect, told as if this conversation's process had said them - the door the tests use
+     * to stand a conversation in a state without raising Codex. Muted like everything else (see [mute]).
+     */
+    internal fun heard(text: String) = text.lineSequence().filter { it.isNotBlank() }.forEach(::emit)
 
-    private fun currentModel(): String = modelOnWire() ?: threadModel
+    /**
+     * A line of Codex's own protocol, told as if this conversation's process had written it - the door one level
+     * below [heard]. Through it a test stands the conversation where Codex would: the turn, the plan, the limit
+     * are the session's own state again, and what they turn into reaches everything else in the panel's dialect,
+     * exactly as for a live process. Only while there is a process to have said it (see AppServer.heard).
+     */
+    internal fun heardFromCodex(line: String) {
+        server?.heard(line)
+    }
+
+    /**
+     * The model a request names: the one picked - or, for "default", the default model once the thread runs on
+     * another one, and nothing while it does not.
+     *
+     * Nothing is the ordinary answer for "default": Codex runs a thread asked for no model on its config's. But a
+     * model given to a turn is Codex's "for this turn and subsequent turns", and saying nothing afterwards does not
+     * take it back: a tab returned to "Default" from a pick went on running the pick, while its answers were
+     * signed by the model the thread had opened on. So the way back is said with the model "Default" stands for
+     * (see [defaultModel]); the thread is on it again from that turn, and nothing more is sent.
+     */
+    private fun modelOnWire(): String? {
+        if (model.isNotEmpty() && model != DEFAULT_MODEL) return model
+        val standard = defaultModel() ?: return null
+        return standard.takeIf { threadModel.isNotEmpty() && !ModelNames.same(threadModel, it) }
+    }
+
+    /**
+     * What "Default" means for this conversation: what Codex itself said a thread asked for no model runs on (see
+     * [defaultSaid]), otherwise the model Codex's config names, otherwise the one the account's catalogue marks as
+     * its default. Null when none of them is known, and then "default" stays unsaid.
+     */
+    private fun defaultModel(): String? = defaultSaid
+        .ifEmpty { CodexSettings.effective(workingDirectory, "model") }
+        .ifEmpty { CodexAccounts.getInstance().defaultModel(accountId).orEmpty() }
+        .ifEmpty { null }
+
+    /** The model the next turn runs on, as far as this side can tell - what the window and the fast tier are read for. */
+    private fun nextModel(): String = modelOnWire() ?: threadModel.ifEmpty { defaultModel().orEmpty() }
+
+    /**
+     * The model the answers of the turn now running come from, as this conversation knows it: what Codex last said or
+     * was told the thread runs on (see [threadModel]). The stream adds a reroute on top (see CodexStream.answeringModel).
+     */
+    private fun signedModel(): String = threadModel.ifEmpty { nextModel() }
 
     private companion object {
         /**
@@ -2358,11 +2971,21 @@ internal class CodexSession(
         /** The menu's name for "whatever Codex runs by default" - never sent as a model. */
         const val DEFAULT_MODEL = "default"
 
+        /**
+         * Why fast mode is off although this conversation asked, in the words the panel reads (see fastReasonText in
+         * feed/fastMode.ts): Codex ran the turn on another tier; or the model has no fast tier at all - Claude Code's
+         * word for a model fast mode is not allowed on, which says just that.
+         */
+        const val NOT_SERVED = "not_served"
+        const val MODEL_WITHOUT_TIER = "model_not_allowed"
+
+        /** And not a "why" at all: the ask is newer than the last request that carried one - see fastReport. */
+        const val ASK_PENDING = "pending"
+
         const val THREAD_OPEN_TIMEOUT_SECONDS = 90L
         const val TURN_START_TIMEOUT_SECONDS = 60L
         const val INTERRUPT_TIMEOUT_SECONDS = 20L
         const val MCP_LOGIN_TIMEOUT_SECONDS = 60L
-        const val PLAN_FOLLOW_UP_DELAY_MS = 150L
 
         /** A rewind's requests: the revert rewrites nothing, but a long thread takes a moment to cut. */
         const val ASK_TIMEOUT_SECONDS = 60L
@@ -2378,6 +3001,9 @@ internal class CodexSession(
 
         /** How long a full window heard of is what a refused turn is told with - see [lastLimit]. */
         const val LIMIT_MEMORY_MS = 10L * 60 * 1000
+
+        /** How far up [cardOf] looks for the card an agent's work goes under - agents of agents of agents, and no loop. */
+        private const val MAX_AGENT_DEPTH = 16
 
         /** How much of a spawned agent's task names it - see [onBackground]. */
         const val HELPER_DESCRIPTION_CHARS = 200

@@ -14,9 +14,17 @@ import java.util.concurrent.ConcurrentHashMap
  * after the slash goes along as the skill item Codex attaches it by.
  *
  * Commands the panel answers without Codex at all (`/model`, `/status` and the like) never reach this -
- * the panel keeps them itself (see catalog.ts).
+ * the panel keeps them itself (see catalog.ts). A phone's `/status`, typed into a message, is answered at the
+ * door instead (see [isStatus]).
  */
 internal object CodexCommands {
+
+    /**
+     * `/status` alone - the panel's command, which at the desk never becomes a message. Typed on a phone it does,
+     * and it is answered with the desk's row before it can become a turn of the model's (see
+     * SessionCommands.statusAsked). Codex's own `/status` takes nothing after it, so neither does this.
+     */
+    fun isStatus(text: String): Boolean = text.trim() == "/status"
 
     sealed interface Command {
         data object Compact : Command

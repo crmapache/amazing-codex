@@ -87,6 +87,17 @@ internal class AccountUsage(
         var extraKnown: CodexUsage.Extra? = null
 
         /**
+         * What the last whole answer said about the plan's own usage (`ordinaryUsageAllowed`, see
+         * CodexUsage.Snapshot.ordinaryUsage): true - allowed, false - not, null - it did not say.
+         *
+         * Each whole answer replaces it, a rolling update never does - it does not carry the field, and silence
+         * there is not "no". One thing does take a true back: a rolling update that puts a plan's window at the
+         * limit after it (see [fold]). The permission was about the moment of the answer, and kept past a limit
+         * reached since, it would go on calling a spent account free until the next whole answer.
+         */
+        var ordinary: Boolean? = null
+
+        /**
          * Who the sign-in was when these figures were last thrown away (see [forget]) - so that the same
          * switch, noticed by every open project in turn, throws them away once rather than once per
          * project, each time over the answer the first one has already brought.
@@ -102,15 +113,58 @@ internal class AccountUsage(
         var answeredAt = 0L
 
         /**
-         * Until when this account's own limit is known to refuse requests, in milliseconds, and 0 when
-         * nothing says it does.
+         * The refusals this account's own limit is known to give: until when each holds, in milliseconds,
+         * against when it was heard. Empty when nothing says it refuses.
          *
          * Learned from the refusals themselves rather than only from the shares, because the shares lag:
          * the rings of an account that is not the current one are filled by an occasional ping, and a tab or
          * a scenario run that has just been refused knows it before any answer to `get_usage` does. Read by
          * a run looking for an account with room left (see [standing]).
+         *
+         * Kept one by one rather than as the latest end of them all, because a refusal can end before its
+         * reset - a one-off reset of the limit empties the window under it (see [liftRefusals]) - and the one
+         * the server has taken back must not take a five-hour refusal beside it along.
          */
-        var refusedUntil = 0L
+        val refusals = HashMap<Long, Long>()
+
+        /**
+         * The refusals the server has taken back since they were heard: a whole answer, sure to be about a
+         * later moment than the refusal (see CodexUsage.SERVER_ANSWER_MAX_AGE_MS), says so.
+         *
+         * Within its window a refusal does not end by itself, so this is the one-off reset of the limit the
+         * account page offers - or, for a spending cap, the owner raising it. Without this the account read as
+         * refused until the old reset, days on for a weekly limit and weeks for a cap: a scenario run waited
+         * those days rather than go on it, and a tab moved onto it waited for the reset rather than carry on.
+         * A rolling update lifts nothing - it may be from before the refusal itself.
+         *
+         * How the answer says so is the backend's choice first. `ordinaryUsageAllowed` true takes back every
+         * refusal, whichever window it was about: that is recovery in so many words. False takes back none -
+         * "clients must not infer recovery from percentages or reset times", and each refusal holds until the
+         * reset it was heard with. Without the field, the old reading of the shares: the refusal whose window
+         * the answer puts under the limit, matched by the reset time, so room in the week does not lift a
+         * refusal of the five hours. The spending cap is such a window too, on a seat that has it.
+         */
+        fun liftRefusals(snapshot: CodexUsage.Snapshot, now: Long) {
+            if (!snapshot.fromServer || snapshot.ordinaryUsage == false) return
+
+            val settled = { heard: Long -> now - heard > CodexUsage.SERVER_ANSWER_MAX_AGE_MS }
+            if (snapshot.ordinaryUsage == true) {
+                refusals.entries.removeIf { (_, heard) -> settled(heard) }
+                return
+            }
+
+            val roomy = listOfNotNull(snapshot.session, snapshot.week).filter { it.percent < 100 } +
+                listOfNotNull(snapshot.extra?.takeIf { !it.full }?.asWindow())
+            refusals.entries.removeIf { (until, heard) ->
+                settled(heard) && roomy.any { it.resetsAround(Instant.ofEpochMilli(until)) }
+            }
+        }
+
+        /** A refusal heard at [now], holding [until]; the ones whose end has passed go with it. */
+        fun noteRefusal(until: Long, now: Long) {
+            refusals.entries.removeIf { it.key <= now }
+            refusals[until] = now
+        }
     }
 
     /**
@@ -131,17 +185,26 @@ internal class AccountUsage(
      * An answer to `get_usage` about [account], whichever project asked and by whichever route: folded
      * into what is known and sent to everyone as the account's picture.
      */
-    fun fold(account: String, snapshot: CodexUsage.Snapshot) {
+    fun fold(account: String, snapshot: CodexUsage.Snapshot, now: Long = System.currentTimeMillis()) {
         val message = synchronized(this) {
             val held = book(account)
             // What goes out is not the raw answer but one checked against what was seen before: on its own
             // a snapshot does not say whether it is about the present window (see CodexUsage.Tracker).
-            val merged = held.windows.merge(snapshot)
+            val merged = held.windows.merge(snapshot, Instant.ofEpochMilli(now))
+            held.liftRefusals(snapshot, now)
+
+            // The permission is the whole answer's alone, and a rolling update that has since put a plan's
+            // window at the limit takes a "yes" back (see Book.ordinary).
+            if (snapshot.fromServer) {
+                held.ordinary = snapshot.ordinaryUsage
+            } else if (held.ordinary == true && listOfNotNull(merged.session, merged.week).any { it.percent >= 100 }) {
+                held.ordinary = null
+            }
 
             // A one-off ping answers about extra usage as fully as a live conversation does, while an
             // answer from a process that has not yet learned the account's settings carries no such block
             // at all - and silence is not "extra usage went away".
-            snapshot.extra?.let { held.extraKnown = it }
+            snapshot.extra?.let { held.extraKnown = withReached(held.extraKnown, it) }
             held.picture = merged
             held.answeredAt = System.currentTimeMillis()
 
@@ -188,7 +251,11 @@ internal class AccountUsage(
      * the first event after a launch, whatever it says (see [Book.extraActive]), nor twice for one window
      * (see [ExtraUsageAnnouncements]).
      */
-    fun noteRateLimit(account: String, verdict: CodexRateLimit.Verdict): Boolean {
+    fun noteRateLimit(
+        account: String,
+        verdict: CodexRateLimit.Verdict,
+        now: Long = System.currentTimeMillis(),
+    ): Boolean {
         val active = verdict.extraUsage
         val window = if (active) verdict.window else ""
 
@@ -198,7 +265,7 @@ internal class AccountUsage(
             // heard it: the next run to look for room must not land where a tab has just run out. A model's
             // own week is not: it refuses that model, and the account goes on serving the others.
             if (verdict.stopped && verdict.resetsAt != null && verdict.window in SHARED_WINDOWS) {
-                held.refusedUntil = maxOf(held.refusedUntil, verdict.resetsAt)
+                held.noteRefusal(verdict.resetsAt, now)
             }
 
             val was = held.extraActive
@@ -257,7 +324,8 @@ internal class AccountUsage(
             held.extraKnown = null
             held.extraActive = null
             held.extraWindow = ""
-            held.refusedUntil = 0
+            held.ordinary = null
+            held.refusals.clear()
 
             // The panels are told to forget too, and told separately: their own state is merged field by
             // field (see mergeUsage in feed/usage.ts), so silence about a window means "nothing new", not
@@ -279,33 +347,70 @@ internal class AccountUsage(
      * [until] is the caller's own guess at when to look again; a known reset later than it stays.
      */
     @Synchronized
-    fun noteRefused(account: String, until: Long) {
-        val held = book(account)
-        held.refusedUntil = maxOf(held.refusedUntil, until)
+    fun noteRefused(account: String, until: Long, now: Long = System.currentTimeMillis()) {
+        book(account).noteRefusal(until, now)
     }
 
     /**
      * Whether [account] can take work at [now], as far as the IDE knows (see [Standing]).
      *
-     * Only the five-hour and the weekly windows count as full. A model's own week (Fable) refuses only the
-     * models it is about, and which models those are the answer does not say - a run that needs one of them
-     * learns it from the refusal itself, which [Book.refusedUntil] keeps. Nor does a full window refuse while
-     * extra usage is being spent past it: the work goes on, billed on top of the plan (see CodexRateLimit).
+     * Only the windows of the whole plan count as full: the five-hour and the weekly ones, and on a seat that
+     * has neither, the spending cap the workspace set for the person - there it is the only limit there is,
+     * and full, it refuses every model until its budget starts over. Beside the plan's windows a cap only
+     * bounds the spending past them and refuses nothing they still allow, so it is not read there.
+     *
+     * A model's own week (Fable) refuses only the models it is about, and which models those are the answer
+     * does not say - a run that needs one of them learns it from the refusal itself, which [Book.refusals]
+     * keeps. Nor does a full window refuse while extra usage is being spent past it: the work goes on, billed
+     * on top of the plan (see CodexRateLimit).
+     *
+     * And none of the figures refuse once the last whole answer said the plan's usage is allowed
+     * (`ordinaryUsageAllowed`, see [Book.ordinary]): that is the backend's own word, against a share in whole
+     * percent. A refusal heard after that answer still holds - [Book.refusals] are read either way.
      */
     @Synchronized
     fun standing(account: String, now: Long = System.currentTimeMillis()): Standing {
         val held = books[account] ?: return Standing()
         val instant = Instant.ofEpochMilli(now)
         val present = listOfNotNull(held.picture?.session, held.picture?.week).filter { it.isCurrent(instant) }
-        val fullUntil = present.filter { it.percent >= 100 && held.extraActive != true }
-            .mapNotNull { it.resetsAt?.toEpochMilli() }
-            .maxOrNull()
-        val refused = held.refusedUntil.takeIf { it > now }
+        val cap = spendingCap(held, instant)
+        val allowed = held.ordinary == true
+        val fullUntil = (present.filter { it.percent >= 100 && held.extraActive != true }.mapNotNull { it.resetsAt } +
+            listOfNotNull(cap?.takeIf { it.full }?.resetsAt))
+            .takeUnless { allowed }
+            ?.maxOfOrNull { it.toEpochMilli() }
+        val refused = held.refusals.keys.filter { it > now }.maxOrNull()
 
         return Standing(
             refusedUntil = listOfNotNull(fullUntil, refused).maxOrNull(),
-            fullest = present.maxOfOrNull { it.percent },
+            // A seat measured by its cap alone is measured all the same: at 12% it carries a night of work.
+            fullest = (present.map { it.percent } + listOfNotNull(cap?.percent)).maxOrNull(),
         )
+    }
+
+    /**
+     * The spending cap of [held] when it is the seat's only limit (see [standing]): a seat with no window of the
+     * plan at all, and a budget whose start-over is still ahead - one that has gone by says nothing about the new
+     * month. Null otherwise.
+     */
+    private fun spendingCap(held: Book, now: Instant): CodexUsage.Extra? {
+        if (held.picture?.session != null || held.picture?.week != null) return null
+        return held.extraKnown?.takeIf { it.resetsAt?.isAfter(now) == true }
+    }
+
+    /**
+     * The cap as it now stands: [incoming], keeping what [known] said of it being reached when [incoming] is
+     * silent about that. "None is unavailable, not a sparse-update recovery" - a rolling update sends the cap's
+     * figures without the flag, and taken whole it would call a reached cap open until the next whole answer.
+     * Kept only while it can still be true: within the same budget (the same start-over), and not past a share
+     * that went down - the owner raising the cap shows as just that.
+     */
+    private fun withReached(known: CodexUsage.Extra?, incoming: CodexUsage.Extra): CodexUsage.Extra {
+        if (incoming.reached != null || known?.reached == null) return incoming
+
+        val sameBudget = known.resetsAt != null && known.resetsAt == incoming.resetsAt
+        val notLower = (incoming.percent ?: 0) >= (known.percent ?: 0)
+        return if (sameBudget && notLower) incoming.copy(reached = known.reached) else incoming
     }
 
     private fun pictureOf(account: String, merged: CodexUsage.Snapshot, held: Book): String =
@@ -333,6 +438,10 @@ internal class AccountUsage(
                 }
             }
             merged.contextWindow?.let { put("contextWindow", it) }
+            // The backend's word on the plan's usage, said on every picture and null when there is none, rather
+            // than left out: the panel merges field by field, and a field left out would keep a "yes" the IDE has
+            // since taken back (see Book.ordinary) - the accounts screen reads it as "not at the limit".
+            put("ordinaryUsage", held.ordinary)
             putExtra(held)
         }.toString()
 
@@ -355,6 +464,8 @@ internal class AccountUsage(
             // When the budget starts over - only a Codex business seat's spending cap says (see
             // CodexUsage.Extra.resets), and it is what turns the block into a ring of its own.
             known?.resets?.takeIf { it.isNotEmpty() }?.let { put("resets", it) }
+            // Codex's own word on the cap, when it gave one (see CodexUsage.Extra.reached).
+            known?.reached?.let { put("reached", it) }
         }
     }
 
@@ -368,10 +479,13 @@ internal class AccountUsage(
     companion object {
 
         /**
-         * The windows that refuse every model of the account when they run out, in the CLI's words - the rest
-         * (`seven_day_opus`, `seven_day_sonnet`, the Fable week) refuse only their own (see [standing]).
+         * The limits that refuse every model of the account when they run out, by the names the limit event
+         * carries - the rest (another bucket's week) refuse only their own (see [standing]). The plan's two
+         * windows, and Codex's reasons for a workspace stopping the work: the person's spending cap, which
+         * names its start-over (see CodexShapes.resetOf), and the workspace out of credits, which does not and
+         * so is filed nowhere - a refusal is only kept with an end to it.
          */
-        val SHARED_WINDOWS = setOf("five_hour", "seven_day")
+        val SHARED_WINDOWS = setOf("five_hour", "seven_day") + CodexShapes.SPEND_CAP_REASONS + CodexShapes.CREDITS_REASONS
 
         fun getInstance(): AccountUsage = service()
     }

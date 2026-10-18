@@ -14,6 +14,8 @@ import {
   projectRows,
   rangeOf,
   timeTile,
+  tokenSeries,
+  dayTokens,
   toolRows,
   workSentence,
 } from './compute'
@@ -146,6 +148,57 @@ describe('hours a day', () => {
     expect(series.hours[5]).toBeCloseTo(1.5)
     expect(series.hours[6]).toBe(0)
     expect(series.longest).toEqual({ date: '2026-08-25', minutes: 90 })
+    // Over every calendar day of the range, as the time tile counts it.
+    expect(series.average).toBeCloseTo(90 / 7)
+  })
+})
+
+describe('tokens a day', () => {
+  /** A day's tokens with the named hours filled in. */
+  const spent = (tokens: Record<number, number>): number[] => Array.from({ length: 24 }, (_, hour) => tokens[hour] ?? 0)
+
+  it('adds each day up and keeps the quiet ones in place', () => {
+    const set = {
+      ...data([busy('2026-08-25', 90)]),
+      tokens: { '2026-08-25': spent({ 9: 400_000_000, 14: 1_200_000_000 }), [TODAY]: spent({ 10: 50_000_000 }) },
+    }
+    const series = tokenSeries(set, rangeOf(set, '7d'))
+
+    expect(series.dates).toHaveLength(7)
+    expect(series.tokens).toEqual([0, 0, 0, 0, 0, 1_600_000_000, 50_000_000])
+    expect(series.total).toBe(1_650_000_000)
+    expect(series.busiest).toEqual({ date: '2026-08-25', tokens: 1_600_000_000 })
+    // The transcripts begin on the 25th: the five days before them are not five days of nothing.
+    expect(series.average).toEqual({ tokens: 825_000_000, from: '2026-08-25', days: 2 })
+  })
+
+  it('counts a quiet day inside the known stretch as a day', () => {
+    const set = {
+      ...data([]),
+      tokens: { '2026-08-20': spent({ 9: 300 }), '2026-08-26': spent({ 9: 400 }) },
+    }
+
+    expect(tokenSeries(set, rangeOf(set, '7d')).average).toEqual({ tokens: 100, from: '2026-08-20', days: 7 })
+  })
+
+  it('draws a flat line for an IDE that does not send them yet', () => {
+    const set = data([busy('2026-08-25', 90)])
+    const series = tokenSeries(set, rangeOf(set, '7d'))
+
+    expect(series.tokens.every((value) => value === 0)).toBe(true)
+    expect(series.busiest).toBeNull()
+    expect(series.average).toBeNull()
+  })
+
+  it('splits one day by the hour and names the busiest', () => {
+    const set = { ...data([]), tokens: { [TODAY]: spent({ 9: 30, 14: 70 }), '2026-08-25': spent({ 14: 999 }) } }
+    const day = dayTokens(set, rangeOf(set, '1d'))
+
+    expect(day.hours).toHaveLength(24)
+    expect(day.hours[14]).toBe(70)
+    expect(day.total).toBe(100)
+    expect(day.peak).toEqual({ hour: 14, tokens: 70 })
+    expect(dayTokens(data([]), rangeOf(data([]), '1d')).peak).toBeNull()
   })
 })
 
@@ -284,10 +337,6 @@ describe('sessions, models, forks', () => {
         forks: 1,
         maxDepth: 2,
         models: { Sonnet: 3, Opus: 1 },
-        tokensIn: 100,
-        tokensOut: 50,
-        tokensCacheRead: 800,
-        tokensCacheWrite: 50,
         cost: 1.5,
       }),
     ])
@@ -298,7 +347,6 @@ describe('sessions, models, forks', () => {
       { name: 'Sonnet', turns: 3, share: 0.75 },
       { name: 'Opus', turns: 1, share: 0.25 },
     ])
-    expect(tile.tokens).toBe(1000)
     expect(tile.cost).toBe(1.5)
     expect(tile.longestSessionMinutes).toBe(90)
     expect(tile.deepestChain).toBe(2)

@@ -1,5 +1,5 @@
 import type { Dict } from '../i18n/en'
-import s from './sideMenu.module.css'
+import { SwitchScreen } from './SwitchScreen'
 
 /**
  * Whether the tabs open when a project closed come back when it opens again - drafts and all (see
@@ -10,17 +10,5 @@ import s from './sideMenu.module.css'
  * on disk is kept on this machine only.
  */
 export const RestoreTabs = ({ t, on, onToggle }: { t: Dict; on: boolean; onToggle: (on: boolean) => void }) => (
-  <div className={s.screen}>
-    <button type="button" className={s.switchRow} onClick={() => onToggle(!on)} aria-pressed={on}>
-      <span className={s.switchText}>
-        <span className={s.switchLabel}>{t.restoreTabs.label}</span>
-        <span className={s.switchHint}>{t.restoreTabs.hint}</span>
-      </span>
-      <span className={`${s.switchTrack} ${on ? s.switchTrackOn : ''}`}>
-        <span className={`${s.switchKnob} ${on ? s.switchKnobOn : ''}`} />
-      </span>
-    </button>
-
-    <span className={s.screenNote}>{t.restoreTabs.note}</span>
-  </div>
+  <SwitchScreen words={t.restoreTabs} on={on} onToggle={onToggle} />
 )

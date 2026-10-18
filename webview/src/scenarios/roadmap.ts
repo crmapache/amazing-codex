@@ -39,7 +39,8 @@ export const isOver = (state: ScenarioStepState): boolean => state === 'done' ||
 
 /**
  * The road of a whole run, as the run's own screen draws it - the same stops the IDE's summary carries for
- * the card in the hub (see RunSummary.roadmap), read off the record it already has.
+ * the card in the hub (see RunSummary.roadmap), read off the record it already has. A pass of a list is named
+ * after its item, as the summary names it (see RunStep.stopTitle): seven stops of one card are seven items.
  */
 export const roadOf = (run: ScenarioRun): ScenarioRoadmapStop[] => {
   const stageOf = new Map(run.snapshot.stages.map((stage, index) => [stage.id, index + 1]))
@@ -47,7 +48,7 @@ export const roadOf = (run: ScenarioRun): ScenarioRoadmapStop[] => {
     state: step.state,
     stage: stageOf.get(step.stageId) ?? 0,
     pass: step.pass,
-    title: step.title,
+    title: step.item?.label || step.title,
   }))
 }
 

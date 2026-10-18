@@ -3,8 +3,10 @@ import { useT } from '../i18n'
 import type { Dict } from '../i18n/en'
 import type { AccountInfo, UsageWindow } from '../protocol'
 import type { UsageFacts } from '../feed/usage'
-import { FIVE_HOUR_MS, MONTH_MS, WEEK_MS, paceColor, spendingWindow } from '../feed/usage'
+import { FIVE_HOUR_MS, MONTH_MS, WEEK_MS, paceColor, spendingWindow, timeLeft, usableAgainIn } from '../feed/usage'
 import { useFieldHistory } from '../hooks/useFieldHistory'
+import { useTicking } from '../hooks/useTicking'
+import { ResetClock } from './ResetClock'
 import { SkeletonBar } from './Skeleton'
 import s from './sideMenu.module.css'
 
@@ -112,8 +114,13 @@ const showsAddress = (account: AccountInfo): boolean => account.email !== ''
  * opens this screen to settle. It is real rather than a green tick: a stored credential proves only that
  * a credential is stored, while a figure had to be fetched with it. Absent until it arrives - an account
  * is asked for its figures when this screen opens, and each answer costs a process.
+ *
+ * Each figure carries the time left until its window resets, and an account at its limit says when it can be
+ * used again - asked for in a report from 0.13.36: account A at 100%, the work moved to B, and no way to learn
+ * when A comes back short of switching to it. The reset times arrive with the shares (see CodexUsage), so
+ * this costs no question of its own.
  */
-const Meters = ({ facts, t }: { facts: UsageFacts; t: Dict }) => {
+const Meters = ({ facts, now, t }: { facts: UsageFacts; now: number; t: Dict }) => {
   // A Codex business seat has neither window - its one limit is the workspace's spending cap, and two
   // dashes standing for windows it will never have would read as "not known yet" for ever.
   const spending = !facts.session && !facts.week ? spendingWindow(facts.extra) : null
@@ -121,21 +128,27 @@ const Meters = ({ facts, t }: { facts: UsageFacts; t: Dict }) => {
   return (
     <div className={s.accountMeters}>
       {spending ? (
-        <Meter name={t.accounts.spending} window={spending} span={MONTH_MS} />
+        <Meter name={t.accounts.spending} window={spending} span={MONTH_MS} now={now} t={t} />
       ) : (
         <>
-          <Meter name={t.accounts.fiveHour} window={facts.session} span={FIVE_HOUR_MS} />
-          <Meter name={t.accounts.weekly} window={facts.week} span={WEEK_MS} />
+          <Meter name={t.accounts.fiveHour} window={facts.session} span={FIVE_HOUR_MS} now={now} t={t} />
+          <Meter name={t.accounts.weekly} window={facts.week} span={WEEK_MS} now={now} t={t} />
           {/* A limit of its own beside the plan's - an extra bucket Codex reports with a window of its
               own, named by the server rather than by us. No dash while unknown, unlike the two above: an
               account whose plan has no such bucket would otherwise promise a figure that never comes. */}
           {(facts.models ?? []).map((model) => (
-            <Meter key={model.label} name={model.label} window={model} span={WEEK_MS} />
+            <Meter key={model.label} name={model.label} window={model} span={WEEK_MS} now={now} t={t} />
           ))}
         </>
       )}
     </div>
   )
+}
+
+/** When an account at its limit can be used again - nothing for one that has room (see usableAgainIn). */
+const UsableAgain = ({ facts, now, t }: { facts: UsageFacts; now: number; t: Dict }) => {
+  const left = usableAgainIn(facts, now)
+  return left === null ? null : <div className={s.accountWaits}>{t.accounts.usableAgainIn(left)}</div>
 }
 
 /**
@@ -147,16 +160,43 @@ const Meters = ({ facts, t }: { facts: UsageFacts; t: Dict }) => {
  * vanished again, and the cards under it moved every time: a list that twitches while it is being read
  * is harder to read than a list that says "not yet".
  */
-const Meter = ({ name, window, span }: { name: string; window?: UsageWindow; span: number }) => (
-  <span className={s.accountMeter}>
-    <span className={s.accountMeterName}>{name}</span>
-    {window ? (
-      <span style={{ color: paceColor(window.percent, window.resets, span) }}>{Math.round(window.percent)}%</span>
-    ) : (
-      <span className={s.accountMeterName}>—</span>
-    )}
-  </span>
-)
+const Meter = ({
+  name,
+  window,
+  span,
+  now,
+  t,
+}: {
+  name: string
+  window?: UsageWindow
+  span: number
+  now: number
+  t: Dict
+}) => {
+  // A window not opened yet has no reset to count to; its share alone is the whole truth (0%).
+  const left = window ? timeLeft(window.resets, now) : null
+
+  // Two lines: the window and its share, and under them the clock - side by side the time ran into the next
+  // window's name ("35% 3h 31m week 43%"), and nobody could say which figure was whose.
+  return (
+    <span className={s.accountMeter} data-tooltip={left === null ? undefined : t.status.resetsIn(left)}>
+      <span className={s.accountMeterShare}>
+        <span className={s.accountMeterName}>{name}</span>
+        {window ? (
+          <span style={{ color: paceColor(window.percent, window.resets, span) }}>{Math.round(window.percent)}%</span>
+        ) : (
+          <span className={s.accountMeterName}>—</span>
+        )}
+      </span>
+      {left !== null ? (
+        <span className={s.accountMeterReset}>
+          <ResetClock />
+          {left}
+        </span>
+      ) : null}
+    </span>
+  )
+}
 
 /**
  * Adding an account, and stopping halfway through it.
@@ -220,6 +260,8 @@ export const Accounts = ({
   onRename,
 }: AccountsProps) => {
   const t = useT()
+  // The time left beside every figure is in minutes, so twice a minute keeps it honest.
+  const now = useTicking(true, 30_000)
 
   /** Which account's name is being edited, and the text so far. One at a time. */
   const [renaming, setRenaming] = useState<string | null>(null)
@@ -355,7 +397,8 @@ export const Accounts = ({
                 </div>
               ) : null}
 
-              <Meters facts={facts} t={t} />
+              <Meters facts={facts} now={now} t={t} />
+              <UsableAgain facts={facts} now={now} t={t} />
 
               {account.health === 'absent' ? <div className={s.cardError}>{t.accounts.absent}</div> : null}
 

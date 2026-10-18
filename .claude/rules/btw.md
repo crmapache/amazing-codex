@@ -1,7 +1,7 @@
 ---
 paths:
-  - "src/main/kotlin/io/github/crmapache/amazingclaudecode/claude/SideQuestion.kt"
-  - "src/test/kotlin/io/github/crmapache/amazingclaudecode/claude/SideQuestionTest.kt"
+  - "src/main/kotlin/io/github/crmapache/amazingcodex/codex/SideQuestion.kt"
+  - "src/test/kotlin/io/github/crmapache/amazingcodex/codex/SideQuestionTest.kt"
   - "webview/src/feed/side.ts"
   - "webview/src/feed/side.test.ts"
   - "webview/src/components/SideQuestion.tsx"
@@ -42,16 +42,16 @@ paths:
   для `/btw` вопрос берётся целиком, с переводами строк (`asideQuestion`).
 - **Свой таймаут - 660 секунд, а не 20.** Остальные служебные запросы отвечают из того, что CLI держит в
   памяти; этот - вызов модели по всему разговору. По таймауту CLI просят остановиться (`cancelOnTimeout` в
-  `ClaudeSession.control`), иначе он доработал бы впустую.
-- **Вопрос, на который ответа уже не будет, заканчивается сразу** (`ClaudeSession.abandonAsides`). Обычные
+  `CodexSession.control`), иначе он доработал бы впустую.
+- **Вопрос, на который ответа уже не будет, заканчивается сразу** (`CodexSession.abandonAsides`). Обычные
   служебные запросы при остановке процесса просто забываются (`awaitingControl.clear()`), и для них это
   нормально. Вопрос сбоку человек сидит и ждёт: забытый, он десять минут висел бы как «думает». Поэтому и
   `stop()` (рестарт ради смены модели, MCP, закрытие), и смерть процесса отвечают ему `failed/ended`.
 - **Строка прогресса не идёт в ленту и журнал.** Её перехватывает `consume` до разбора событий, по
   проверке верхнего уровня (`SideQuestion.progressOf`): слово в тексте агента экранировано и не совпадает.
-- **Спящая вкладка поднимается**, как для MCP (`ClaudeSessions.askAside` через `awake`): ответ берётся из
+- **Спящая вкладка поднимается**, как для MCP (`CodexSessions.askAside` через `awake`): ответ берётся из
   контекста процесса, а у спящего его нет.
-- **Ответ получает только тот, кто спросил** (`ClaudeSessionHub.askAside` → `emitTo(clientId, …, asker)`),
+- **Ответ получает только тот, кто спросил** (`CodexSessionHub.askAside` → `emitTo(clientId, …, asker)`),
   как вывод команды через «!». Цепочка живёт в экране, где её задали; второе окно или телефон на той же
   вкладке не видят чужих вопросов, и ставить им ответ некуда.
 - **Цепочка не переживает перезапуск** - так же, как в терминале. Её нет ни в транскрипте, ни в журнале, ни

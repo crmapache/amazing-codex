@@ -1,11 +1,17 @@
 import type {
   CodexConfigSetting,
   PaintedTerm,
+  PanelKeyCommand,
+  PanelKeyName,
   QueuedMessage,
   RewindCode,
   SearchHit,
+  SessionInfo,
   ShellMessage,
+  TabPlace,
+  TitleSource,
   VoiceHotkey,
+  VoiceHotkeyCap,
   VoiceHotkeySlot,
   WebviewMessage,
 } from '../protocol'
@@ -217,11 +223,13 @@ let harnessAdding = false
 
 /**
  * Invented shares, so the rows carry real-looking figures rather than a bare tick. The third account's
- * plan keeps no model week of its own, so the "no ring" case is on the screen too.
+ * plan keeps no model week of its own, so the "no ring" case is on the screen too. The second one has run
+ * through its five hours, so the row that says when it takes work again is on the screen as well (see
+ * usableAgainIn).
  */
 const ACCOUNT_USAGE: Record<string, { session: number; week: number; fable?: number }> = {
   '': { session: 34, week: 61, fable: 47 },
-  a2: { session: 88, week: 12, fable: 9 },
+  a2: { session: 100, week: 12, fable: 9 },
   a3: { session: 5, week: 5 },
 }
 
@@ -240,7 +248,7 @@ const sendAccounts = (): void => {
     window.__accReceive?.({
       type: 'usage',
       account: account.id,
-      session: { percent: share.session, resets: new Date(Date.now() + 2 * 3600_000).toISOString() },
+      session: { percent: share.session, resets: new Date(Date.now() + (2 * 60 + 14) * 60_000).toISOString() },
       week: { percent: share.week, resets: new Date(Date.now() + 4 * 86_400_000).toISOString() },
       // Always the whole list, as the plugin sends it: an empty one is "this plan keeps none".
       models:
@@ -1157,13 +1165,110 @@ const answerSearch = (message: WebviewMessage): void => {
  * The queue of each conversation, held here as the IDE holds it (see SessionQueue.kt) - with the pieces a
  * message was typed in, because the pencil hands them back to the field whole.
  */
-type HeldQueued = QueuedMessage & { tokens: unknown; quotes: string[] }
+type HeldQueued = QueuedMessage & { tokens: unknown; quotes: string[]; bytes: { mediaType: string; data: string }[] }
 
 const queues = new Map<string, HeldQueued[]>()
 
+/** Queues waiting for the person's next message - the ones that came back with a reopened tab (see answerClosedTabs). */
+const heldQueues = new Set<string>()
+
+/**
+ * A queued message's pieces as the IDE hands them to a row (see QueueRows.kt): without the bytes - the row
+ * asks for a picture by the message when the pointer is on it (see answerPreview).
+ */
+const rowTokens = (tokens: unknown): unknown =>
+  Array.isArray(tokens)
+    ? tokens.map((token) => {
+        if (typeof token !== 'object' || token === null || !('chip' in token)) return token
+        const { data: _bytes, ...chip } = (token as { chip: Record<string, unknown> }).chip
+        return { ...token, chip }
+      })
+    : undefined
+
 const sayQueue = (sessionId: string): void => {
-  const items = (queues.get(sessionId) ?? []).map(({ id, text, attach, images }) => ({ id, text, attach, images }))
-  window.__accReceive?.({ type: 'queue', sessionId, items })
+  const items = (queues.get(sessionId) ?? []).map(({ id, text, images, tokens, quotes }) => ({
+    id,
+    text,
+    images,
+    ...(Array.isArray(tokens) ? { tokens: rowTokens(tokens) } : {}),
+    ...(quotes.length > 0 ? { quotes: quotes.map((quote) => quote.slice(0, 200)) } : {}),
+  }))
+  const held = heldQueues.has(sessionId) && items.length > 0
+  window.__accReceive?.({ type: 'queue', sessionId, items, ...(held ? { held } : {}) })
+}
+
+/**
+ * A picture behind a chip, answered the way the IDE answers it (see ImagePreviews.kt). There is no disk
+ * here, and no transcript: a file and a message's line are drawn up on the spot - a card with the name on
+ * it, enough to see the preview stand, place itself and wait. A queued picture the harness holds the bytes
+ * of comes back as itself. A path with "missing" in it is a file swept off the disk: nothing comes back.
+ *
+ * A line out of the transcript answers slower than the rest, as a pass over a working day's file does in
+ * the IDE - which is what puts the waiting frame on screen.
+ */
+const answerPreview = (message: WebviewMessage): void => {
+  if (message.type !== 'previewImage') return
+
+  const { place } = message
+  const held =
+    place.kind === 'queued'
+      ? queues.get(place.sessionId)?.find((item) => item.id === place.id)?.bytes[place.image]
+      : undefined
+  const label = place.kind === 'file' ? place.path : place.kind === 'queued' ? `queued · picture ${place.image + 1}` : `said · picture ${place.image + 1}`
+  const data = held
+    ? `data:${held.mediaType};base64,${held.data}`
+    : place.kind === 'file' && place.path.includes('missing')
+      ? ''
+      : mockPicture(label)
+
+  // A line of the transcript stands for a screenshot of a large display: what comes is its smaller copy, with the
+  // picture's own size beside it, as the IDE sends one past a megabyte and a half (see ImagePreviews.fitted).
+  const size = place.kind === 'said' ? { width: 3840, height: 2400 } : {}
+  setTimeout(
+    () => window.__accReceive?.({ type: 'imagePreview', id: message.id, data, ...size }),
+    place.kind === 'said' ? 700 : 60,
+  )
+}
+
+/**
+ * A click on a picture, answered the way CodexSessionHub.openPicture answers it: there is no editor here, so
+ * an opened picture is said out loud, as openFile is. One that would not open - a file with "missing" or
+ * "unopened" in its path (the second still previews, to see the caption change under a picture), a queued
+ * message no longer in the queue - is answered `pictureUnopened`.
+ */
+const answerPicture = (message: WebviewMessage): void => {
+  if (message.type !== 'openPicture') return
+
+  const { place } = message
+  const gone =
+    place.kind === 'file'
+      ? place.path.includes('missing') || place.path.includes('unopened')
+      : place.kind === 'queued' && !queues.get(place.sessionId)?.some((item) => item.id === place.id)
+
+  if (!gone) {
+    console.info('openPicture', place.kind === 'file' ? place.path : place.kind)
+    return
+  }
+  setTimeout(() => window.__accReceive?.({ type: 'pictureUnopened', id: message.id }), 60)
+}
+
+/** A made-up screenshot: a window with a sheet in it, and the name of what it stands for. */
+const mockPicture = (label: string): string => {
+  const name = label.replace(/[<>&"]/g, '')
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="960" height="600" viewBox="0 0 960 600">
+<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2b3a55"/><stop offset="1" stop-color="#5b3f6e"/></linearGradient></defs>
+<rect width="960" height="600" fill="url(#g)"/>
+<rect x="60" y="50" width="840" height="500" rx="18" fill="#f4f1ea"/>
+<rect x="60" y="50" width="840" height="56" rx="18" fill="#e3ddd1"/>
+<circle cx="96" cy="78" r="9" fill="#e06c5f"/><circle cx="124" cy="78" r="9" fill="#e0b15f"/><circle cx="152" cy="78" r="9" fill="#78b36a"/>
+<rect x="110" y="150" width="380" height="26" rx="6" fill="#c9c1b2"/>
+<rect x="110" y="196" width="520" height="18" rx="5" fill="#ddd6c8"/>
+<rect x="110" y="228" width="460" height="18" rx="5" fill="#ddd6c8"/>
+<rect x="110" y="300" width="740" height="150" rx="14" fill="#1f1f24"/>
+<rect x="140" y="340" width="220" height="70" rx="12" fill="#fff"/>
+<text x="480" y="520" text-anchor="middle" font-family="Menlo, monospace" font-size="24" fill="#6d6455">${name}</text>
+</svg>`
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
 }
 
 /**
@@ -1179,7 +1284,299 @@ const answerSound = (message: WebviewMessage): void => {
 }
 
 /**
- * Queue, the cross, a drag and the pencil, answered the way ClaudeSessionHub answers them - so the queue
+ * The panel's own keys, played the way the IDE plays them (see PanelKeys.kt): their keymap told once the
+ * page is up, and the presses caught before the page sees them, then handed over as commands. The IDE's
+ * default keymap of this machine's kind - a Mac's or everyone else's - is what stands in for a person's.
+ */
+// In the order the IDE draws them (see HotkeyBinding.caps): Ctrl, Option, Shift, then Cmd.
+const PANEL_KEYS = ((): {
+  keys: Partial<Record<PanelKeyName, VoiceHotkeyCap[][]>>
+  press: (event: KeyboardEvent) => PanelKeyCommand | null
+} => {
+  const cap = (text: string, glyph: VoiceHotkeyCap['glyph'] = ''): VoiceHotkeyCap => ({ glyph, text, side: '' })
+  const mac = /mac/i.test(navigator.userAgent)
+  const alt = mac ? cap('', 'option') : cap('Alt')
+  const enter = cap('Enter')
+
+  if (mac) {
+    const cmd = cap('', 'command')
+    return {
+      keys: {
+        nextTab: [[cap('Shift'), cmd, cap(']')]],
+        previousTab: [[cap('Shift'), cmd, cap('[')]],
+        newTab: [[cmd, cap('T')]],
+        closeTab: [[cmd, cap('W')]],
+        reopenTab: [[cap('Shift'), cmd, cap('T')]],
+        queue: [[alt, enter]],
+        openPanel: [],
+      },
+      press: (event) => {
+        if (event.metaKey && event.shiftKey && event.code === 'BracketRight') return 'nextTab'
+        if (event.metaKey && event.shiftKey && event.code === 'BracketLeft') return 'previousTab'
+        if (event.metaKey && !event.shiftKey && event.code === 'KeyT') return 'newTab'
+        if (event.metaKey && event.shiftKey && event.code === 'KeyT') return 'reopenTab'
+        if (event.metaKey && !event.shiftKey && event.code === 'KeyW') return 'closeTab'
+        if (event.altKey && event.key === 'Enter') return 'queue'
+        return null
+      },
+    }
+  }
+
+  return {
+    keys: {
+      nextTab: [[alt, cap('', 'right')]],
+      previousTab: [[alt, cap('', 'left')]],
+      newTab: [[cap('Ctrl'), cap('T')]],
+      closeTab: [[cap('Ctrl'), cap('F4')]],
+      reopenTab: [[cap('Ctrl'), cap('Shift'), cap('T')]],
+      queue: [[alt, enter]],
+      openPanel: [],
+    },
+    press: (event) => {
+      if (event.altKey && event.key === 'ArrowRight') return 'nextTab'
+      if (event.altKey && event.key === 'ArrowLeft') return 'previousTab'
+      if (event.ctrlKey && !event.shiftKey && event.code === 'KeyT') return 'newTab'
+      if (event.ctrlKey && event.shiftKey && event.code === 'KeyT') return 'reopenTab'
+      if (event.ctrlKey && event.key === 'F4') return 'closeTab'
+      if (event.altKey && event.key === 'Enter') return 'queue'
+      return null
+    },
+  }
+})()
+
+let panelKeysCaught = false
+
+const answerPanelKeys = (message: WebviewMessage): void => {
+  if (message.type !== 'ready') return
+
+  // A beat later, for the reason the voice settings wait (see sendVoiceConfig).
+  setTimeout(() => window.__accReceive?.({ type: 'panelKeys', keys: PANEL_KEYS.keys }), 60)
+
+  if (panelKeysCaught) return
+  panelKeysCaught = true
+  // Capturing, and on the window: the IDE has the keyboard before anything in the page does.
+  window.addEventListener(
+    'keydown',
+    (event) => {
+      const command = PANEL_KEYS.press(event)
+      if (!command) return
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      window.__accReceive?.({ type: 'panelKey', command })
+    },
+    true,
+  )
+}
+
+/**
+ * Closed tabs, played the way CodexSessionHub plays them (see ClosedTabs.kt): a tab closed by hand is kept,
+ * the key or a row of "Recently closed" brings it back where it stood, with its field and its queue held.
+ *
+ * The IDE owns the strip and the harness does not, so the harness mirrors it from both ends - what a scenario
+ * says (`sessions`) and what the page asks for (a tab opened, closed, named). Bringing a tab back is then the
+ * IDE's answer as it is: the list with the tab in it, its field, a short stand-in for its transcript (the
+ * harness has none to read, as in answerResume), and which tab to show.
+ */
+type MirroredTab = { id: string; title: string; titleSource: TitleSource; groupId: string; depth: number; parentId?: string }
+
+type ClosedRecord =
+  | { kind: 'chat'; tab: MirroredTab; at: number; draft?: unknown; queue: HeldQueued[]; talked: boolean; closedAt: number }
+  | { kind: 'panel'; id: string; title: string; place: TabPlace; closedAt: number }
+
+const MAIN_TAB: MirroredTab = { id: SESSION, title: 'main session', titleSource: 'default', groupId: SESSION, depth: 0 }
+let strip: MirroredTab[] = [MAIN_TAB]
+let closedTabs: ClosedRecord[] = []
+const heldDrafts = new Map<string, unknown>()
+/** Tabs with something in their feed - a scenario's, a message sent, a past conversation opened. */
+const talked = new Set<string>([SESSION])
+
+const keyOfClosed = (record: ClosedRecord): string =>
+  record.kind === 'panel' ? `panel:${record.id}` : `chat:${record.tab.id}`
+
+const sayClosedTabs = (): void => {
+  window.__accReceive?.({
+    type: 'closedTabs',
+    tabs: closedTabs.map((record) =>
+      record.kind === 'panel'
+        ? { key: keyOfClosed(record), kind: 'panel', id: record.id, title: record.title, closedAt: record.closedAt }
+        : {
+            key: keyOfClosed(record),
+            kind: record.tab.depth > 0 ? 'fork' : 'chat',
+            title: record.tab.title,
+            closedAt: record.closedAt,
+          },
+    ),
+  })
+}
+
+const keepClosed = (record: ClosedRecord): void => {
+  closedTabs = [record, ...closedTabs.filter((other) => keyOfClosed(other) !== keyOfClosed(record))].slice(0, 20)
+  sayClosedTabs()
+}
+
+const sayStrip = (): void => {
+  window.__accReceive?.({
+    type: 'sessions',
+    sessions: strip.map((tab) => ({
+      ...tab,
+      kind: tab.depth > 0 ? 'branch' : 'main',
+      status: 'idle',
+      awaitsYou: false,
+    })),
+  })
+}
+
+/** What a scenario says the strip is, from then on the harness's mirror of it. */
+const mirrorStrip = (sessions: SessionInfo[]): void => {
+  strip = sessions.map(({ id, title, titleSource, groupId, depth, parentId }) => ({
+    id,
+    title,
+    titleSource,
+    groupId,
+    depth,
+    ...(parentId ? { parentId } : {}),
+  }))
+  sessions.forEach((session) => talked.add(session.id))
+}
+
+const bringBack = (record: ClosedRecord): void => {
+  if (record.kind === 'panel') {
+    window.__accReceive?.({ type: 'tabReopened', panel: record.id, place: record.place })
+    return
+  }
+
+  const { tab } = record
+  strip = [...strip.slice(0, record.at), tab, ...strip.slice(record.at)]
+  sayStrip()
+
+  if (record.draft) {
+    heldDrafts.set(tab.id, record.draft)
+    window.__accReceive?.({ type: 'drafts', drafts: { [tab.id]: record.draft as { tokens?: unknown } } })
+  }
+  if (record.queue.length > 0) {
+    queues.set(tab.id, record.queue)
+    heldQueues.add(tab.id)
+    sayQueue(tab.id)
+  }
+
+  window.__accReceive?.({ type: 'tabReopened', sessionId: tab.id })
+
+  if (!record.talked) return
+  setTimeout(() => {
+    const line = (event: unknown): void => {
+      window.__accReceive?.({ type: 'agent', sessionId: tab.id, event, replay: true } as never)
+    }
+    line({
+      type: 'user',
+      uuid: `c-${tab.id}-1`,
+      message: { role: 'user', content: [{ type: 'text', text: `Back to ${tab.title}.` }] },
+    })
+    line({
+      type: 'assistant',
+      uuid: `c-${tab.id}-2`,
+      message: { content: [{ type: 'text', text: 'Right where the tab was closed - nothing was lost.' }] },
+    })
+    window.__accReceive?.({ type: 'replayFinished', sessionId: tab.id } as never)
+  }, 200)
+}
+
+const answerClosedTabs = (message: WebviewMessage): void => {
+  switch (message.type) {
+    case 'ready':
+      // A beat later, for the reason the voice settings wait (see sendVoiceConfig).
+      setTimeout(() => {
+        sayClosedTabs()
+        // The drafts it holds, always, as the IDE does (see CodexPanel.sendDrafts): the page reports its own
+        // fields only once it has heard this, so without it no draft would reach a tab closed to come back.
+        window.__accReceive?.({ type: 'drafts', drafts: Object.fromEntries(heldDrafts) as Record<string, { tokens?: unknown }> })
+      }, 60)
+      return
+
+    case 'newSession': {
+      const parent = message.parentId ? strip.find((tab) => tab.id === message.parentId) : undefined
+      const tab: MirroredTab = parent
+        ? { id: message.sessionId, title: message.title || 'fork', titleSource: 'default', groupId: parent.groupId, depth: parent.depth + 1, parentId: parent.id }
+        : { id: message.sessionId, title: message.title || 'new session', titleSource: 'default', groupId: message.sessionId, depth: 0 }
+      if (strip.some((one) => one.id === tab.id)) return
+
+      const last = parent ? strip.map((one) => one.groupId).lastIndexOf(parent.groupId) : -1
+      strip = last >= 0 ? [...strip.slice(0, last + 1), tab, ...strip.slice(last + 1)] : [...strip, tab]
+      if (parent) talked.add(tab.id)
+      return
+    }
+
+    case 'resumeSession':
+      if (!strip.some((tab) => tab.id === message.sessionId)) {
+        strip = [...strip, { id: message.sessionId, title: message.title ?? '', titleSource: message.titleSource ?? 'heuristic', groupId: message.sessionId, depth: 0 }]
+      } else if (message.title) {
+        strip = strip.map((tab) => (tab.id === message.sessionId ? { ...tab, title: message.title!, titleSource: message.titleSource ?? 'heuristic' } : tab))
+      }
+      talked.add(message.sessionId)
+      return
+
+    case 'prompt':
+    case 'queuePrompt':
+      talked.add(message.sessionId)
+      heldQueues.delete(message.sessionId)
+      return
+
+    case 'renameSession':
+    case 'nameSession':
+      strip = strip.map((tab) =>
+        tab.id === message.sessionId
+          ? { ...tab, title: message.title, titleSource: message.type === 'nameSession' ? 'user' : tab.titleSource }
+          : tab,
+      )
+      return
+
+    case 'saveDraft':
+      if (message.draft) heldDrafts.set(message.sessionId, message.draft)
+      else heldDrafts.delete(message.sessionId)
+      return
+
+    case 'closeSession': {
+      const at = strip.findIndex((tab) => tab.id === message.sessionId)
+      const tab = strip[at]
+      if (!tab) return
+
+      strip = strip.filter((one) => one.id !== tab.id)
+      const draft = heldDrafts.get(tab.id)
+      const queue = queues.get(tab.id) ?? []
+      heldDrafts.delete(tab.id)
+      queues.delete(tab.id)
+      // An empty "New chat" is not kept, as in the IDE: there is nothing of it to bring back.
+      if (!talked.has(tab.id) && !draft && tab.titleSource !== 'user' && queue.length === 0) return
+      keepClosed({ kind: 'chat', tab, at, draft, queue, talked: talked.has(tab.id), closedAt: Date.now() })
+      return
+    }
+
+    case 'panelTabClosed':
+      keepClosed({ kind: 'panel', id: message.id, title: message.title, place: message.place, closedAt: Date.now() })
+      return
+
+    case 'reopenTab': {
+      const open = (record: ClosedRecord) => record.kind === 'panel' && message.open.includes(record.id)
+      let record: ClosedRecord | undefined
+      if (message.key) {
+        record = closedTabs.find((one) => keyOfClosed(one) === message.key)
+        closedTabs = closedTabs.filter((one) => one !== record)
+        if (record && open(record)) record = undefined
+      } else {
+        while (closedTabs.length > 0 && !record) {
+          const [next, ...rest] = closedTabs
+          closedTabs = rest
+          if (next && !open(next)) record = next
+        }
+      }
+      sayClosedTabs()
+      if (record) bringBack(record)
+      return
+    }
+  }
+}
+
+/**
+ * Queue, the cross, a drag and the pencil, answered the way CodexSessionHub answers them - so the queue
  * above the field can be worked by hand here. Nothing is ever fired out of it: the harness has no turn
  * that ends by itself, and a scenario that wants one plays it.
  */
@@ -1191,14 +1588,20 @@ const answerQueue = (message: WebviewMessage): void => {
     const entry: HeldQueued = {
       id: message.id,
       text: message.text,
-      attach: message.attach ?? '',
       images: message.images?.length ?? 0,
       tokens: message.tokens,
       quotes: message.quotes ?? [],
+      bytes: message.images ?? [],
     }
     const at = message.before ? list.findIndex((item) => item.id === message.before) : -1
     queues.set(message.sessionId, at >= 0 ? [...list.slice(0, at), entry, ...list.slice(at)] : [...list, entry])
     sayQueue(message.sessionId)
+    return
+  }
+
+  // "Don't carry on" under a limit's wait: the IDE lets the wait go and says so (see CodexSessionHub.cancelCarryOn).
+  if (message.type === 'cancelCarryOn') {
+    window.__accReceive?.({ type: 'carryOnWait', sessionId: message.sessionId })
     return
   }
 
@@ -1247,6 +1650,29 @@ const answerQueue = (message: WebviewMessage): void => {
  * `{ state: 'unavailable', detail: '…' }`), and `window.__accHarnessRewindRefuse = 'moved'` to have the next
  * rewind refused for that reason. Unset, there are files to put back and the rewind goes through.
  */
+/**
+ * Putting back a turn's files (see ChangeRevert in the IDE): the harness has no disk, so it answers the way the
+ * IDE does when the file is where the turn left it - put back - except for a manifest, which it says was
+ * changed since. That way both kinds of row can be looked at in the scenario "The files a turn changed".
+ * Bringing changes back always works here.
+ */
+const answerRevert = (message: WebviewMessage): void => {
+  if (message.type !== 'revertChanges') return
+  const { sessionId, id, files } = message
+  window.setTimeout(() => {
+    window.__accReceive?.({
+      type: 'changesReverted',
+      sessionId,
+      id,
+      ...(message.restore ? { restore: true } : {}),
+      files: files.map((file) => ({
+        path: file.path,
+        outcome: message.restore ? 'restored' : file.path.endsWith('AndroidManifest.xml') ? 'changed' : 'reverted',
+      })),
+    })
+  }, 400)
+}
+
 const answerRewind = (message: WebviewMessage): void => {
   if (message.type === 'rewindPreview') {
     const code: RewindCode = window.__accHarnessRewindCode ?? {
@@ -1297,6 +1723,12 @@ const listenToPanel = () => {
   lastSideRequest = undefined
   typedIntoFeed = []
   queues.clear()
+  heldQueues.clear()
+  strip = [MAIN_TAB]
+  closedTabs = []
+  heldDrafts.clear()
+  talked.clear()
+  talked.add(SESSION)
 
   if (window.__accSend) return
 
@@ -1407,6 +1839,22 @@ const listenToPanel = () => {
       }, 0)
     }
 
+    // Fast mode, answered as the IDE answers it: the ask comes back as said, and nothing about the next tab -
+    // it writes no setting. Whether it serves, Codex says at the next turn (see the fast-mode scenarios).
+    if (message?.type === 'setFastMode') {
+      window.__accReceive?.({ type: 'fastMode', sessionId: message.sessionId, on: message.on })
+    }
+
+    // `/status`, answered as the IDE answers it: the conversation's id - made up here, as there is no CLI
+    // behind the harness to have given one.
+    if (message?.type === 'sessionInfo') {
+      window.__accReceive?.({
+        type: 'sessionInfo',
+        sessionId: message.sessionId,
+        conversationId: 'b6f4c0de-71a2-4c3e-9d1f-5a7e2c8b9f10',
+      })
+    }
+
     // The defaults of the "New chats" screen, answered as the IDE answers them.
     if (message?.type === 'setDefaultModel') {
       newTab.pinnedModel = message.model
@@ -1494,8 +1942,13 @@ const listenToPanel = () => {
     if (message) answerLogin(message)
     if (message) answerScenarios(message)
     if (message) answerQueue(message)
+    if (message) answerPreview(message)
+    if (message) answerPicture(message)
     if (message) answerSound(message)
     if (message) answerRewind(message)
+    if (message) answerRevert(message)
+    if (message) answerPanelKeys(message)
+    if (message) answerClosedTabs(message)
   }
 
   window.dispatchEvent(new Event('acc:ready'))
@@ -1504,18 +1957,19 @@ const listenToPanel = () => {
 /**
  * A model pick, answered the way the IDE answers it - and then the stream the answer is judged by.
  *
- * Every third pick does not take: the CLI says yes and the next step comes back signed by the model being
+ * Every third pick does not take: the IDE says yes and the next turn comes back signed by the model being
  * left. Nothing else on this screen shows that state, and by hand it cannot be reached at all.
  *
- * The step matters as much as the signature: the panel judges a pick only once a request that could have
- * carried it has begun (see PanelState.ownSwapDue), and a tool coming back is exactly that. So the pair
- * goes out whichever way the pick ends - the difference is the name under the answer, and nothing else.
+ * The turn matters as much as the signature: Codex takes a pick with the next `turn/start`, so the panel judges
+ * it only once the turn it was made in is over (see PanelState.ownSwapDue). So the rest of that turn - a tool
+ * and an answer on the model being left - its end, and the next turn's answer go out whichever way the pick
+ * ends: the difference is the name under the last answer, and nothing else.
  */
 const answerModel = (message: Extract<WebviewMessage, { type: 'setModel' }>): void => {
   modelPicks += 1
   const carried = signatureOf(message.model) || streamSignature
   // A pick of the model already at work cannot fail to arrive - it is already here - and the panel
-  // rightly says nothing about it (see picksAnother in feed/build.ts). Stepping over such a pick keeps
+  // rightly says nothing about it (see expectingOwnSwap in feed/build.ts). Stepping over such a pick keeps
   // the promise of this cycle honest: every third pick that asks for something ELSE does not take.
   const stuck = modelPicks % 3 === 0 && carried !== streamSignature
   const signature = stuck ? streamSignature : carried
@@ -1553,13 +2007,27 @@ const answerModel = (message: Extract<WebviewMessage, { type: 'setModel' }>): vo
       sessionId: SESSION,
       event: { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'const MODEL_FAMILIES = [' }] } },
     } as never)
+    // Still the turn the pick was made in: Codex keeps it on the model it started on.
     window.__accReceive?.({
       type: 'agent',
       sessionId: SESSION,
-      event: { type: 'assistant', message: { model: signature, content: [{ type: 'text', text: 'Read it.' }] } },
+      event: { type: 'assistant', message: { model: streamSignature, content: [{ type: 'text', text: 'Read it.' }] } },
+    } as never)
+    window.__accReceive?.({
+      type: 'agent',
+      sessionId: SESSION,
+      event: { type: 'result', subtype: 'success', num_turns: 1, duration_ms: 1100, result: 'Read it.' },
+    } as never)
+  }, 800)
+
+  setTimeout(() => {
+    window.__accReceive?.({
+      type: 'agent',
+      sessionId: SESSION,
+      event: { type: 'assistant', message: { model: signature, content: [{ type: 'text', text: 'Carrying on from here.' }] } },
     } as never)
     streamSignature = signature
-  }, 1100)
+  }, 1400)
 }
 
 /** Waits for the panel to hand a command to the bridge - and returns it together with its number. */
@@ -1753,11 +2221,19 @@ export class ScenarioPlayer {
       streamSignature = event.message?.model ?? (event.type === 'system' ? event.model : undefined) ?? streamSignature
     }
 
+    // A strip a scenario puts up is the strip the harness mirrors from then on (see answerClosedTabs).
+    if (message.type === 'sessions') mirrorStrip(message.sessions)
+
     // A queue a scenario puts up is the queue the harness holds from then on (see answerQueue).
     if (message.type === 'queue') {
       queues.set(
         message.sessionId,
-        message.items.map((item) => ({ ...item, tokens: [{ kind: 'text', value: item.text }], quotes: [] })),
+        message.items.map((item) => ({
+          ...item,
+          tokens: item.tokens ?? [{ kind: 'text', value: item.text }],
+          quotes: item.quotes ?? [],
+          bytes: [],
+        })),
       )
     }
 

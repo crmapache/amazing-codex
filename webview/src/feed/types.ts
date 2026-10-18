@@ -4,7 +4,7 @@
  * list, the plan, the questions), some from system events.
  */
 
-import type { EditorRef, OutrankedReason } from '../protocol'
+import type { CarryOnReason, EditorRef, FileEdit, OutrankedReason, RevertOutcome } from '../protocol'
 import type { WorkflowView } from './workflow'
 
 /**
@@ -254,6 +254,14 @@ export interface UserItem {
    * transcript for a past conversation (see feed/editorContext.ts).
    */
   editor?: EditorRef
+  /**
+   * Said by the panel rather than by the person, and why - drawn with PANEL over it where a message of
+   * theirs says YOU, the reason in the hint (see UserCard): an account switch cut the turn above short, a
+   * limit stopped it and has let go, or a restart lost its background agents - and nobody would have come
+   * back to say "carry on" (see CarryOnWords.kt). Read back out of a transcript by the tag the words went in
+   * under (see CARRY_ON in build.ts); `unknown` is a reason this panel has no words for.
+   */
+  auto?: CarryOnReason | 'unknown'
 }
 
 export interface TextItem {
@@ -686,6 +694,69 @@ export interface MetaItem {
   outcome?: { state: 'worked' | 'stopped' | 'movedAccount' | 'restarted'; duration: string }
 }
 
+/**
+ * One file a turn changed, and by how many lines - a row of [ChangesItem].
+ *
+ * The figures are the CLI's own: every edit comes back with the diff the CLI actually applied
+ * (`structuredPatch` in the tool's structured result), and a created file says so (`type: 'create'`). See
+ * feed/changes.ts for where they are read and what stands in when a result does not carry them.
+ */
+export interface FileChange {
+  /** The path the tool was given, in full - what a click on the row opens. */
+  path: string
+  /** The same path as the feed shows it: from the project's root when the file lies inside the project. */
+  shown: string
+  added: number
+  removed: number
+  /** The turn created the file: there was nothing in it before, so nothing was removed from it either. */
+  created: boolean
+  /**
+   * The turn deleted the file (a Codex patch can): nothing is in it after, so the row says only what went - and there
+   * is no file to open until a revert writes it back.
+   */
+  deleted?: true
+  /** Where the turn moved the file from - [path] is where it stands now. Unset for a file the turn itself created. */
+  movedFrom?: string
+  /**
+   * The file changed by an amount nobody could count: a big edit the CLI reported without its diff, and nothing
+   * on this side to work one out from (see changeOf). The row says so instead of showing figures.
+   */
+  uncounted?: true
+  /** The call that changed the file first in the turn - what names the turn's list (see closeChanges). */
+  firstCall: string
+  /**
+   * What the turn did to the file, change by change, for putting it back (see ChangeRevert in the IDE).
+   *
+   * Absent when a change of the file came without its diff - a CLI too old to send one, a result cut short
+   * on the way: there is then nothing exact to undo, and the row has no button rather than one that guesses.
+   */
+  edits?: FileEdit[]
+  /** What putting the file back came to, once the IDE has answered (see changesReverted). */
+  revert?: RevertOutcome
+  /** Why bringing the changes back after a revert did not happen - the file stays reverted. */
+  restoreRefused?: RevertOutcome
+  /**
+   * How many times the IDE has answered about this file. A pressed button waits for this to move rather than
+   * for the row's words to change: the same refusal twice is two answers that read the same.
+   */
+  answers?: number
+}
+
+/**
+ * The files the turn changed, at its end - one row per file, with the lines added and removed.
+ *
+ * Asked for by a person who read the end of an answer for the list of what had been touched: the cards
+ * that did the editing stand far up the feed, folded into groups, and an answer names the files only when
+ * the model happens to. Here the list is the same at the end of every turn, drawn from the calls rather than
+ * from what the model chose to say. Subagents' edits are in it too (see noteChanges).
+ */
+export interface ChangesItem {
+  id: string
+  kind: 'changes'
+  /** In the order the turn first touched them. */
+  files: FileChange[]
+}
+
 /** How a chain of retries ended: the request went through, the CLI gave up, or the turn was interrupted. */
 export type RetryOutcome = 'recovered' | 'failed' | 'stopped'
 
@@ -769,6 +840,40 @@ export interface ModelStuckItem {
   picked: string
   /** What the conversation is still answering on. */
   running: string
+}
+
+/**
+ * Fast mode was asked for, and Codex ran without it - with the reason (see feed/fastMode.ts).
+ *
+ * A row because the ask is made in a menu that closes: without it the turns go on at standard speed, and
+ * the only place saying why is that menu, reopened. Once per reason since the ask (see noteFastReport), not
+ * once per turn - the stream repeats it at the end of every one.
+ *
+ * The IDE's word rather than the words: chosen at painting time, like a limit's window.
+ */
+export interface FastModeItem {
+  id: string
+  kind: 'fast'
+  reason: string
+}
+
+/**
+ * `/status`: the conversation's id, and the command that resumes it in a terminal (see SessionInfoRow).
+ *
+ * The id is Codex's thread id - the one its rollout file is named by and `codex resume` takes - and is absent
+ * until the first message gives the conversation a thread.
+ *
+ * The rest is the IDE's word on the terminal line (see ResumeLine.kt and feed/sessionInfo.ts): the line itself when
+ * it is more than `codex resume <id>` - the added account's drawer in front of it - the account the tab runs on,
+ * and whether a terminal of one's own would carry the conversation on the default sign-in instead.
+ */
+export interface SessionInfoItem {
+  id: string
+  kind: 'session'
+  conversationId?: string
+  resume?: string
+  account?: string
+  onDefault?: boolean
 }
 
 /**
@@ -919,9 +1024,12 @@ export type FeedItem =
   | CheckpointItem
   | CompactItem
   | MetaItem
+  | ChangesItem
   | RetryItem
   | ModelSwitchItem
   | ModelStuckItem
+  | FastModeItem
+  | SessionInfoItem
   | CrashItem
   | ModLogItem
   | OutrankedItem

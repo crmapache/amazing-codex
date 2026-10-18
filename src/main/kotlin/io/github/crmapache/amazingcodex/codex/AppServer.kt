@@ -322,6 +322,13 @@ internal class AppServer(
     }
 
     /**
+     * A line told as if the server had written it - the door the tests use to say what Codex would say next
+     * (see CodexSession.heardFromCodex). It goes the way a line read off the process goes, through the same
+     * handlers, so whatever listens to this server cannot tell the two apart.
+     */
+    internal fun heard(line: String) = consume(line)
+
+    /**
      * One line from the server. A slip in a handler must not take the reader down with it: this thread
      * carries every other line of the conversation, and an exception here would lose them.
      */
@@ -381,7 +388,8 @@ internal class AppServer(
         /** JSON-RPC's own code for "I do not know that method" - what an unknown server request gets. */
         const val METHOD_NOT_FOUND = -32601
 
-        private const val DEFAULT_TIMEOUT_SECONDS = 30L
+        /** How long a request waits for its answer - see CodexUsage.SERVER_ANSWER_MAX_AGE_MS, which rests on it. */
+        const val DEFAULT_TIMEOUT_SECONDS = 30L
 
         /**
          * The handshake of a cold start: a first run after an update unpacks and checks itself, and MCP

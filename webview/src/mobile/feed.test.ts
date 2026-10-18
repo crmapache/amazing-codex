@@ -1,6 +1,7 @@
 import { en } from '../i18n/en'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ShellMessage } from '../protocol'
+import { contextOf } from '../feed/build'
 import { streamStatus } from '../feed/streamStatus'
 import type { CardState } from '../hooks/useCardState'
 import { RemoteClock } from './clock'
@@ -148,6 +149,63 @@ describe('the phone building a conversation', () => {
     ])
 
     expect(feed.state.items[0]?.kind).toEqual('checkpoint')
+  })
+
+  // Fast mode asked for is the IDE's word and nobody else's: the phone draws its chip and sheet by it.
+  it('takes the fast mode ask the IDE says', () => {
+    const on = apply([message({ type: 'fastMode', sessionId: 'main', on: true })])
+    expect(on.state.fastMode).toBe(true)
+
+    const off = applyMessage(on, message({ type: 'fastMode', sessionId: 'main', on: false }))
+    expect(off.state.fastMode).toBe(false)
+  })
+
+  /**
+   * The end of a long turn holds the agent's answers and not one exact figure of the window - those come at
+   * a turn's end. The IDE puts the last one in front of the tail (see lastContextMessage in the hub), and the
+   * answers after it set the estimate against that window rather than against one guessed from the model's
+   * name: 287 thousand of a million read as a red 100% when the guess was two hundred thousand.
+   */
+  it('measures the tail of a turn by the window the IDE hands in front of it', () => {
+    const answer = message({
+      type: 'agent',
+      sessionId: 'main',
+      event: {
+        type: 'assistant',
+        message: { model: 'claude-opus-5-5', content: [{ type: 'text', text: 'still at it' }], usage: { input_tokens: 287_000 } },
+      },
+      seq: 6900,
+    })
+    const feed = apply([
+      message({ type: 'restoreStarted', sessionId: 'main', from: 0, truncated: true }),
+      message({ type: 'context', sessionId: 'main', used: 21_000, max: 1_000_000 }),
+      answer,
+      message({ type: 'restoreFinished', sessionId: 'main', upTo: 6900 }),
+    ])
+
+    expect(contextOf(feed.state, 200_000)).toEqual({ used: 287_000, limit: 1_000_000, percent: 29 })
+    expect(feed.seq).toBe(6900)
+  })
+
+  /**
+   * The window a conversation is in comes to the phone as it comes to the desk: after the figure, as a fact about
+   * the tab (`born`), and on a switch at the desk as a change. The phone used to drop both - a conversation on Long
+   * measured by the Std window - and the announcement must not throw away the figure handed just before it.
+   */
+  it('takes the window the conversation is in, and keeps the figure through its announcement', () => {
+    const opened = apply([
+      message({ type: 'restoreStarted', sessionId: 'main', from: 0 }),
+      message({ type: 'context', sessionId: 'main', used: 400_000, max: 828_400 }),
+      message({ type: 'restoreFinished', sessionId: 'main', upTo: 3 }),
+      message({ type: 'contextMode', sessionId: 'main', mode: 'long', born: true }),
+    ])
+
+    expect(opened.state.contextMode).toBe('long')
+    expect(contextOf(opened.state, 200_000, 828_400)).toEqual({ used: 400_000, limit: 828_400, percent: 48 })
+
+    const switched = applyMessage(opened, message({ type: 'contextMode', sessionId: 'main', mode: 'standard' }))
+    expect(switched.state.contextMode).toBe('standard')
+    expect(contextOf(switched.state, 200_000, 258_400)).toEqual({ used: 400_000, limit: 258_400, percent: 100 })
   })
 
   /*
@@ -406,6 +464,29 @@ describe('the phone building a conversation', () => {
     expect(feed.state.items.filter((item) => item.kind === 'model')).toEqual([])
   })
 
+  // "opus" picked at the desk from Opus 4.8: only the machine's catalogue says it means Opus 5.5.
+  it('judges a pick by the catalogue the machine carries', () => {
+    const models = [{ value: 'opus', label: 'Opus', description: '', resolved: 'claude-opus-5-5' }]
+    const signed = (model: string, text: string) =>
+      message({
+        type: 'agent',
+        sessionId: 'main',
+        event: { type: 'assistant', message: { model, content: [{ type: 'text', text }] } },
+      })
+
+    let feed = emptyFeed()
+    for (const next of [
+      message({ type: 'agent', sessionId: 'main', event: { type: 'system', subtype: 'init', model: 'claude-opus-4-8' } }),
+      signed('claude-opus-4-8', 'on 4.8'),
+      message({ type: 'model', sessionId: 'main', model: 'opus', applied: true }),
+      signed('claude-opus-5-5', 'on 5.5'),
+    ]) {
+      feed = applyMessage(feed, next, Date.now(), models)
+    }
+
+    expect(feed.state.items.filter((item) => item.kind === 'model')).toEqual([])
+  })
+
   /**
    * The queue belongs to the conversation rather than to this page. It used to be a piece of the thread
    * screen's own state, worked through by an effect there - and a page in a pocket is thrown out by the
@@ -417,11 +498,11 @@ describe('the phone building a conversation', () => {
       message({
         type: 'queue',
         sessionId: 'main',
-        items: [{ id: 'q1', text: 'and then deploy', attach: '2 refs', images: 1 }],
+        items: [{ id: 'q1', text: 'and then deploy', images: 1 }],
       }),
     ])
 
-    expect(feed.state.queue).toEqual([{ id: 'q1', text: 'and then deploy', attach: '2 refs', images: 1 }])
+    expect(feed.state.queue).toEqual([{ id: 'q1', text: 'and then deploy', images: 1 }])
 
     feed = applyMessage(feed, message({ type: 'queue', sessionId: 'main', items: [] }))
 
@@ -849,5 +930,18 @@ describe('the phone and the permission mode', () => {
     const feed = apply([message({ type: 'mode', sessionId: 'main', mode: 'default', applied: true })])
 
     expect(feed.state.permissionMode).toBe('manual')
+  })
+})
+
+describe('the phone and /status', () => {
+  // Typed here it is answered by the IDE with the desk's row (see SessionCommands.statusAsked) - drawn the same way.
+  it('draws the IDE’s answer as the desk’s row', () => {
+    const feed = apply([
+      message({ type: 'sessionInfo', sessionId: 'main', conversationId: '019a2b3c', account: 'Work', onDefault: true }),
+    ])
+
+    expect(feed.state.items.at(-1)).toEqual(
+      expect.objectContaining({ kind: 'session', conversationId: '019a2b3c', account: 'Work', onDefault: true }),
+    )
   })
 })

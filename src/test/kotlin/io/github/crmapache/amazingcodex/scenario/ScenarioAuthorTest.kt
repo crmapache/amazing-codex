@@ -343,4 +343,33 @@ class ScenarioAuthorTest {
         assertEquals(HeadSettings.ON_GIVE_UP_STOP, giveUp("\"yes\""))
         assertEquals(HeadSettings.ON_GIVE_UP_STOP, giveUp("null"))
     }
+    // Work over a list is written as a stage over the list, its item filled by the panel: a slot under the
+    // item's name is one nobody would ask for, and the count beside it is not read.
+    @Test
+    fun `a stage over a list keeps its list and loses what would contradict it`() {
+        val scenario = written(
+            """
+            {"name": "Plans", "inputs": [{"name": "card", "label": "Card"}], "stages": [{"title": "Plans", "repeat": 10, "untilDone": true,
+              "each": {"name": "card", "description": "The children of the umbrella."},
+              "cards": [{"prompt": "/rr-plan [[card]]", "slots": [{"name": "card", "description": "the next card"}]}]}]}
+            """.trimIndent(),
+        )
+        val stage = scenario?.stages?.single()
+
+        assertEquals(StageEach(name = "card", description = "The children of the umbrella."), stage?.each)
+        assertEquals(1, stage?.repeat)
+        assertEquals(false, stage?.untilDone)
+        assertEquals(emptyList(), stage?.cards?.single()?.slots)
+        // The item, not the input of the same name it would otherwise be mended into.
+        assertEquals("/rr-plan [[card]]", stage?.cards?.single()?.prompt)
+    }
+
+    @Test
+    fun `a list with a name no prompt can write is no list`() {
+        val scenario = written(
+            """{"name": "R", "stages": [{"title": "T", "each": {"name": "the card", "description": "d"}, "cards": [{"prompt": "do it"}]}]}""",
+        )
+
+        assertNull(scenario?.stages?.single()?.each)
+    }
 }

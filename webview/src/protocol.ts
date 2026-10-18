@@ -159,6 +159,49 @@ export interface ExtraUsage {
    * cap for the person - the only limit that seat has - and the ring drawn for it counts down to here.
    */
   resets?: string
+  /**
+   * Codex's own word on that cap (`spendControlReached`), absent when it did not say. Taken over the share
+   * both ways: the share is in whole percent, so a cap with a few cents left reads as 100%, and one the server
+   * calls reached may still read as 99% (see CodexUsage.Extra on the plugin's side).
+   */
+  reached?: boolean
+}
+
+/**
+ * A tab closed by hand that can be opened again - a row of "Recently closed" on the history screen, the latest
+ * first (see ClosedTabs.kt). What was in its field stays in the IDE until it is opened again.
+ */
+export interface ClosedTab {
+  /** What the row asks the IDE for (see reopenTab) - one per thing, however often it was closed. */
+  key: string
+  /** A conversation, a fork of one, or one of the panel's own tabs - the statistics, the scenarios, a run. */
+  kind: 'chat' | 'fork' | 'panel'
+  title: string
+  closedAt: number
+  /** The conversation it held, if one was born in it - so a row of something open again can be left out. */
+  conversationId?: string
+  /** For one of the panel's own tabs: its identifier on the strip (see isPanelTab in tabs.ts). */
+  id?: string
+}
+
+/**
+ * Where a tab that belongs to no conversation stands: how many groups were to its left, and which groups
+ * the strip held when that was decided (read by placeIn in tabs.ts). Here rather than there because it travels:
+ * the IDE keeps it for a closed tab of the panel's and hands it back untouched (see panelTabClosed, tabReopened).
+ *
+ * The snapshot is what makes the place survive the list changing underneath it, and a bare number does
+ * not: with the statistics standing second and the conversation before it closed, "second" now points
+ * past its former neighbour and the tab drifts to the right on its own. Standing instead right after the
+ * last of the neighbours it was put after, it stays where the hand left it - and a conversation opened
+ * afterwards, being nobody it knows, appears to its right.
+ *
+ * After the last of them, not "after as many groups as are left of them": a closed conversation opened
+ * again (see ClosedTabs.kt) comes back where it stood, which may be anywhere on the strip, and counted it
+ * would shift the tab one place left of its neighbour whenever it came back somewhere the tab never knew it.
+ */
+export interface TabPlace {
+  at: number
+  among: string[]
 }
 
 /** A past conversation: the person's first message serves as its title. */
@@ -383,6 +426,13 @@ export interface ModelInfo {
   /** Effective context windows after Codex's own safety margin. */
   standardContext?: number
   longContext?: number
+  /**
+   * Has fast mode - with Codex, a fast tier among the model's `serviceTiers` in `model/list` (see
+   * modelHasFastMode).
+   */
+  fast?: boolean
+  /** Codex's own line about that tier ("1.5x speed, increased usage"), in English as it writes it (see fastTierNote). */
+  fastDescription?: string
 }
 
 /**
@@ -409,11 +459,41 @@ export interface EditorRef {
 export interface QueuedMessage {
   id: string
   text: string
-  /** What the row shows beside the text - "3 refs". Empty when the message carried no attachments. */
-  attach: string
   /** How many images travel with it - the numbering of the next one carries on past them. */
   images: number
+  /**
+   * The pieces it was typed in (UserToken[]), for the row to draw chips rather than `@/long/path` and
+   * `[Image #3]` in the middle of the words. Cut down by the IDE for a row (see QueueRows.kt): no image
+   * bytes - the preview asks for them by the message's id - and long texts shortened. Absent for a message
+   * that came without pieces, and from an older IDE: the row falls back to the text.
+   */
+  tokens?: unknown
+  /** The quotes it was written under, each cut to what a row shows - drawn first, as the text began with them. */
+  quotes?: string[]
 }
+
+/**
+ * Where the bytes of a picture behind a chip are, when the page does not hold them (see previewImage).
+ *
+ * - `file` - a picture on disk: one picked in the IDE's dialog, or a pasted one the IDE wrote out (see
+ *   PastedFiles.kt). A relative path is the project's.
+ * - `queued` - the `image`-th pasted picture of a message waiting in the queue, out of the bytes the queue
+ *   keeps for sending it.
+ * - `said` - the `image`-th picture of a message already in the conversation, out of the message in the
+ *   tab's Codex thread (named by `uuid`: Codex's own id for a message read off the history, the panel's name
+ *   for one sent in this run - see ThreadPictures.kt) - a conversation opened from the history or restored
+ *   after a restart carries `[Image #2]` and no bytes.
+ */
+export type PreviewPlace =
+  | { kind: 'file'; path: string }
+  | { kind: 'queued'; sessionId: string; id: string; image: number }
+  | { kind: 'said'; sessionId: string; uuid: string; image: number }
+
+/**
+ * Where the picture a click opens is (see openPicture): any of the places a preview is read from, or the
+ * bytes the page holds itself - a pasted picture the IDE has not written out (an old IDE, a failed write).
+ */
+export type PicturePlace = PreviewPlace | { kind: 'bytes'; data: string }
 
 /**
  * A scenario: the round of work somebody repeats, written down once so the panel can walk it.
@@ -495,7 +575,21 @@ export interface ScenarioStage {
   repeat: number
   /** Whether `repeat` is a ceiling the head may stop short of, rather than an exact count. */
   untilDone: boolean
+  /**
+   * Set when the stage runs once for each item of a list rather than a number of times: the head gives the
+   * list as the stage begins, and the stage becomes one pass per item (see Stage.each). `repeat` and
+   * `untilDone` are not read while it is set. Absent, or null, from an IDE older than this kind of stage.
+   */
+  each?: ScenarioStageEach | null
   cards: ScenarioCard[]
+}
+
+/** The list a stage runs once per item of. */
+export interface ScenarioStageEach {
+  /** Written in the stage's prompts as [[name]] and filled by the panel, one item per pass. */
+  name: string
+  /** What the list is, in the person's words - what the head is told when it is asked for it. */
+  description: string
 }
 
 /**
@@ -769,7 +863,8 @@ export interface ScenarioRunStep {
   summary: string
   /** What the head said each time it sent this card back to work. */
   nudges: string[]
-  verdict: '' | 'done' | 'undone'
+  /** `later` is an item of a list the head put off until the rest of the list was done (see StageList.putOff). */
+  verdict: '' | 'done' | 'undone' | 'later'
   verdictReason: string
   handoff: string
   failure: string
@@ -783,6 +878,25 @@ export interface ScenarioRunStep {
   takeOver?: string
   /** Time the run stood still while this card was the one on the board - see ScenarioRun.rested. */
   rested?: number
+  /**
+   * The item of the list this pass is for, in a stage that runs once per item - and absent or null elsewhere,
+   * and in such a stage before its list was given: the pass then holds the place the list is asked for.
+   */
+  item?: ScenarioRunItem | null
+}
+
+/** One item of a stage's list, as the pass that is for it carries it (see RunItem). */
+export interface ScenarioRunItem {
+  /** What the screen calls it. */
+  label: string
+  /** What is written into the prompts for [[name]]. */
+  value: string
+  /** Its place in the list, counting from one - 0 on a stage whose list came back empty. */
+  index: number
+  /** How long the list is; 0 marks the skipped passes of a stage whose list came back empty. */
+  count: number
+  /** Why this pass is a second go at its item, in the head's words; empty for the first go. */
+  again: string
 }
 
 export interface ScenarioRunNote {
@@ -879,6 +993,12 @@ export interface ScenarioRoadmapStop {
   /** Its name, cut short. */
   title: string
 }
+
+/**
+ * Why the IDE said a message into a conversation itself (see CarryOns.Reason in the plugin): an account switch
+ * cut the turn short, a limit stopped it and has since let go, or a restart lost the agents in its background.
+ */
+export type CarryOnReason = 'accountSwitch' | 'limit' | 'restart'
 
 /**
  * An occasion to call the person with a sound. The shell knows exactly these names: each has a file of
@@ -993,6 +1113,11 @@ type ShellMessageBody =
          * setting - reads as on, which is the default (see ClaudePreferences.shareEditor).
          */
         shareEditor?: boolean
+        /**
+         * Whether the panel's text fields underline misspelled words. Unset - a plugin older than the
+         * setting - reads as on, which is what the browser does by itself (see CodexPreferences.spellcheck).
+         */
+        spellcheck?: boolean
       }
       /** The sound alert settings - they outlive an IDE restart. */
       sounds?: SoundSettings
@@ -1123,6 +1248,13 @@ type ShellMessageBody =
       reset?: boolean
       /** Whether the plan's limit is being passed for money right now - see ExtraUsage. */
       extra?: ExtraUsage
+      /**
+       * The backend's word on the plan's own usage (`ordinaryUsageAllowed` of the last whole answer): true -
+       * allowed, false - not. Null is said out loud when the IDE has no such word, or has taken a "yes" back
+       * since (see AccountUsage.Book.ordinary), because the message is merged field by field and a field left
+       * out keeps the old value. Absent on messages that are not the account's picture.
+       */
+      ordinaryUsage?: boolean | null
       /** The current model's context window size: with the large ones it is a million, not two hundred thousand. */
       contextWindow?: number
       /**
@@ -1175,7 +1307,16 @@ type ShellMessageBody =
    * them may have been the one to change it. The bytes of a queued photo stay in the IDE - a row needs to
    * know that there is one, not what is in it.
    */
-  | { type: 'queue'; sessionId: string; items: QueuedMessage[] }
+  | {
+      type: 'queue'
+      sessionId: string
+      items: QueuedMessage[]
+      /**
+       * Waiting for the person's next message rather than for the turn: the queue of a tab closed while it
+       * worked and opened again, whose turn the close killed (see SessionQueue.hold). Gone once anything is sent.
+       */
+      held?: boolean
+    }
   /**
    * A queued message taken out to be edited (see takeQueued), to whoever pressed the pencil and to nobody
    * else - it is going into one field.
@@ -1265,6 +1406,16 @@ type ShellMessageBody =
    */
   | { type: 'rewound'; sessionId: string; uuid: string; fromSeq?: number }
   /**
+   * What putting back a turn's files came to, file by file (see revertChanges) - or, with `restore`, bringing
+   * them back. Kept in the journal, so a reloaded panel, a second window and the phone show the same rows.
+   */
+  | { type: 'changesReverted'; sessionId: string; id: string; files: { path: string; outcome: RevertOutcome }[]; restore?: boolean }
+  /**
+   * A path this panel asked to open leads to no file - deleted since, or never there (see OpenInEditor). Said to
+   * the panel that pressed and nobody else, so the link can say it rather than doing nothing.
+   */
+  | { type: 'fileMissing'; path: string }
+  /**
    * The tabs as the shell keeps them. It is the shell that owns this list now: the interface makes the
    * identifiers up (a "+" has to answer instantly) but the order, the grouping and the names live on
    * the other side, where a second client can see them too.
@@ -1284,10 +1435,23 @@ type ShellMessageBody =
    * a draft it has not been handed yet.
    */
   | { type: 'drafts'; drafts: Record<string, { tokens?: unknown; quotes?: unknown }> }
+  /**
+   * The tabs that can be opened again, the latest first - on joining and on every change (see ClosedTab). To
+   * the desk alone: a phone cannot close a tab.
+   */
+  | { type: 'closedTabs'; tabs: ClosedTab[] }
+  /**
+   * A closed tab came back, to the window that asked (see reopenTab). A conversation's tab is on the strip by
+   * now - the list came first, and before this what was in its field - and is put on screen. One of the panel's
+   * own tabs only the page can open: which one, and where it stood.
+   */
+  | { type: 'tabReopened'; sessionId?: string; panel?: string; place?: TabPlace }
   /** Whether the tabs come back after a restart - told to every window when it is switched. */
   | { type: 'restoreTabs'; on: boolean }
   /** The same, for whether a message carries what the editor shows - changed in this or another window. */
   | { type: 'shareEditor'; on: boolean }
+  /** The same, for whether the text fields check spelling - changed in this or another window. */
+  | { type: 'spellcheck'; on: boolean }
   /**
    * The anonymous usage statistics' state on this machine: whether the question has been answered, and when
    * a report last went through (zero for never). Not to be confused with `usage` above, which is the
@@ -1407,6 +1571,11 @@ type ShellMessageBody =
       steering?: boolean
       /** What the editor showed when the message was sent, as the IDE read it - the line under the card. */
       editor?: EditorRef
+      /**
+       * The IDE said this itself rather than passing on somebody's message, and why - see UserItem.auto and
+       * CodexSessionHub.carryOn.
+       */
+      auto?: CarryOnReason
     }
   /**
    * A phone's message has arrived, said to that phone alone (see SessionCommands.takeOnce in the plugin).
@@ -1416,6 +1585,13 @@ type ShellMessageBody =
   | { type: 'promptReceived'; sessionId: string; id: string }
   | { type: 'askResolved'; sessionId: string; id: string; outcome: 'answered' | 'dismissed' | 'withdrawn' }
   | { type: 'status'; sessionId: string; state: AgentStatus }
+  /**
+   * When this tab goes on by itself, the IDE saying "carry on" into it (see CodexSessionHub.carryOn) - a limit
+   * refused its turn, and the work resumes once the window resets. No `until`: it no longer will (the wait was
+   * spent, cancelled, or somebody spoke). `guess`: the CLI did not say when the limit resets, and `until` is when
+   * the panel tries. Not `at`: that is the journal's stamp of when the message was written (see SessionMessages).
+   */
+  | { type: 'carryOnWait'; sessionId: string; until?: number; guess?: boolean }
   /**
    * The tab's name from the first message - not straight away: while the LLM thinks, the tab already
    * carries a heuristic title (see deriveSessionTitle), and this message merely replaces it with a more
@@ -1568,8 +1744,32 @@ type ShellMessageBody =
    * message says what is, not how the request went.
    */
   | { type: 'effort'; sessionId: string; effort: string }
-  /** The context window selected for this conversation. */
-  | { type: 'contextMode'; sessionId: string; mode: 'standard' | 'long' }
+  /**
+   * The context window selected for this conversation. With `born` it is the window the conversation is in, named
+   * at its birth, to a client joining, after a reset, for a tab not started yet - not a change of it, as `born`
+   * says of the model (see CodexSessionHub.sendContextMode).
+   */
+  | { type: 'contextMode'; sessionId: string; mode: 'standard' | 'long'; born?: boolean }
+  /**
+   * Whether this conversation asks for fast mode: on a change, at its birth, to a client joining, after a reset -
+   * the effort's moments, and live like it (see CodexSessionHub.changeFastMode). The ask and nothing more, and
+   * never sent for a conversation that asks nothing - Codex's own config decides there. Whether it is ON the
+   * stream says (`fast_mode_state`, see feed/fastMode.ts).
+   */
+  | { type: 'fastMode'; sessionId: string; on: boolean }
+  /**
+   * The answer to `/status` (see the `sessionInfo` request, and a phone's `/status` typed into a message): the tab's
+   * conversation id, absent until its first message, and the IDE's word on the terminal line (see SessionInfoItem) -
+   * `resume` only to this IDE's own panel, since it names the machine's paths.
+   */
+  | {
+      type: 'sessionInfo'
+      sessionId: string
+      conversationId?: string
+      resume?: string
+      account?: string
+      onDefault?: boolean
+    }
   /**
    * Which Claude account a conversation runs on - said at its birth, like the effort and the model.
    *
@@ -1675,8 +1875,38 @@ type ShellMessageBody =
    * one the request carried: several of them may be in flight at once.
    */
   | { type: 'clipboard'; id: string; text: string; html: string; image: string }
+  /**
+   * A paste shortcut the IDE caught before the browser saw it (Linux only, see PasteKeys.kt): paste from
+   * the IDE clipboard into the focused field. `letter` is what the key writes by itself, see isLeak.
+   */
+  | { type: 'pasteKeys'; letter: string }
+  /**
+   * One of the panel's own keys, pressed with the focus in the panel (see PanelKeys.kt). The IDE has the
+   * keyboard before the browser, so these arrive as commands rather than as key presses - and which tab
+   * is next, which one is working and what stands in the field is this page's to know.
+   */
+  | { type: 'panelKey'; command: PanelKeyCommand }
+  /**
+   * The keys those commands answer to right now, as Settings | Keymap binds them - sent when the page
+   * opens and again on every change to the keymap. A command with no key at all has an empty list.
+   */
+  | { type: 'panelKeys'; keys: Partial<Record<PanelKeyName, PanelKeyStroke[]>> }
   /** Where a pasted file was written - the answer to `savePastedFile`. */
   | { type: 'pastedFile'; id: string; path: string }
+  /**
+   * The answer to `previewImage`: the picture as a data URL, shrunk when it is large (a preview is a few
+   * hundred pixels across), or empty when there is nothing to read - a file swept or deleted, a message
+   * gone from the queue, a transcript without that line. `width` and `height` are the picture's own when what
+   * came is a smaller copy - the caption under the preview says how large the picture is, not its copy.
+   */
+  | { type: 'imagePreview'; id: string; data: string; width?: number; height?: number }
+  /**
+   * The answer to an `openPicture` that opened nothing - the picture is not where the chip said (a message gone
+   * from the queue, a file deleted, a transcript without that line) or could not be written out. Only the
+   * clicking panel hears it, and the preview over the chip says so (see imagePreviewLoad.ts): a click that does
+   * nothing is the one thing it may not do. A click that opened something is not answered.
+   */
+  | { type: 'pictureUnopened'; id: string }
   /** The answer to mcpList - and to mcpAdd/mcpRemove, so that the list refreshes at once. */
   /**
    * Both shelves and the runs that came of them (see ScenarioDesk).
@@ -2125,6 +2355,19 @@ export interface StatisticsData {
    * and that is the truth about a day with two agents running - not a figure that disagrees with itself.
    */
   days: StatisticsDay[]
+  /**
+   * Tokens by day: "2026-10-17" -> its 24 hours, midnight first. Read out of Codex's own thread files
+   * rather than off the turns above, so it is every Codex conversation on the machine - subagents and
+   * scenario runs included, which a turn's own figures leave out (see TranscriptTokens). Absent from an
+   * older IDE; a day without a token is not listed.
+   */
+  tokens?: Record<string, number[]>
+  /**
+   * The transcripts are being read right now. The first reading goes through every transcript there is
+   * and takes a while: the tokens card says it is counting rather than "nothing spent", and the tab asks
+   * again every couple of seconds until it is done.
+   */
+  tokensReading?: boolean
   achievements: AchievementState[]
 }
 
@@ -2179,6 +2422,11 @@ export type WebviewMessage =
        * beside the text (see EditorContext.kt). Honoured from this IDE's own panel only.
        */
       editor?: boolean
+      /**
+       * ...although the setting is off: the chip's "Send with this message only" (see editorGoes). Without it the
+       * IDE holds `editor` to the setting, which a page a version behind - or a moment behind - may not know.
+       */
+      editorOnce?: boolean
     }
   /**
    * The same message, to be said when the agent comes free rather than now.
@@ -2194,8 +2442,6 @@ export type WebviewMessage =
       /** Made up by the sender, and the name it takes the message back out of the queue by. */
       id: string
       text: string
-      /** What the row shows beside the text - "3 refs". Worked out here; the IDE only carries it. */
-      attach?: string
       tokens?: unknown
       quotes?: string[]
       images?: { mediaType: string; data: string }[]
@@ -2206,9 +2452,16 @@ export type WebviewMessage =
       before?: string
       /** The same as a prompt's - read when Queue is pressed, not when the message fires. */
       editor?: boolean
+      /** The same as a prompt's. */
+      editorOnce?: boolean
     }
   /** The cross on a queued message: it is not going to be said after all. */
   | { type: 'unqueuePrompt'; sessionId: string; id: string }
+  /**
+   * "Don't carry on" under a limit's wait (see carryOnWait): the tab is left as it stands, and the IDE says
+   * so to every screen by sending the wait again without a moment.
+   */
+  | { type: 'cancelCarryOn'; sessionId: string }
   /**
    * The pencil on a queued message: take it out and hand it back to this window's field, whole (see
    * queuedTaken). Out of the queue while it is being edited, so the end of the turn cannot fire it half-way.
@@ -2244,6 +2497,13 @@ export type WebviewMessage =
    * one sent since from somewhere else stops the rewind instead of being dropped unread.
    */
   | { type: 'rewind'; sessionId: string; uuid: string; lastSeen?: string; conversation: boolean; files: boolean }
+  /**
+   * Put back what a turn changed in these files - a row's button on the list of changed files at the turn's
+   * end, or the list's "revert all" (see ChangesRow and ChangeRevert in the IDE). With `restore`, bring the
+   * changes back after a revert. `id` names the list, and the answer comes back to everyone as
+   * `changesReverted`.
+   */
+  | { type: 'revertChanges'; sessionId: string; id: string; files: { path: string; edits: FileEdit[] }[]; restore?: boolean }
   | { type: 'stop'; sessionId: string }
   /** The ordinary Stop went unconfirmed - the user asked outright to kill the process. */
   | { type: 'kill'; sessionId: string }
@@ -2287,6 +2547,17 @@ export type WebviewMessage =
       mode?: string
     }
   | { type: 'closeSession'; sessionId: string }
+  /**
+   * Open a closed tab again: the one closed last, or the row named by `key`. `open` is the panel's own tabs
+   * standing on the strip now - the IDE cannot know them, and one of them closed and opened again from the
+   * menu since is skipped rather than opened twice (see ClosedTabs.take).
+   */
+  | { type: 'reopenTab'; open: string[]; key?: string }
+  /**
+   * One of the panel's own tabs was closed - the statistics, the scenarios, a run being watched - so that it
+   * takes its turn among the closed tabs. Its name and place are carried back to the page as they are.
+   */
+  | { type: 'panelTabClosed'; id: string; title: string; place: TabPlace }
   /**
    * The name the interface guessed from the first message (see deriveSessionTitle). The guessing stays
    * here rather than moving to the shell: the rule already exists here, both clients have to use the
@@ -2430,6 +2701,8 @@ export type WebviewMessage =
   | { type: 'setEffort'; sessionId: string; effort: string }
   | { type: 'setContextMode'; sessionId: string; mode: 'standard' | 'long' }
   | { type: 'refreshModels'; sessionId: string }
+  /** Fast mode for this conversation alone - no setting is written, and no next tab starts with it. */
+  | { type: 'setFastMode'; sessionId: string; on: boolean }
   /** Where the input field sits - also a choice that outlives an IDE restart. */
   | { type: 'setComposerLayout'; layout: string }
   /** From how many lines a paste folds into a chip; '0' never folds, an empty string restores the default. */
@@ -2472,6 +2745,8 @@ export type WebviewMessage =
   | { type: 'setRestoreTabs'; on: boolean }
   /** Whether a message sent from the panel carries what the editor shows (see EditorContext.kt). */
   | { type: 'setShareEditor'; on: boolean }
+  /** Whether the panel's text fields check spelling - machine-wide (see CodexPreferences.spellcheck). */
+  | { type: 'setSpellcheck'; on: boolean }
   /** Which indicators around the input field are switched off - the whole list (see indicators.ts). */
   | { type: 'setHiddenIndicators'; hidden: string[] }
   /**
@@ -2490,6 +2765,8 @@ export type WebviewMessage =
   | { type: 'setLanguage'; language: string }
   | { type: 'refreshUsage' }
   | { type: 'openDevTools' }
+  /** Settings | Keymap, filtered down to the panel's own actions - the cheat sheet's "change them". */
+  | { type: 'openKeymap' }
   /**
    * Which cursor the CSS under the mouse asks for.
    *
@@ -2541,6 +2818,22 @@ export type WebviewMessage =
    */
   | { type: 'savePastedFile'; id: string; name: string; mediaType: string; data: string }
   /**
+   * The bytes of a picture an attachment chip stands for, to show it under the pointer (see
+   * imagePreview.ts). Asked only where the page does not hold them itself: a file picked in the IDE's
+   * dialog, a queued message (the queue reaches the panel without bytes), a message read back off the
+   * transcript. The answer is `imagePreview` with the same id. Machine-only: it reads this machine's disk,
+   * and a phone has no hover to show it on.
+   */
+  | { type: 'previewImage'; id: string; place: PreviewPlace }
+  /**
+   * A click on a picture's chip, wherever the picture is (see chipOpening): a file opens as itself, the way
+   * `openFile` would open it; a picture with no file of its own - read back off the transcript, waiting in the
+   * queue, bytes the page holds - is kept as a file named by its content first (see PastedFiles.keep), so a
+   * second click opens the same one. Opening nothing is answered with `pictureUnopened` and the same id.
+   * Machine-only, as `openFile` is.
+   */
+  | { type: 'openPicture'; id: string; place: PicturePlace }
+  /**
    * The clipboard through the shell: the embedded browser's own does not meet the IDE's (see
    * clipboard.ts). Reading comes with an answer, hence its `id`; writing needs none.
    */
@@ -2555,6 +2848,14 @@ export type WebviewMessage =
    * whole feed could fail to draw itself with nothing anywhere to say why.
    */
   | { type: 'channelLoss'; reason: 'order' | 'parse'; expected: number; got: number }
+  /**
+   * The conversation on screen, for the right-click menu the browser draws to offer its id - with the words for
+   * the entry, since the IDE has no dictionary of the panel's (see PanelContextMenu.kt). Null where the tab has
+   * no conversation yet, or is not a conversation's.
+   */
+  | { type: 'sessionMenu'; conversationId: string | null; label: string }
+  /** `/status` - what the IDE knows of this tab's conversation, answered by a `sessionInfo` of its own. */
+  | { type: 'sessionInfo'; sessionId: string }
   | { type: 'history' }
   /** A page further back than the journal's own catch-up reaches - see ShellMessageBody's historyPage. */
   | { type: 'historyPage'; sessionId: string; before?: string }
@@ -3020,7 +3321,22 @@ export interface VoiceHotkeyCap {
 }
 
 /** The keys the panel draws rather than spells: the two a Mac prints, the Windows key, and a mouse. */
-export type VoiceHotkeyGlyph = '' | 'option' | 'command' | 'win' | 'mouse'
+export type VoiceHotkeyGlyph = '' | 'option' | 'command' | 'win' | 'mouse' | 'left' | 'right' | 'up' | 'down'
+
+/**
+ * The panel's own keys (see PanelKeys.kt): the IDE's actions, named the way the page is told about them.
+ * The ids are the wire's - the Kotlin enum spells them the same.
+ */
+export type PanelKeyCommand = 'nextTab' | 'previousTab' | 'newTab' | 'closeTab' | 'reopenTab' | 'queue'
+
+/**
+ * Every key the IDE names for the page: the commands above, and the IDE's own action that brings the panel
+ * up from anywhere - not a command, nothing for the page to do, but the way in that the cheat sheet names.
+ */
+export type PanelKeyName = PanelKeyCommand | 'openPanel'
+
+/** One keystroke of a panel key, key by key - the same caps a voice binding is drawn with. */
+export type PanelKeyStroke = VoiceHotkeyCap[]
 
 /** A language nova-3 will listen in. Both names travel untranslated - a language names itself. */
 export interface VoiceLanguage {
@@ -3142,6 +3458,10 @@ export type WorkflowProgress =
 export interface AgentSystemEvent {
   type: 'system'
   subtype: string
+  /** Whether this conversation runs on a fast tier, on `init` - what Codex says, told by the IDE (see feed/fastMode.ts). */
+  fast_mode_state?: 'on' | 'off'
+  /** Why it does not serve an ask of this conversation, or that it is too early to tell (see fastReasonText, PENDING). */
+  fast_mode_disabled_reason?: string
   /**
    * The mark Claude Code stamps every line of its stream with. Only the lines the transcript keeps can
    * be asked for a page older than themselves, and a system event is generally not one of them - which
@@ -3316,14 +3636,70 @@ export interface AgentUserEvent {
   timestamp?: string
   /**
    * What the tool handed back, in the shape it handed it back - the transcript keeps it beside the text
-   * form of the same result, and only a saved conversation has it.
+   * form of the same result. A live stream carries the same thing under its own name, [tool_use_result].
    *
-   * The panel reads one thing out of it: the options a question was closed with (see addReplayedAnswers
-   * in build.ts). The text form of that same result is an English sentence the CLI composes ("Your
-   * questions have been answered: …"), and reading the pairs back out of a sentence would be a parser
-   * for wording nobody promised to keep.
+   * The panel reads two things out of it. The options a question was closed with (see addReplayedAnswers
+   * in build.ts): the text form of that result is an English sentence the CLI composes ("Your questions
+   * have been answered: …"), and reading the pairs back out of a sentence would be a parser for wording
+   * nobody promised to keep. And what an edit changed (see feed/changes.ts): the diff the CLI applied and
+   * whether a file was created - the text form says only that the file "has been updated".
    */
-  toolUseResult?: { answers?: Record<string, string> }
+  toolUseResult?: ToolUseResult
+  /** [toolUseResult] as the live stream names it - checked on 2.1.293, for Edit and both kinds of Write. */
+  tool_use_result?: ToolUseResult
+}
+
+/**
+ * One change a turn made to a file, as the IDE needs it to put the change back: the text a Write created the
+ * file with, the hunks the CLI applied (starts 1-based, lines marked `+`, `-` or ` `, a `\ No newline at end of
+ * file` note kept where it stood), the text a patch deleted the file with, or the path a patch moved it from - the
+ * file stands at the row's path after the move (see ChangeRevert in the IDE).
+ */
+export type FileEdit =
+  | { kind: 'create'; content: string }
+  | { kind: 'patch'; hunks: { oldStart: number; newStart: number; lines: string[] }[] }
+  | { kind: 'delete'; content: string }
+  | { kind: 'move'; from: string }
+
+/**
+ * What putting a file back - or bringing it back after that - came to: done either way, refused because the
+ * lines were changed since, refused because the file is gone, or the IDE could not write it.
+ */
+export type RevertOutcome = 'reverted' | 'restored' | 'changed' | 'missing' | 'failed'
+
+/**
+ * The structured half of a tool's result - only the fields the panel reads.
+ *
+ * Kept loose on purpose: it is a different shape for every tool, the CLI adds to it as it pleases, and
+ * whatever a field turns out to hold is checked where it is read.
+ */
+export interface ToolUseResult {
+  answers?: Record<string, string>
+  /** An edit's and a write's file. */
+  filePath?: unknown
+  /**
+   * `create` for a file a Write brought into being, `update` for one it wrote over - and, for a Codex patch,
+   * `delete` for a file it deleted (see CodexDialect.fileHalf in the plugin).
+   */
+  type?: unknown
+  /** The written file's text, for a Write - and for a subagent's created or deleted file, whose call is no card here. */
+  content?: unknown
+  /** Where a file a Codex patch moved came from; [filePath] is where it went. */
+  movedFrom?: unknown
+  /**
+   * The diff a subagent's Codex patch applied. A call of this feed carries it in its own input instead (see
+   * CodexDialect.editInput), and it is not repeated here.
+   */
+  unified_diff?: unknown
+  /** The hunks the CLI applied, each with its lines marked `+`, `-` or ` `. */
+  structuredPatch?: unknown
+  /** The file's text before the edit - left out (empty) by the CLI for a big file, with the diff. */
+  originalFile?: unknown
+  /**
+   * The counts of a diff the IDE worked out for a big edit the CLI reported without one (see UndiffedEdits) -
+   * all a phone is sent of it; the panel at the desk has the hunks themselves in [structuredPatch].
+   */
+  accCounts?: unknown
 }
 
 export interface AgentUsage {
@@ -3364,6 +3740,14 @@ export interface AgentResultEvent {
   total_cost_usd?: number
   session_id?: string
   usage?: AgentResultUsage
+  /**
+   * Every model the conversation has used so far, by the CLI's model id, with the window the CLI itself
+   * gives it - read for that window alone (see contextWindows in feed/build).
+   */
+  modelUsage?: Record<string, { contextWindow?: number }>
+  /** The same two as on `system/init`, at the turn's end - see feed/fastMode.ts. */
+  fast_mode_state?: 'on' | 'off'
+  fast_mode_disabled_reason?: string
 }
 
 /**
@@ -3419,9 +3803,22 @@ export interface ForkSeamEvent {
   cut: boolean
 }
 
+/**
+ * What a turn really did to the files whose diffs do not say it - a line of the panel's own, sent by the IDE right
+ * before the turn's result (see TurnFiles.settle in the plugin). A formatter run after each edit, the agent's
+ * own script, the CLI itself adding to a memory file: each leaves a file other than its edits say. The figures and
+ * the edits are the file's whole change in the turn, from what the turn found to what it left. The phone gets the
+ * figures alone when the edits would not fit its frame.
+ */
+export interface FilesSettledEvent {
+  type: 'files_settled'
+  files: { path: string; added: number; removed: number; edits?: FileEdit[] }[]
+}
+
 export type AgentEvent =
   | AgentSystemEvent
   | ForkSeamEvent
+  | FilesSettledEvent
   | AgentAssistantEvent
   | AgentUserEvent
   | AgentResultEvent

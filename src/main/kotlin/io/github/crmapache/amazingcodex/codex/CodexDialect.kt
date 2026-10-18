@@ -48,6 +48,7 @@ internal object CodexDialect {
         cwd: String?,
         permissionMode: String?,
         slashCommands: List<String>,
+        fastMode: Pair<String, String?>? = null,
     ): String = buildJsonObject {
         put("type", "system")
         put("subtype", "init")
@@ -55,9 +56,21 @@ internal object CodexDialect {
         if (model.isNotEmpty()) put("model", model)
         cwd?.takeIf { it.isNotEmpty() }?.let { put("cwd", it) }
         permissionMode?.let { put("permissionMode", it) }
+        fastMode(fastMode)
         putJsonArray("slash_commands") { slashCommands.forEach { add(JsonPrimitive(it)) } }
         putJsonArray("tools") {}
     }.toString()
+
+    /**
+     * Fast mode in Claude Code's words, on `system/init` and `result` (`fast_mode_state`, and
+     * `fast_mode_disabled_reason` when it does not serve) - what the panel's fast mark reads (see feed/fastMode.ts).
+     * Codex's word for it is the service tier; CodexSession says which one the thread runs on.
+     */
+    private fun kotlinx.serialization.json.JsonObjectBuilder.fastMode(report: Pair<String, String?>?) {
+        report ?: return
+        put("fast_mode_state", report.first)
+        report.second?.let { put("fast_mode_disabled_reason", it) }
+    }
 
     fun conversationReset(newThreadId: String): String = buildJsonObject {
         put("type", "conversation_reset")
@@ -188,14 +201,23 @@ internal object CodexDialect {
      * The results of tool calls, as the person's turn of the conversation carries them. [toolUseResult] is
      * the call's own structured answer beside them - for a question, the options picked by question
      * (`{"answers": {question: answer}}`), which is what draws the answer under a question in a past
-     * conversation (see feed/build.ts, addReplayedAnswers).
+     * conversation (see feed/build.ts, addReplayedAnswers); for a patch, the file and what became of it (see
+     * [fileHalf]). [parentToolUseId] names the subagent card a subagent's result belongs under (see
+     * CodexSession.subagentNotification) - the panel's word for "not this feed's own call".
      */
-    fun toolResults(results: List<ToolResult>, uuid: String, toolUseResult: JsonObject? = null, timestamp: String? = null): String? {
+    fun toolResults(
+        results: List<ToolResult>,
+        uuid: String,
+        toolUseResult: JsonObject? = null,
+        timestamp: String? = null,
+        parentToolUseId: String? = null,
+    ): String? {
         if (results.isEmpty()) return null
 
         return buildJsonObject {
             put("type", "user")
             put("uuid", uuid)
+            parentToolUseId?.let { put("parent_tool_use_id", it) }
             // When it was answered, for a replayed answer the feed shows as the person's line.
             timestamp?.let { put("timestamp", it) }
             toolUseResult?.let { put("toolUseResult", it) }
@@ -233,7 +255,7 @@ internal object CodexDialect {
             putJsonArray("content") {
                 addJsonObject {
                     put("type", "text")
-                    put("text", text + (1..images).joinToString("") { " [Image #$it]" })
+                    put("text", text + missingCaptions(text, images))
                 }
                 ideContext?.let(IdeContextPrompt::asPanelNote)?.let { note ->
                     addJsonObject {
@@ -244,6 +266,28 @@ internal object CodexDialect {
             }
         }
     }.toString()
+
+    /**
+     * The captions of the [images] pictures a message's [text] does not name itself - for the chips the replay draws
+     * them as (see replayedMessage in the webview).
+     *
+     * The panel writes `[Image #N]` into the words where each picture stood (see tokensText in feed/tokens.ts), and
+     * Codex keeps the words as they were sent, so a message of the panel's names its pictures already. Appended again,
+     * every pasted picture came back from the history as two chips, the second one naming a picture the message never
+     * had - its preview had nothing to show (see ThreadPictures: a chip is its place among the message's pictures). A
+     * message that names fewer, Codex's own terminal's or one with a picture alone, gets the rest at the end, numbered
+     * on from the last one it names.
+     */
+    internal fun missingCaptions(text: String, images: Int): String {
+        val named = CAPTION.findAll(text).map { it.groupValues[1].toIntOrNull() ?: 0 }.toList()
+        val missing = images - named.size
+        if (missing <= 0) return ""
+        val from = (named.maxOrNull() ?: 0) + 1
+        return (from until from + missing).joinToString("") { " [Image #$it]" }
+    }
+
+    /** A picture's caption as the panel writes it into a message - see [missingCaptions]. */
+    private val CAPTION = Regex("""\[Image #(\d+)]""")
 
     /**
      * The end of a turn. [apiErrorStatus] is the HTTP status a failed turn's request came back with, when
@@ -257,11 +301,13 @@ internal object CodexDialect {
         resultText: String,
         usage: JsonObject?,
         apiErrorStatus: Int? = null,
+        fastMode: Pair<String, String?>? = null,
     ): String = buildJsonObject {
         put("type", "result")
         put("subtype", if (isError) "error_during_execution" else "success")
         put("is_error", isError)
         apiErrorStatus?.let { put("api_error_status", it) }
+        fastMode(fastMode)
         put("duration_ms", durationMs)
         put("num_turns", 1)
         put("result", resultText)
@@ -453,6 +499,72 @@ internal object CodexDialect {
             "imageGeneration" -> listOf(ToolResult(id, AppServer.text(item["savedPath"]), status == "failed"))
             "collabAgentToolCall" -> listOf(agentResult(id, item))
             else -> emptyList()
+        }
+    }
+
+    /**
+     * How a finished tool item is said, as the lines of the person's side - [toolResults] made into events, the
+     * output cut to [outputLimit].
+     *
+     * A patch is said one event per file, each with its file's structured half (see [fileHalf]) - the shape the
+     * panel's list of a turn's changed files reads (feed/changes.ts): that half belongs to an event rather than to
+     * a block, so it is trusted only where an event holds one result. Said as one event for the whole patch, a
+     * patch of three files counted from the calls alone, and no row of it could be put back.
+     *
+     * [parentToolUseId] marks the results of a subagent's item (see CodexSession.subagentNotification): its call is
+     * no card of this feed, so the structured half carries the change itself as well - the one copy of it there is.
+     */
+    fun resultLines(item: JsonObject, outputLimit: Int = OUTPUT_LIMIT, parentToolUseId: String? = null): List<String> {
+        val id = AppServer.text(item["id"])
+        val results = toolResults(item)
+        if (AppServer.text(item["type"]) != "fileChange") {
+            // Cut to [OUTPUT_LIMIT] already (see [toolResults]); only a tighter budget - a page of history - cuts again.
+            val clipped = if (outputLimit >= OUTPUT_LIMIT) results else results.map { it.copy(content = clip(it.content, outputLimit)) }
+            return listOfNotNull(toolResults(clipped, uuid = "$id-result", parentToolUseId = parentToolUseId))
+        }
+
+        val changes = (item["changes"] as? JsonArray)?.mapNotNull { it as? JsonObject }.orEmpty()
+        return results.mapIndexedNotNull { index, result ->
+            // A patch that did not apply changed nothing, and its half would only say it did.
+            val half = changes.getOrNull(index)?.takeIf { !result.isError }?.let { fileHalf(it, withChange = parentToolUseId != null) }
+            toolResults(listOf(result), uuid = "${result.id}-result", toolUseResult = half, parentToolUseId = parentToolUseId)
+        }
+    }
+
+    /**
+     * One file of an applied patch as the structured half of its result - what the panel's list of changed files
+     * reads (see changeOf in feed/changes.ts): the file where it stands now, whether the patch created, updated or
+     * deleted it, and where a moved file came from.
+     *
+     * The change itself is not repeated here for a card of this feed: the panel takes the hunks from the
+     * `unified_diff` the EDIT card already carries (see [editInput]), and a created or deleted file's text from the
+     * card's own arguments. A third copy would ride every journal, every phone frame and every page of history -
+     * a hundred and twenty-eight kilobytes is the phone's whole page. [withChange] is for a subagent's result,
+     * whose call is no card here: the diff (`unified_diff`) or the text (`content`) then rides with it, once.
+     */
+    fun fileHalf(change: JsonObject, withChange: Boolean = false): JsonObject {
+        val path = AppServer.text(change["path"])
+        val kind = change["kind"] as? JsonObject
+        val type = kind?.let { AppServer.text(it["type"]) }.orEmpty()
+        val movedTo = kind?.let { AppServer.text(it["move_path"]) }.orEmpty()
+        val diff = AppServer.text(change["diff"])
+        return buildJsonObject {
+            put("filePath", movedTo.ifEmpty { path })
+            put(
+                "type",
+                when (type) {
+                    "add" -> "create"
+                    "delete" -> "delete"
+                    else -> "update"
+                },
+            )
+            if (movedTo.isNotEmpty() && movedTo != path) put("movedFrom", path)
+            if (withChange) {
+                when (type) {
+                    "add", "delete" -> put("content", diff)
+                    else -> put("unified_diff", diff)
+                }
+            }
         }
     }
 

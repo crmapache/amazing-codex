@@ -169,6 +169,32 @@ class SearchIndexTest {
         assertEquals("brand new", index.titleOf(a))
     }
 
+    /*
+     * A fork made on Codex 0.163 holds nothing it inherited: its file starts with a base into its source's (see
+     * CodexRollout). What it inherited is on the fork's screen above the seam, so its own chat finds it - as it did
+     * when Codex copied it into the fork's file - and what the source said after the fork is not the fork's.
+     */
+    @Test
+    fun `a fork finds what it inherited from its source in its own chat`() {
+        val sessions = File(home, "sessions")
+        val day = File(sessions, "2026/10/17").apply { mkdirs() }
+        val before = meta(a) + said("user", "u1", "the meters do not shrink")
+        val source = File(day, "rollout-2026-10-17T09-12-00-$a.jsonl").apply { writeText(before + said("user", "u2", "said after the fork")) }
+        val fork = File(day, "rollout-2026-10-17T10-00-00-$b.jsonl").apply {
+            writeText(
+                """{"type":"session_meta","payload":{"id":"$b","cwd":"/work/project","forked_from_id":"$a",""" +
+                    """"history_base":{"thread_id":"$a","end_ordinal_exclusive":2,"end_byte_offset":${before.toByteArray().size}}}}""" + "\n" +
+                    said("user", "u3", "and in the fork the meters still do not shrink"),
+            )
+        }
+
+        val index = SearchIndex(store, transcripts = { listOf(source, fork) })
+        index.refresh(force = true)
+
+        assertEquals(listOf("u1", "u3"), index.search("meters", conversation = b, onlyThatChat = true, limit = 10).hits.map { it.message.uuid }.sorted())
+        assertTrue(index.search("after the fork", conversation = b, onlyThatChat = true, limit = 10).hits.isEmpty())
+    }
+
     /** A name read on the very refresh that first reads the thread - not wiped by that reading. */
     @Test
     fun `Codex's name for a thread is its title from the first refresh`() {

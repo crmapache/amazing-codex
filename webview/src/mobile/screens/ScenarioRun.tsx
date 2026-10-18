@@ -13,6 +13,7 @@ import { roadOf } from '../../scenarios/roadmap'
 import { cutCardOf, finished, resumable, runWorked, stepWorked, timelineOf } from '../../scenarios/timeline'
 import { dayAndHour } from '../../scenarios/moments'
 import { limitText, moveText } from '../../scenarios/moves'
+import { itemLabel, stageSize, stepPlace, type StepPlace } from '../../scenarios/places'
 import { outcomeText } from '../scenarios'
 import { Back } from './Back'
 import { Composer, type OutgoingPrompt } from './Composer'
@@ -42,7 +43,7 @@ interface ScenarioRunProps {
    * the relay and may be newer than the plugin behind it, which would refuse the message as one it has never
    * heard of.
    */
-  tell: { facts: ProjectFacts; photos: PhotoRoad; connected: boolean; voice: PhoneDictation } | null
+  tell: { facts: ProjectFacts; photos: PhotoRoad; connected: boolean; voice: PhoneDictation; dictates?: boolean } | null
   /** Words for the main thread of the run while it goes, photos included - see `scenarioTell`. */
   onTell: (prompt: OutgoingPrompt) => void
   onBack: () => void
@@ -240,11 +241,21 @@ export const ScenarioRun = ({
                 >
                   <span className={m.stageRowTitle}>{row.title || t.scenarios.stage}</span>
                   <span className={m.stageRowVerdict}>
-                    {row.standing === 'done'
-                      ? t.scenarios.run.stageDone(formatDuration(row.took))
-                      : row.standing === 'here'
-                        ? t.scenarios.run.stageHere
-                        : t.scenarios.run.stageNotReached}
+                    {[
+                      // How long its list is, for a stage over a list - the one size the row of passes under
+                      // it does not say by itself while the list is still being worked through.
+                      row.items === undefined ? '' : stageSize(t, row),
+                      // "Empty list" already says how it ended, and it took no time to say it.
+                      row.items === 0
+                        ? ''
+                        : row.standing === 'done'
+                          ? t.scenarios.run.stageDone(formatDuration(row.took))
+                          : row.standing === 'here'
+                            ? t.scenarios.run.stageHere
+                            : t.scenarios.run.stageNotReached,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
                   </span>
                 </div>
               )
@@ -293,8 +304,7 @@ export const ScenarioRun = ({
                 key={row.key}
                 anchor={row.key}
                 step={row.step}
-                passes={row.passes}
-                untilDone={row.untilDone}
+                place={row}
                 worked={stepWorked(row.step, now, run)}
                 onOpen={() => onOpenStep(row.step)}
               />
@@ -379,6 +389,7 @@ export const ScenarioRun = ({
             onStop={ignore}
             onRun={ignore}
             voice={tell.voice}
+            dictates={tell.dictates}
             forConversation={false}
             placeholder={t.scenarios.run.tellPlaceholder}
           />
@@ -481,17 +492,15 @@ export const ScenarioRun = ({
 const StepRow = ({
   anchor,
   step,
-  passes,
-  untilDone,
+  place,
   worked,
   onOpen,
 }: {
   /** Its key in the timeline, for holding the reading place by (see useRunPlace). */
   anchor: string
   step: ScenarioRunStep
-  /** How many passes its stage was given. One means the row has no loop to place itself in. */
-  passes: number
-  untilDone: boolean
+  /** How its stage goes round - a number of times, or once per item of a list - which places the row in it. */
+  place: StepPlace
   /** How long it has genuinely worked so far (see stepWorked) - it stands still while the run does. */
   worked: number
   onOpen: () => void
@@ -508,6 +517,8 @@ const StepRow = ({
    */
   const line = step.summary || step.prompt
   const slots = Object.entries(step.slots).filter(([, value]) => value.length > 0)
+  const where = stepPlace(t, step, place)
+  const item = itemLabel(step)
 
   // Only where there is one to open: a step that never ran has no conversation behind it, and a card that
   // looks pressable and answers nothing is worse than one that does not.
@@ -533,11 +544,7 @@ const StepRow = ({
           {/* Which pass this is travels with the row rather than standing in a heading over a block of
               them: six rows of a stage that goes round three times are six goes at two cards, and the
               one thing that tells them apart belongs on the row it tells apart. */}
-          {passes > 1 && (
-            <span className={m.stepPass}>
-              {untilDone ? t.scenarios.run.passOfUpTo(step.pass, passes) : t.scenarios.run.passOf(step.pass, passes)}
-            </span>
-          )}
+          {where ? <span className={m.stepPass}>{where}</span> : null}
 
           {elapsed ? <span className={`${m.stepTime} ${going ? m.stepTimeGoing : ''}`}>{elapsed}</span> : null}
 
@@ -551,6 +558,9 @@ const StepRow = ({
           ) : null}
         </span>
 
+        {/* The item of a pass of a list, by name - what tells seven rows of one card apart. */}
+        {item ? <span className={m.stepItem}>{item}</span> : null}
+
         {slots.length > 0 && (
           <span className={m.stepSlots}>
             {slots.map(([name, value]) => (
@@ -563,7 +573,15 @@ const StepRow = ({
 
         {/* The head's reason is markdown like everything it writes; an error is the engine's own words. */}
         {(step.verdictReason || step.error) && (
-          <span className={`${m.stepVerdict} ${step.verdict === 'undone' || step.error ? m.stepVerdictBad : ''}`}>
+          <span
+            className={[
+              m.stepVerdict,
+              step.verdict === 'undone' || step.error ? m.stepVerdictBad : '',
+              step.verdict === 'later' ? m.stepVerdictLater : '',
+            ]
+              .filter(Boolean)
+              .join(' ')}
+          >
             {step.verdictReason ? <Glance text={step.verdictReason} /> : step.error}
           </span>
         )}
@@ -571,6 +589,8 @@ const StepRow = ({
         {step.nudges.length > 0 && step.state === 'done' && (
           <span className={m.stepLine}>{t.scenarios.run.sentBack(step.nudges.length)}</span>
         )}
+
+        {step.verdict === 'later' ? <span className={m.stepLine}>{t.scenarios.run.putOff}</span> : null}
 
         {step.takeOver ? <span className={m.stepLine}>{t.scenarios.run.takenOver(step.takeOver)}</span> : null}
       </span>

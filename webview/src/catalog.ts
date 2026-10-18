@@ -83,12 +83,32 @@ export const sameModel = (one: string, other: string): boolean => modelKey(one) 
 
 /**
  * What a pick has to come true as: the model itself, or nothing for "default", where there is no telling
- * in advance which model Codex will run (see noteStreamModel, which asks this).
+ * in advance which model Codex will run (see carriesPick, which asks this).
  */
 export const modelFamily = (model: string): string => (modelKey(model) === DEFAULT_MODEL ? '' : modelKey(model))
 
+/**
+ * Does the signature under an answer carry this pick - yes, no, or there is no telling?
+ *
+ * The one yardstick a pick is judged by, both when deciding whether to wait for it and when deciding
+ * whether it has arrived (see expectingOwnSwap and arrivedAsPicked in feed/build.ts). Codex names models
+ * by exact ids and signs its answers with the id that was picked, so a pick is measured by the model itself
+ * (sameModel) - by what the catalogue expands it into wherever the catalogue knows ([resolved], see
+ * expandModel), by its own name otherwise. There are no families and generations to fall back on: a model
+ * of the same line but another version is another model.
+ *
+ * No answer where the pick cannot be read: "default", which the catalogue has no entry for, because there
+ * is no telling in advance which model Codex will run on a tab left without one.
+ */
+export const carriesPick = (pick: string, signature: string, resolved = ''): boolean | undefined => {
+  const measure = resolved || pick
+  if (!modelFamily(measure)) return undefined
+
+  return sameModel(measure, signature)
+}
+
 /** A choice turned into the identifier behind it, when the catalogue knows one; otherwise as it is. */
-const expandModel = (models: ModelInfo[] | null, model: string): string =>
+export const expandModel = (models: ModelInfo[] | null, model: string): string =>
   models?.find((option) => option.value === model)?.resolved || model
 
 /**
@@ -292,6 +312,17 @@ export const contextLimits = (models: ModelInfo[] | null, model: string): Contex
   return { standard: known.standardContext, long: known.longContext }
 }
 
+/**
+ * The window [model] has in [mode], by the catalogue - the number on the CTX chip and the one the context gauge
+ * divides by until Codex has counted (see contextOf in feed/build.ts). One function for both, so that the chip and
+ * the gauge cannot name two windows for one conversation: the gauge guessed 258,400 for every GPT while the chip
+ * named 475,000 for gpt-6.1-sol and 828,400 for Long. Undefined where the catalogue does not know the model.
+ */
+export const contextWindowOf = (models: ModelInfo[] | null, model: string, mode: ContextMode): number | undefined => {
+  const limits = contextLimits(models, model)
+  return limits ? (mode === 'long' ? limits.long : limits.standard) : undefined
+}
+
 export const formatContextWindow = (tokens: number): string => {
   if (tokens >= 1_000_000) return `${Number((tokens / 1_000_000).toFixed(1))}M`
   return `${Math.round(tokens / 1_000)}K`
@@ -313,8 +344,13 @@ export const contextOptions = (t: Dict, limits: ContextLimits | null): MenuOptio
   ]
 }
 
+/**
+ * What the CTX chip says: the mode chosen and its window - by the catalogue first, since the chip shows the choice,
+ * and by Codex's own count ([actualMax]) where the catalogue does not know the model. Read the other way, a turn
+ * still running in Std after a switch to Long put "Long 258K" on the chip.
+ */
 export const contextShortLabel = (mode: ContextMode, limits: ContextLimits | null, actualMax?: number): string => {
-  const size = actualMax || (mode === 'long' ? limits?.long : limits?.standard)
+  const size = (mode === 'long' ? limits?.long : limits?.standard) || actualMax
   const name = mode === 'long' ? 'Long' : 'Std'
   return size ? `${name} ${formatContextWindow(size)}` : name
 }
@@ -413,7 +449,7 @@ export const modeOptions = (t: Dict): MenuOption[] => [
  *
  * The built-in list was checked against a live agent: not all of them are available in streaming mode -
  * `/clear`, `/compact`, `/resume`, `/export`, `/permissions`, `/status` are interactive there and answer
- * with a refusal, so they are not here.
+ * with a refusal, so they are not here - `/resume` and `/status` are the panel's own instead (see panelCommands).
  */
 export interface CommandOption {
   id: string
@@ -454,6 +490,20 @@ export const panelCommands = (t: Dict): CommandOption[] => [
    * is the one panel command the phone keeps (see phoneCommands).
    */
   { id: ASIDE_COMMAND, hint: t.commands.btw, local: true, argumentHint: t.commands.btwArgument },
+  /*
+   * The panel's, because the app-server knows no slash commands (see CodexCommands): Codex's terminal has
+   * `/fast`, and under it is the model's fast service tier, asked for with a turn. The panel's is the switch
+   * in the model menu - the same ask, held by the IDE for this conversation (see feed/fastMode.ts), so it
+   * survives a restart of the process and moves with a fork.
+   */
+  { id: 'fast', hint: t.commands.fast, local: true, argumentHint: '[on|off]' },
+  /*
+   * The panel's, because Codex's own `/status` is a screen of its terminal and the app-server has no slash
+   * commands. Here it is a row in the feed with what another session or a terminal needs to reach this
+   * conversation: its id and the command that resumes it (see SessionInfoRow). A phone sends it as a message,
+   * and the IDE answers that with the same row (see SessionCommands.statusAsked).
+   */
+  { id: 'status', hint: t.commands.status, local: true },
 ]
 
 /**

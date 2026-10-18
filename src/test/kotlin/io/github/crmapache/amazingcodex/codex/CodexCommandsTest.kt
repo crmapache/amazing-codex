@@ -7,6 +7,7 @@ import java.io.File
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -24,6 +25,16 @@ class CodexCommandsTest {
         Files.createTempDirectory("acx-prompts").toFile().also { folder ->
             for ((name, text) in files) File(folder, name).writeText(text)
         }
+
+    /** `/status` is the panel's, answered at the door when a phone sends it (see SessionCommands.statusAsked). */
+    @Test
+    fun `status alone is the panel's command`() {
+        assertTrue(CodexCommands.isStatus("/status"))
+        assertTrue(CodexCommands.isStatus("  /status \n"))
+        assertFalse(CodexCommands.isStatus("/status of the migration"))
+        assertFalse(CodexCommands.isStatus("what is the /status"))
+        assertFalse(CodexCommands.isStatus("/statusline"))
+    }
 
     @Test
     fun `the commands that are actions become actions`() {

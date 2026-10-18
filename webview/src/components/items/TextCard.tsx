@@ -35,20 +35,28 @@ interface TextCardProps {
 const REVEAL_LIMIT = 12_000
 
 /**
- * How new text appears: the words come through as a wave from left to right rather than lighting up in a
+ * How new text appears: the characters come through as a wave from left to right rather than lighting up in a
  * batch.
  *
- * The delay between neighbouring words is deliberately short. The stream arrives here already smoothed,
+ * The delay between neighbouring characters is deliberately short. The stream arrives here already smoothed,
  * that is, a couple of characters per frame, and every frame gives birth to a portion of the wave: make
  * the pause between them longer than a frame and the queue starts piling up faster than it plays,
  * putting the display a good second behind the answer.
  *
- * The vertical shift is switched off for the same reason of tidiness: with it a word becomes a block for
+ * The vertical shift is switched off for the same reason of tidiness: with it a piece becomes a block for
  * the duration of the animation, and the line around it trembles with rewraps. Opacity with a light blur
  * is enough for "appearing out of nowhere", while the feed stays still.
  */
+/**
+ * What appears as one piece: a character, each fading in place as plain inline text - the way Max chose to see an
+ * answer print. 0.13.40 shipped whole words, and Max asked for characters back. The pace the answer is printed
+ * at reads the same setting (see useSmoothStream in Feed): set apart, the pace and the wave stop in different places,
+ * and a piece arrives split, each half with a wave of its own (smooth-stream-text 0.2.0).
+ */
+export const REVEAL_UNIT = 'char'
+
 const REVEAL = {
-  unit: 'word',
+  unit: REVEAL_UNIT,
   durationMs: 340,
   staggerMs: 14,
   blurPx: 4,
@@ -59,9 +67,9 @@ const REVEAL = {
 /**
  * The same wave on a phone, without the blur.
  *
- * A blur is the one part of this animation a device pays real money for: it is a filter on every word
- * separately, that is, a layer of its own per word, redrawn for as long as that word is appearing. A
- * desktop GPU does not notice; a phone, printing an answer word by word, turns it into a stutter - which
+ * A blur is the one part of this animation a device pays real money for: it is a filter on every character
+ * separately, that is, a layer of its own per character, redrawn for as long as it is appearing. A
+ * desktop GPU does not notice; a phone, printing an answer character by character, turns it into a stutter - which
  * is exactly what the wave was there to avoid.
  *
  * Opacity and the stagger carry the whole effect anyway: the text still comes through as a wave rather
@@ -82,7 +90,7 @@ export const TextCard = ({ item, onOpenLink, onPin, pinned, pinsFull, onActions 
   const t = useT()
 
   /**
-   * The reveal wave draws every word as a separate node with an animation of its own - on an ordinary
+   * The reveal wave draws every character as a separate node with an animation of its own - on an ordinary
    * answer that is pretty and costs nothing noticeable, while on a sheet of tens of thousands of words (a
    * summary after a context compaction is exactly that) it turns into tens of thousands of animations at
    * once: the panel froze and then went dark altogether. Long text is shown whole at once - there is

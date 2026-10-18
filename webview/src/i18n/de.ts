@@ -43,7 +43,9 @@ export const de: Dict = {
       newChatMode: { title: 'STANDARDMODUS', hint: 'womit neue Tabs starten' },
       composerLayout: { title: 'LAYOUT DES EINGABEFELDS', hint: 'wo das Eingabefeld sitzt' },
       pasteCollapse: { title: 'EINGEFÜGTER TEXT', hint: 'wann eine Einfügung zum Chip wird' },
+      spellcheck: { title: 'RECHTSCHREIBPRÜFUNG', hint: 'Tippfehler unterstreichen' },
       sendKey: { title: 'NACHRICHT SENDEN', hint: 'welche Taste sendet' },
+      keys: { title: 'TASTENKÜRZEL', hint: 'jede Taste, auf die das Panel hört' },
       codexConfig: { title: 'CODEX-EINSTELLUNGEN', hint: 'seine config.toml - was /config ändert' },
       improvePrompt: { title: 'PROMPT VERBESSERN', hint: 'worum der Stern-Button bittet' },
       voice: { title: 'SPRACHEINGABE', hint: 'diktieren statt tippen' },
@@ -89,7 +91,9 @@ export const de: Dict = {
       shareEditor: { label: 'Offene Datei und Auswahl', sub: 'Was mit jeder Nachricht mitgeht' },
       composerLayout: { label: 'Layout des Eingabefelds', sub: 'Wo das Eingabefeld sitzt' },
       pasteCollapse: { label: 'Eingefügter Text', sub: 'Wann eine Einfügung zum Chip wird' },
+      spellcheck: { label: 'Rechtschreibprüfung', sub: 'Tippfehler unterstreichen' },
       sendKey: { label: 'Nachricht senden', sub: 'Welche Taste sendet' },
+      keys: { label: 'Tastenkürzel', sub: 'Tabs, Warteschlange, Suche und mehr' },
       codexConfig: { label: 'Codex-Einstellungen', sub: 'Seine config.toml und das Vertrauen in dieses Projekt' },
       improvePrompt: { label: 'Prompt verbessern', sub: 'Worum der Stern-Button bittet' },
       voice: { label: 'Spracheingabe', sub: 'Diktieren mit deinem eigenen Deepgram-Schlüssel' },
@@ -177,7 +181,15 @@ export const de: Dict = {
   shareEditor: {
     label: 'Den Editor mitschicken',
     hint: 'Jede Nachricht trägt die im Editor offene Datei und die darin markierten Zeilen - so wie /ide von Codex es im Terminal macht',
-    note: 'Nur aus diesem Panel: Eine Nachricht vom Handy trägt nichts vom Editor. Eine einzelne Nachricht kann ohne ihn gehen - drück auf den Datei-Chip im Eingabefeld.',
+    note: 'Nur aus diesem Panel: Eine Nachricht vom Handy trägt nichts vom Editor. Derselbe Schalter steckt im Datei-Chip im Eingabefeld, und dort kann eine einzelne Nachricht ohne ihn gehen oder umgekehrt mit ihm.',
+    on: 'An',
+    off: 'Aus',
+  },
+
+  spellcheck: {
+    label: 'Rechtschreibung prüfen',
+    hint: 'Wörter, die die Prüfung nicht kennt, werden rot unterstrichen - im Nachrichtenfeld und in den anderen Textfeldern des Panels',
+    note: 'Schalt sie aus, wenn du in mehreren Sprachen schreibst und Wörter der anderen Sprachen unterstrichen werden. Eine Nachricht vom Handy prüft die Tastatur des Handys selbst, dieser Schalter ändert daran nichts.',
     on: 'An',
     off: 'Aus',
   },
@@ -256,6 +268,9 @@ export const de: Dict = {
     empty: 'Hier gibt es noch keine früheren Gespräche.',
     today: 'HEUTE',
     earlier: 'FRÜHER',
+    closed: 'ZULETZT GESCHLOSSEN',
+    reopen: (key) => (key ? `An alter Stelle wieder öffnen · ${key}` : 'An alter Stelle wieder öffnen'),
+    fork: 'Fork',
     messages: (n) => (n === 1 ? `${n} Nachricht` : `${n} Nachrichten`),
   },
 
@@ -499,6 +514,7 @@ export const de: Dict = {
       stopped: 'Von dir abgebrochen',
       undone: 'Nicht erledigt',
       headGaveUp: 'Auch der Hauptstrang wurde nicht fertig',
+      longList: 'Die Liste war zu lang',
     },
     outcomes: {
       scenarioBroken: 'Dieses Szenario lässt sich so nicht starten - öffne es und sieh nach, was fehlt.',
@@ -549,6 +565,14 @@ export const de: Dict = {
       tokens: 'Tokens',
       passOf: (pass, passes) => `Durchgang ${pass} von ${passes}`,
       passOfUpTo: (pass, passes) => `Durchgang ${pass} von höchstens ${passes}`,
+      itemOf: (index, count) => `Eintrag ${index} von ${count}`,
+      secondGo: 'zweiter Anlauf',
+      listPending: 'wartet auf die Liste',
+      listEmpty: 'nichts auf der Liste',
+      putOff: 'kommt nach den anderen dran',
+      itemsShort: (n) => (n === 1 ? '1 Eintrag' : `${n} Einträge`),
+      listAheadShort: 'Liste noch nicht da',
+      listEmptyShort: 'leere Liste',
       headSaid: 'HAUPTSTRANG',
       sentBack: (n) => (n === 1 ? 'einmal zurückgeschickt' : `${n}-mal zurückgeschickt`),
       takenOver: (why) => `Der Hauptstrang hat übernommen: ${why}`,
@@ -651,6 +675,13 @@ export const de: Dict = {
       roundsShort: (n: number): string => `×${n}`,
       roundsUntilShort: (n: number): string => `×${n}, bis fertig`,
       untilDone: 'oder weniger, wenn der Hauptstrang sagt, es ist fertig',
+      perItem: 'einmal pro Eintrag einer Liste',
+      perItemShort: 'pro Eintrag',
+      listLabel: 'DIE LISTE',
+      itemName: 'Name',
+      listHint:
+        'Was die Liste ist und wie ein Eintrag aussieht. Der Hauptstrang gibt die ganze Liste, wenn die Stufe beginnt, und die Stufe läuft einmal pro Eintrag.',
+      itemNote: (name) => `Jeder Durchgang bekommt seinen Eintrag dort, wo im Text [[${name}]] steht - ein Feld braucht es dafür nicht.`,
       cards: 'KARTEN',
       addCard: 'Eine Karte hinzufügen',
       addCardHere: 'Eine Karte zu dieser Stufe hinzufügen',
@@ -684,6 +715,10 @@ export const de: Dict = {
       duplicateInput: (name) => `Zwei Fragen heißen beide ${name}.`,
       duplicateSlot: (card, name) => `${card}: zwei Felder heißen beide ${name}.`,
       badInputName: (name) => `„${name}“ ist kein Name - erlaubt sind Buchstaben, Ziffern, - und _.`,
+      badItemName: (stage, name) => `${stage}: „${name}“ ist kein Name für den Eintrag - erlaubt sind Buchstaben, Ziffern, - und _.`,
+      noItemList: (stage) => `${stage}: nirgends steht, was die Liste ist.`,
+      itemSlotClash: (card, name) => `${card}: das Feld ${name} heißt wie der Eintrag der Stufe, und den setzt das Panel selbst ein.`,
+      unusedItem: (stage, name) => `${stage}: kein Text schreibt [[${name}]], also bekommt jeder Durchgang dasselbe gesagt.`,
       badSlotName: (card, name) => `${card}: „${name}“ ist kein Name - erlaubt sind Buchstaben, Ziffern, - und _.`,
     },
   },
@@ -711,6 +746,47 @@ export const de: Dict = {
     enterSub: 'Shift+Enter bricht die Zeile um',
     modEnter: (mod: string): string => `${mod}+Enter`,
     modEnterSub: 'Enter bricht die Zeile um',
+  },
+
+  keys: {
+    note: 'Die Tasten wirken, solange der Fokus im Panel liegt. Die Tab-Tasten sind die, mit denen du in deiner IDE-Tastenbelegung Editor-Tabs wechselst und schließt.',
+    notSet: 'Nicht belegt',
+    keymapNote: 'Die Tab-Tasten, Einreihen und das Öffnen des Panels sind IDE-Aktionen - neu belegen kannst du sie unter Settings | Keymap.',
+    openKeymap: 'In Keymap ändern',
+    groups: { tabs: 'Tabs', message: 'Nachrichtenfeld', agent: 'Agent', panel: 'Panel' },
+    rows: {
+      nextTab: 'Nächster Tab',
+      previousTab: 'Vorheriger Tab',
+      newTab: 'Neuer Tab',
+      closeTab: 'Tab schließen',
+      searchTabsWhen: 'im Suchfenster dessen Tabs',
+      closeTabWhen: 'fragt nach, wenn der Agent arbeitet',
+      reopenTab: 'Geschlossenen Tab öffnen',
+      reopenTabWhen: 'die letzten 20, auch im Verlauf',
+      openPanel: 'Panel öffnen',
+      openPanelWhen: 'von überall in der IDE',
+      send: 'Senden',
+      newLine: 'Neue Zeile',
+      queue: 'Einreihen',
+      queueWhen: 'geht raus, sobald der Agent fertig ist',
+      history: 'Gesendete durchblättern',
+      historyWhen: 'im leeren Feld',
+      commands: 'Befehle',
+      files: 'Dateien',
+      shell: 'Shell-Befehl',
+      shellWhen: 'am Anfang einer Nachricht',
+      deleteWord: 'Wort löschen',
+      undo: 'Rückgängig',
+      redo: 'Wiederholen',
+      stop: 'Stoppen',
+      stopWhen: 'während der Agent arbeitet',
+      mode: 'Nächster Berechtigungsmodus',
+      answer: 'Per Ziffer antworten',
+      answerWhen: 'auf eine Freigabe oder Frage, bei leerem Feld',
+      search: 'Gespräche durchsuchen',
+      fork: 'Fork ab der Auswahl',
+      forkWhen: 'mit markiertem Text im Verlauf',
+    },
   },
 
   improvePrompt: {
@@ -850,6 +926,32 @@ export const de: Dict = {
     addSub: 'Eines, das Codex nicht anbietet',
   },
 
+  fast: {
+    label: 'Schnellmodus',
+    offSub: 'Aus · schnellere Antworten, verbraucht deine Limits schneller',
+    offSubTier: (tier) => `Aus · schnelle Stufe von Codex: ${tier}`,
+    waitingSub: 'Ab der nächsten Nachricht an · verbraucht deine Limits schneller',
+    onSub: 'An · verbraucht deine Limits schneller',
+    fromSettingsSub: 'In deinen Codex-Einstellungen an · für dieses Gespräch ausschalten',
+    unavailableSub: (reason) => `Nicht verfügbar. ${reason}`,
+    chipOn: 'Der Schnellmodus ist an',
+    chipFromSettings: 'Der Schnellmodus ist in deinen Codex-Einstellungen an',
+    chipWaiting: 'Der Schnellmodus schaltet sich mit der nächsten Nachricht ein',
+    chipUnavailable: (reason) => `Der Schnellmodus ist nicht verfügbar. ${reason}`,
+    row: { label: 'SCHNELL', title: 'Der Schnellmodus hat sich nicht eingeschaltet', hint: 'Dieses Gespräch läuft mit normaler Geschwindigkeit weiter.' },
+    reasons: {
+      notServed: 'Codex hat den Durchgang ohne die schnelle Stufe ausgeführt.',
+      modelNotAllowed: 'Dieses Modell hat keine schnelle Stufe.',
+      unknown: 'Er ist gerade nicht verfügbar.',
+    },
+    phone: {
+      on: 'An',
+      off: 'Aus',
+      note: 'Schnellere Antworten, verbraucht deine Limits schneller - nur für dieses Gespräch.',
+      noteTier: (tier) => `Schnelle Stufe von Codex: ${tier} - nur für dieses Gespräch.`,
+    },
+  },
+
   composer: {
     placeholder: 'Frag etwas, oder beschreib eine Änderung…',
     placeholderPlan: 'Beschreib, was geplant werden soll…',
@@ -874,8 +976,19 @@ export const de: Dict = {
     voice: 'Diktieren',
     voiceStop: 'Diktat beenden',
     editor: {
-      on: (place) => `Codex sieht ${place} mit dieser Nachricht · klicken, um es wegzulassen`,
-      off: (place) => `${place} bleibt bei dieser Nachricht weg · klicken, um es mitzuschicken`,
+      on: (place) => `Codex sieht ${place} mit dieser Nachricht · klicken zum Auswählen`,
+      off: (place) => `${place} bleibt bei dieser Nachricht weg · klicken zum Auswählen`,
+      muted: (place) => `${place} wird nicht mitgeschickt - das Mitsenden des Editors ist aus · klicken zum Auswählen`,
+      menu: {
+        always: 'Mit jeder Nachricht senden',
+        alwaysSub: 'Die geöffnete Datei und die markierten Zeilen, in jedem Tab',
+        skip: 'Bei dieser Nachricht weglassen',
+        skipSub: 'Die nächste Nachricht nimmt ihn wieder mit',
+        only: 'Nur mit dieser Nachricht senden',
+        onlySub: 'Die nächste geht wieder ohne ihn',
+        never: 'Nie senden',
+        neverSub: 'In jedem Tab, bis du es wieder einschaltest - derselbe Schalter wie in den Einstellungen',
+      },
     },
   },
 
@@ -890,6 +1003,7 @@ export const de: Dict = {
     scenarios: 'Szenarien',
     closeScenarios: 'Szenarien schließen',
     closeRun: 'Diesen Lauf schließen',
+    closeHint: (close, reopen) => `${close} · ${reopen} öffnet wieder`,
     conversations: 'Gespräche',
     newSession: 'Neues Gespräch',
     fork: 'Diese Unterhaltung forken: ein neuer Tab, der von hier aus weitermacht, während dieser bleibt, wie er ist',
@@ -984,6 +1098,19 @@ export const de: Dict = {
   feed: {
     empty: { title: 'Frag Codex zu diesem Projekt', hint: '@ für Dateien · / für Befehle' },
     you: 'DU',
+    auto: {
+      label: 'PANEL',
+      why: {
+        accountSwitch: 'Nicht von dir geschrieben: Der Kontowechsel hat den Durchgang abgebrochen, und das Panel hat ihn von selbst fortgesetzt',
+        limit: 'Nicht von dir geschrieben: Das Nutzungslimit hat den Durchgang gestoppt, und das Panel hat ihn von selbst fortgesetzt, sobald es ging',
+        restart: 'Nicht von dir geschrieben: Codex wurde unter dem Gespräch neu gestartet, die Hintergrund-Agenten gingen verloren, und das Panel hat es weitermachen lassen',
+      },
+    },
+    carryOn: {
+      planned: (clock: string): string => `Setzt dieses Gespräch um ${clock} von selbst fort, sobald das Limit zurückgesetzt ist`,
+      guessed: (clock: string): string => `Versucht, dieses Gespräch um ${clock} von selbst fortzusetzen - das Limit hat nicht gesagt, wann es zurückgesetzt wird`,
+      cancel: 'Nicht fortsetzen',
+    },
     jumpToLatest: 'Zur neuesten Nachricht',
     copyBlock: 'Diesen Block kopieren',
     copyReply: 'Die ganze Antwort kopieren',
@@ -1019,6 +1146,11 @@ export const de: Dict = {
     copyPaste: 'Eingefügten Text kopieren',
     pasteShown: (shown, total) => `Erste ${shown} von ${total} Zeilen · kopiert wird alles`,
     fromOutput: 'aus der Ausgabe',
+    imagePreview: {
+      missing: 'Das Bild ließ sich nicht lesen: Die Datei ist weg, oder die Nachricht enthält es nicht mehr',
+      opens: 'Klick öffnet es',
+      unopened: 'ließ sich nicht öffnen - Klick versucht es erneut',
+    },
 
     think: { chip: 'DENKT', thoughts: (n) => `${n} ${n === 1 ? 'Gedanke' : 'Gedanken'}` },
 
@@ -1142,6 +1274,19 @@ export const de: Dict = {
       textWithCode: (code) => `Codex hat sich unerwartet beendet (Exit-Code ${code}).`,
     },
 
+    session: {
+      label: 'SITZUNG',
+      id: 'Sitzungs-ID',
+      terminal: 'Im Terminal',
+      copyId: 'Sitzungs-ID kopieren',
+      terminalNote: 'Setzt dieses Gespräch in einem Terminal im Projektordner fort',
+      terminalNoteOn: (account: string): string =>
+        `Setzt dieses Gespräch auf dem Konto ${account} in einem Terminal im Projektordner fort`,
+      terminalNoteDefault: (account: string): string =>
+        `Setzt dieses Gespräch in einem Terminal im Projektordner fort - mit der Standardanmeldung von Codex, nicht auf dem Konto ${account}`,
+      unnamedAccount: 'dieses Tabs',
+      none: 'Noch keine ID - das Gespräch bekommt sie mit der ersten Nachricht',
+    },
     outranked: {
       account: {
         label: 'ANMELDUNG',
@@ -1206,7 +1351,23 @@ export const de: Dict = {
       unconfirmed: 'unbestätigt',
     },
 
-    copy: { copied: 'Kopiert', click: 'Zum Kopieren klicken', openFile: 'Im Editor öffnen', openFolder: 'Ordner anzeigen' },
+    copy: { copied: 'Kopiert', click: 'Zum Kopieren klicken', openFile: 'Im Editor öffnen', openFolder: 'Ordner anzeigen', missing: 'Diese Datei gibt es nicht - klicken, um erneut nachzusehen' },
+    changes: {
+      all: (n) => `Alle anzeigen (${n})`,
+      fewer: 'Weniger anzeigen',
+      revert: 'Diese Datei zurücksetzen',
+      revertAll: 'Alle zurücksetzen',
+      reverting: 'Wird zurückgesetzt…',
+      restore: 'Änderungen wiederherstellen',
+      restoreAll: 'Alle wiederherstellen',
+      restoring: 'Wird wiederhergestellt…',
+      reverted: 'Zurückgesetzt',
+      changed: 'Seitdem geändert, so gelassen',
+      missing: 'Die Datei gibt es nicht mehr',
+      failed: 'Die Datei ließ sich nicht schreiben',
+      deleted: 'Gelöscht',
+      movedFrom: (from) => `aus ${from}`,
+    },
   },
 
   chrome: {
@@ -1220,6 +1381,7 @@ export const de: Dict = {
     queue: {
       label: 'IN DER WARTESCHLANGE',
       hint: (n) => `${n} gehen der Reihe nach raus, sobald der Lauf fertig ist · zum Umsortieren ziehen`,
+      held: (n) => `${n} gehen der Reihe nach nach deiner nächsten Nachricht raus - der Lauf, auf den sie warteten, wurde gestoppt · zum Umsortieren ziehen`,
       edit: 'Im Eingabefeld bearbeiten',
       editing: (key, button) => `Wird im Eingabefeld bearbeitet · ${key} oder „${button}“ stellt sie wieder hierher`,
     },
@@ -1273,7 +1435,16 @@ export const de: Dict = {
       stopCommand: 'Diesen Befehl stoppen',
       stopCommandTitle: 'Diesen Befehl stoppen?',
     },
-    confirm: { cancel: 'Abbrechen', stop: 'Stoppen' },
+    confirm: {
+      cancel: 'Abbrechen',
+      stop: 'Stoppen',
+      close: 'Schließen',
+      closeWorking: 'Einen Tab schließen, in dem noch gearbeitet wird?',
+      closeWorkingNote: (key) =>
+        key
+          ? `Der Agent stoppt. ${key} holt den Tab zurück, seine Warteschlange wartet auf deine nächste Nachricht.`
+          : 'Der Agent stoppt. Der Tab lässt sich im Verlauf wieder öffnen, seine Warteschlange wartet auf deine nächste Nachricht.',
+    },
     noChats: { title: 'Freue mich auf die Zusammenarbeit!', button: "Los geht's" },
     crash: {
       title: 'Das Panel ist auf einen Fehler gelaufen',
@@ -1306,6 +1477,7 @@ export const de: Dict = {
     fiveHour: '5 Std',
     weekly: 'Woche',
     spending: 'Ausgaben',
+    usableAgainIn: (left) => `Limit erreicht · wieder nutzbar in ${left}`,
     row: {
       one: 'Ein Konto',
       adding: 'Anmeldung läuft…',
@@ -1812,6 +1984,7 @@ export const de: Dict = {
     weeklyApps: 'wöchentliche App-',
     weeklyFable: 'wöchentliche Fable-',
     extra: 'Zusatznutzungs-',
+    spending: 'Ausgaben-',
   },
 
   permission: {
@@ -1889,6 +2062,8 @@ export const de: Dict = {
     config: 'Codex-Einstellungen - öffnet sie im Menü',
     btw: 'eine kurze Nebenfrage - die Arbeit läuft weiter',
     btwArgument: '<Frage>',
+    fast: 'Schnellmodus umschalten - schnellere Antworten, verbraucht deine Limits schneller',
+    status: 'die ID dieses Gesprächs und der Befehl, es im Terminal fortzusetzen',
     model: 'das Modell für diese Sitzung wechseln',
     effort: 'einstellen, wie lange Codex vor dem Handeln nachdenkt',
     codeReview: 'Änderungen mit dem eigenen Reviewer von Codex prüfen',

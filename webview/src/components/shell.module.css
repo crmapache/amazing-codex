@@ -365,15 +365,22 @@
   display: flex;
   flex-wrap: wrap;
   align-items: stretch;
+  /* The rows stay packed at the top when the strip is taller than they are: a dragged tab grows it by the
+     row its drop is going to add (see Header), and spread over the extra height the rows slid down under
+     the hand, away from the places the gesture had measured. */
+  align-content: flex-start;
   min-width: 0;
 }
 
-/* They squeeze themselves and wrap only when there is nowhere left to squeeze - they neither run off the
-   panel's edge nor get clipped silently. flex-grow:0 matters: with growth a tab, when it is the only one,
-   would spread out to max-width and push the "+" button onto a second row though there is plenty of room
-   beside it. The width comes from the title rather than from growth. The height is explicit: without it,
-   when wrapping onto several rows, a tab's height would be counted from its contents (shorter) rather than
-   from the header's former 34px. */
+/* A tab is as wide as its name, and a long name first grows into the room its row has. The rows are laid
+   out as if every tab stopped at 210px (the basis) - so a long name never pushes a neighbour or the "+"
+   onto another row - and then a tab still cutting its name takes the free end of its row, up to its whole
+   name (max-content) and no further. A short name is narrower than the basis and stops at itself. The
+   browser shares the room out evenly between the tabs still growing. Before, every tab stopped at 210px,
+   and a wide panel with three tabs cut all three names beside an empty strip (asked from IntelliJ IDEA,
+   0.13.20). A tab with no room at all gives way down to 70px, as it always did. The height is explicit:
+   without it, when wrapping onto several rows, a tab's height would be counted from its contents (shorter)
+   rather than from the header's former 34px. */
 .tab {
   position: relative;
   display: flex;
@@ -383,9 +390,9 @@
   /* On the right, with room to spare beyond the cross's width: without it the hover highlight on the close
      button stood flush against the tab's edge. */
   padding: 0 13px 0 11px;
-  flex: 0 1 auto;
+  flex: 1 1 210px;
   min-width: 70px;
-  max-width: 210px;
+  max-width: max-content;
   border-bottom: 2px solid transparent;
   color: var(--acc-fg-dim);
   /* A tab is not a button (it holds one of its own - the cross), but it is pressed whole, so it needs a
@@ -455,9 +462,13 @@
   padding-left: 11px;
 }
 
-/* The gap sets one group off from another: colour alone is not enough if the tabs have stuck together. */
+/* The gap sets one group off from another: colour alone is not enough if the tabs have stuck together. A
+   variable, because a dragged tab's preview hands it out by hand (see projectionFor in Header): the rule
+   below goes by the markup, and the preview reorders the strip without touching the markup. */
 .tabGroupStart {
-  margin-left: 6px;
+  --acc-group-gap: 6px;
+
+  margin-left: var(--acc-group-gap);
 }
 
 .tabGroupStart:first-child {
@@ -687,11 +698,28 @@
   animation: none;
 }
 
+/* A name cut in the middle (see TabTitle in Header.tsx): the whole name in the flow, invisible, gives the
+   tab its width and its height, and the name as it fits lies over it. `pre` on both: the cut one ends its
+   head on a space at times, and plain wrapping would drop it. The whole one clips so that a cut shows as an
+   overflow (the hint asks for it - see Tooltips); the shown one clips only as a guard. */
 .tabTitle {
+  position: relative;
+  min-width: 0;
   font: 12px/15px var(--acc-font);
-  white-space: nowrap;
+}
+
+.tabTitleWhole {
+  display: block;
   overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: pre;
+  opacity: 0;
+}
+
+.tabTitleShown {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  white-space: pre;
 }
 
 /* A tab's name being typed (see TabNameField in Header.tsx). It stands where the name stood, in the same
@@ -731,8 +759,12 @@
   color: var(--acc-fg-faint);
 }
 
-.tabClose:hover {
-  background: var(--acc-line-strong);
+/* The tab's own buttons (the cross and the fork) light up in the tab's group colour on hover: a grey square
+   on the open tab's coloured light read as a smudge. Translucent, so the one mix sits on the open tab's light
+   and on a plain tab alike. */
+.tabClose:hover,
+.tabForkButton:hover {
+  background: color-mix(in srgb, var(--acc-group-paint) 35%, transparent);
   color: var(--acc-fg);
 }
 
@@ -744,6 +776,9 @@
   flex: none;
   font-size: 15px;
   color: var(--acc-fg-dim);
+  /* It makes room for a dragged tab the way the tabs do (see .tab): a tab carried to the end of a row can
+     push it onto the next one. */
+  transition: transform 0.16s ease;
 }
 
 .tabAdd:hover {
@@ -763,11 +798,6 @@
   place-items: center;
   border-radius: var(--acc-r-xs);
   color: var(--acc-fg-faint);
-}
-
-.tabForkButton:hover {
-  background: var(--acc-line-strong);
-  color: var(--acc-fg);
 }
 
 /* Nothing to fork yet: the button keeps its place and its hint, and stops looking pressable. */
@@ -1711,6 +1741,22 @@
   min-width: min-content;
 }
 
+/* Fast mode on MODEL (see FastMark in StatusBar.tsx): dim while it waits or is paused, lit while it serves, the
+   warning colour when it was asked for and the CLI says it cannot. */
+.selectorFast {
+  flex: none;
+  font: 600 11px/1 var(--acc-mono);
+  color: var(--acc-fg-faint);
+}
+
+.selectorFastOn {
+  color: var(--acc-accent);
+}
+
+.selectorFastWarn {
+  color: var(--acc-warn);
+}
+
 .selectorCaret {
   flex: none;
   width: 8px;
@@ -1999,6 +2045,11 @@
    chosen - it is GitHub's own star (see Thanks.tsx). */
 .menuIconWarn {
   color: var(--acc-warn);
+}
+
+/* A switch that is off - fast mode in the model menu: its mark stays, so the entry reads as a switch, but greyed. */
+.menuIconDim {
+  color: var(--acc-fg-faint);
 }
 
 .menuBody {

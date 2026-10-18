@@ -1,7 +1,9 @@
 package io.github.crmapache.amazingcodex.voice
 
 import com.intellij.openapi.util.SystemInfo
+import java.awt.event.InputEvent
 import java.awt.event.KeyEvent
+import javax.swing.KeyStroke
 
 /**
  * What a person presses to start dictating: a chord on the keyboard, or a button on the mouse.
@@ -128,6 +130,12 @@ internal data class HotkeyCap(
         const val COMMAND = "command"
         const val WINDOWS = "win"
         const val MOUSE = "mouse"
+
+        /** The four arrows: their names are words in AWT ("Left"), and a key is recognised by its arrow. */
+        const val LEFT = "left"
+        const val RIGHT = "right"
+        const val UP = "up"
+        const val DOWN = "down"
     }
 }
 
@@ -152,11 +160,27 @@ internal fun HotkeyBinding.caps(): List<HotkeyCap> = when (this) {
 }
 
 /**
+ * A keymap's keystroke split into its keys - the panel's own actions as Settings | Keymap binds them (see
+ * PanelKeys), drawn by the same caps as a voice binding. In the same order as [caps]: the modifiers as a
+ * hand takes them, the key last.
+ */
+internal fun KeyStroke.caps(): List<HotkeyCap> = buildList {
+    // The new masks are enough: AWT fills them in from the old ones whichever way a stroke was made.
+    if (modifiers and InputEvent.CTRL_DOWN_MASK != 0) add(capOf(KeyEvent.VK_CONTROL))
+    if (modifiers and InputEvent.ALT_DOWN_MASK != 0) add(capOf(KeyEvent.VK_ALT))
+    if (modifiers and InputEvent.SHIFT_DOWN_MASK != 0) add(capOf(KeyEvent.VK_SHIFT))
+    if (modifiers and InputEvent.META_DOWN_MASK != 0) add(capOf(KeyEvent.VK_META))
+    add(capOf(keyCode))
+}
+
+/**
  * One key, as a cap.
  *
  * The four modifiers are named here rather than left to `KeyEvent.getKeyText`, which answers in the IDE's
  * own language - a hotkey is not read, it is recognised, and "Alt" beside a drawing of ⌥ is two keyboards
- * at once. Everything else keeps the platform's own name, which is what is printed on the key itself.
+ * at once. Everything else keeps the platform's own name, which is what is printed on the key itself -
+ * except where that name is not what is printed: AWT calls `[` "Open Bracket", and the IDE's own keys for
+ * the previous and the next tab on a Mac are exactly that bracket.
  */
 private fun capOf(code: Int): HotkeyCap = when (code) {
     KeyEvent.VK_CONTROL -> HotkeyCap(text = "Ctrl")
@@ -171,9 +195,31 @@ private fun capOf(code: Int): HotkeyCap = when (code) {
         else -> HotkeyCap(text = "Super")
     }
 
+    KeyEvent.VK_LEFT -> HotkeyCap(glyph = HotkeyCap.LEFT)
+    KeyEvent.VK_RIGHT -> HotkeyCap(glyph = HotkeyCap.RIGHT)
+    KeyEvent.VK_UP -> HotkeyCap(glyph = HotkeyCap.UP)
+    KeyEvent.VK_DOWN -> HotkeyCap(glyph = HotkeyCap.DOWN)
+
     KeyEvent.VK_SPACE -> HotkeyCap(text = "Space")
-    else -> HotkeyCap(text = KeyEvent.getKeyText(code))
+    KeyEvent.VK_ENTER -> HotkeyCap(text = "Enter")
+    KeyEvent.VK_ESCAPE -> HotkeyCap(text = "Esc")
+    else -> HotkeyCap(text = PRINTED[code] ?: KeyEvent.getKeyText(code))
 }
+
+/** The keys whose sign is what is printed on them, while AWT names them in words. */
+private val PRINTED: Map<Int, String> = mapOf(
+    KeyEvent.VK_OPEN_BRACKET to "[",
+    KeyEvent.VK_CLOSE_BRACKET to "]",
+    KeyEvent.VK_COMMA to ",",
+    KeyEvent.VK_PERIOD to ".",
+    KeyEvent.VK_SLASH to "/",
+    KeyEvent.VK_BACK_SLASH to "\\",
+    KeyEvent.VK_SEMICOLON to ";",
+    KeyEvent.VK_QUOTE to "'",
+    KeyEvent.VK_BACK_QUOTE to "`",
+    KeyEvent.VK_MINUS to "-",
+    KeyEvent.VK_EQUALS to "=",
+)
 
 /**
  * Which side of the keyboard, when that is part of the binding - the panel turns this into a word.

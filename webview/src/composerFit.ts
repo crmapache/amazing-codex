@@ -82,10 +82,16 @@ export const TOOL_GROUPS: readonly (readonly WritingTool[])[] = [
 const DROP_ORDER: readonly WritingTool[] = ['slash', 'search', 'improve', 'voice']
 
 /**
- * A step the row gives way by: a square leaving it, or the file name on the editor's chip going and leaving
- * the drawing alone (see EditorChip).
+ * A step the row gives way by: a square leaving it, the file name on the editor's chip going and leaving
+ * the drawing alone, or - with sending the editor switched off - that chip going whole (see EditorChip).
  */
-export type FitStep = WritingTool | 'editorName'
+export type FitStep = WritingTool | 'editorName' | 'editorChip'
+
+/**
+ * How the editor's chip stands in the row, for what it can give up: `named` gives up its name and keeps the
+ * drawing, `muted` - the drawing alone, sending the editor being switched off - gives up itself.
+ */
+export type EditorFit = 'named' | 'muted' | null
 
 /**
  * The widest the name on the editor's chip is drawn, and the gap before it - the same numbers as
@@ -94,6 +100,13 @@ export type FitStep = WritingTool | 'editorName'
  */
 export const EDITOR_NAME_MAX = 200
 export const EDITOR_NAME_GAP = 5
+
+/**
+ * The muted chip, the gap before it included: the drawing and the padding either side of it, and the margin
+ * - .editorChip's numbers in composer.module.css. Fixed rather than measured, since a chip that has left the
+ * row is not there to be measured, and it is the same square whatever file is open.
+ */
+export const EDITOR_CHIP_MUTED = 32
 
 /** What the row is measured to be right now (see useToolsFit). */
 export interface ToolsMeasure {
@@ -143,10 +156,15 @@ export const toolsWidth = (
  * Ahead of all of them, the file name on the editor's chip when there is one (`named`): it is the cheapest
  * loss in the row - the drawing stays, still a button, and the name is in its hover - and it goes whole,
  * as a square does. Shrunk by the layout instead, it gave way together with Queue and Send and ended as a
- * stub of a letter beside a Send that had already lost its word.
+ * stub of a letter beside a Send that had already lost its word. A muted chip (`muted`) goes whole in that
+ * same first place: it carries nothing, the person switched it off, and the setting is the way back.
  */
-export const droppableTools = (present: ReadonlySet<WritingTool>, listening: boolean, named = false): FitStep[] => [
-  ...(named ? (['editorName'] as const) : []),
+export const droppableTools = (
+  present: ReadonlySet<WritingTool>,
+  listening: boolean,
+  editor: EditorFit = null,
+): FitStep[] => [
+  ...(editor === 'named' ? (['editorName'] as const) : editor === 'muted' ? (['editorChip'] as const) : []),
   ...DROP_ORDER.filter((tool) => present.has(tool) && !(tool === 'voice' && listening)),
 ]
 
@@ -168,10 +186,12 @@ export const toolsDropped = (
 ): number => {
   const current = Math.min(dropped, droppable.length)
   const named = droppable.includes('editorName')
+  const muted = droppable.includes('editorChip')
   const widthAt = (level: number) => {
     const gone = new Set<FitStep>(droppable.slice(0, level))
     const name = named && !gone.has('editorName') ? (measure.name ?? 0) : 0
-    return toolsWidth((tool) => present.has(tool) && !gone.has(tool), measure) + name
+    const chip = muted && !gone.has('editorChip') ? EDITOR_CHIP_MUTED : 0
+    return toolsWidth((tool) => present.has(tool) && !gone.has(tool), measure) + name + chip
   }
   const now = widthAt(current)
 

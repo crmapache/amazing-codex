@@ -257,6 +257,29 @@
   min-width: 4px;
 }
 
+/* A figure at the right end of a card's label row - "average 7h 12m a day". It keeps its width and the
+   note beside the label gives way first: on a narrow panel the note is the detail, this is the answer. */
+.labelAside {
+  flex-shrink: 0;
+  font: 10px var(--acc-mono);
+  color: var(--acc-fg-ghost);
+  white-space: nowrap;
+}
+
+.labelAsideFigure {
+  color: var(--acc-fg-body);
+}
+
+/* The note beside a label that has a figure at the other end: it takes whatever room the two leave and
+   no more, so a narrow panel cuts the note - "TOKENS A DAY  25 55…  average 852M a day" - and the label
+   only once the note is gone. A shrink factor cannot do this: the label still gives up a fraction of a
+   pixel, and that is enough for an ellipsis. Being the one that fills, it also pushes the figure to the
+   right end, so no spacer goes between them. */
+.labelNoteFills {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
 .figureRow {
   display: flex;
   align-items: baseline;
@@ -563,12 +586,21 @@
   color: var(--acc-fg);
 }
 
-/* --- The hours of one day -------------------------------------------------------------- */
+/* --- The hours of one day: minutes or tokens ------------------------------------------- */
 
 .day {
+  /* The bars' paint: moon for the minutes in the panel, iris for the tokens (see HourBars). */
+  --day-tone: var(--acc-ch-moon);
+  --day-peak: var(--acc-c-moon-3);
+
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+.dayIris {
+  --day-tone: var(--acc-ch-iris);
+  --day-peak: var(--acc-c-iris-3);
 }
 
 .dayPlot {
@@ -614,15 +646,15 @@
 .dayBarFill {
   width: 100%;
   border-radius: 2px 2px 0 0;
-  background: rgb(var(--acc-ch-moon) / 55%);
+  background: rgb(var(--day-tone) / 55%);
 }
 
 .dayBarFill[data-peak] {
-  background: var(--acc-c-moon-3);
+  background: var(--day-peak);
 }
 
 .dayBar:hover .dayBarFill {
-  background: rgb(var(--acc-ch-moon) / 85%);
+  background: rgb(var(--day-tone) / 85%);
 }
 
 .dayBarEmpty {
@@ -649,6 +681,7 @@
 
 .heatLegend {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   gap: 5px;
   font: 9.5px var(--acc-mono);

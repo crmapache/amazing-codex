@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentEvent } from '../protocol'
 import { initialPanelState, reducePanel } from './build'
-import { editorKey, editorLabel, editorOfBlock, editorOfBlocks } from './editorContext'
+import { editorChoice, editorGoes, editorKey, editorLabel, editorOfBlock, editorOfBlocks } from './editorContext'
 import type { UserItem } from './types'
 
 /** The block EditorContext.kt writes beside the person's text - the same words, character for character. */
@@ -74,12 +74,46 @@ describe('editorLabel', () => {
 })
 
 describe('editorKey', () => {
-  // What a "not with this message" is remembered by: other lines are a new thing on screen.
+  // What a one-message exception is remembered by: other lines are a new thing on screen.
   it('tells the same file with other lines apart', () => {
     const file = { path: 'src/Foo.kt', name: 'Foo.kt' }
     expect(editorKey({ ...file, from: 1, to: 2 })).not.toBe(editorKey({ ...file, from: 1, to: 3 }))
     expect(editorKey(file)).not.toBe(editorKey({ ...file, from: 1, to: 2 }))
     expect(editorKey({ ...file, from: 1, to: 2 })).toBe(editorKey({ ...file, from: 1, to: 2 }))
+  })
+})
+
+describe('whether the next message carries the editor', () => {
+  const lines = { path: 'src/Foo.kt', name: 'Foo.kt', from: 4, to: 9 }
+  const skip = { key: editorKey(lines), on: false }
+  const only = { key: editorKey(lines), on: true }
+
+  it('follows the setting with nothing said for this message', () => {
+    expect(editorGoes(true, undefined, lines)).toBe(true)
+    expect(editorGoes(false, undefined, lines)).toBe(false)
+    expect(editorChoice(true, undefined, lines)).toBe('always')
+    expect(editorChoice(false, undefined, lines)).toBe('never')
+  })
+
+  // The two ways of one message: left out while the setting sends, sent while the setting does not.
+  it('goes the other way for one message, either way', () => {
+    expect(editorGoes(true, skip, lines)).toBe(false)
+    expect(editorChoice(true, skip, lines)).toBe('once')
+    expect(editorGoes(false, only, lines)).toBe(true)
+    expect(editorChoice(false, only, lines)).toBe('once')
+  })
+
+  it('forgets the exception once other lines are on screen', () => {
+    const other = { ...lines, to: 12 }
+    expect(editorGoes(true, skip, other)).toBe(true)
+    expect(editorChoice(true, skip, other)).toBe('always')
+    expect(editorGoes(false, only, other)).toBe(false)
+  })
+
+  // Left behind by a setting that has since been switched to the same answer: nothing to except.
+  it('does not show an exception that agrees with the setting', () => {
+    expect(editorChoice(false, skip, lines)).toBe('never')
+    expect(editorChoice(true, only, lines)).toBe('always')
   })
 })
 

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useT } from '../../i18n'
 import type { ModelInfo, Scenario, ScenarioStage } from '../../protocol'
 import { effortOptions, modeOptions, modelOptions } from '../../catalog'
-import { blankCard, blankInput, blankStage } from '../../scenarios/blank'
+import { blankCard, blankEach, blankInput, blankStage, ITEM_NAME } from '../../scenarios/blank'
 import { cardRuns, MAX_CARD_RETRIES, MAX_STAGE_REPEAT, passesOf, problemsOf } from '../../scenarios/rules'
 import { Back } from './Back'
 import { PickSheet } from './ScenarioPick'
@@ -290,7 +290,9 @@ export const ScenarioEditor = ({
                 <span className={m.stageFoldNumber}>{index + 1}</span>
                 <span className={m.stageFoldText}>
                   <span className={m.stageFoldTitle}>{stage.title || t.scenarios.editor.untitledStage}</span>
-                  {passes > 1 ? (
+                  {stage.each ? (
+                    <span className={m.stageFoldNote}>{t.scenarios.editor.perItemShort}</span>
+                  ) : passes > 1 ? (
                     <span className={m.stageFoldNote}>
                       {stage.untilDone
                         ? t.scenarios.editor.roundsUntilShort(passes)
@@ -316,13 +318,23 @@ export const ScenarioEditor = ({
                       <button
                         key={count}
                         type="button"
-                        className={`${m.pickChip} ${stage.repeat === count ? m.pickChipOn : ''}`}
-                        onClick={() => editStage(stage.id, (one) => ({ ...one, repeat: count }))}
+                        className={`${m.pickChip} ${stage.repeat === count && !stage.each ? m.pickChipOn : ''}`}
+                        onClick={() => editStage(stage.id, (one) => ({ ...one, repeat: count, each: null }))}
                       >
                         {count === 1 ? t.scenarios.editor.once : t.scenarios.editor.times(count)}
                       </button>
                     ))}
-                    {stage.repeat > 1 ? (
+                    {/* Once for each item of a list the main thread gives as the stage begins (see Stage.each). */}
+                    <button
+                      type="button"
+                      className={`${m.pickChip} ${stage.each ? m.pickChipOn : ''}`}
+                      onClick={() =>
+                        editStage(stage.id, (one) => ({ ...one, repeat: 1, untilDone: false, each: one.each ?? blankEach() }))
+                      }
+                    >
+                      {t.scenarios.editor.perItem}
+                    </button>
+                    {stage.repeat > 1 && !stage.each ? (
                       <button
                         type="button"
                         className={`${m.pickChip} ${stage.untilDone ? m.pickChipOn : ''}`}
@@ -332,6 +344,38 @@ export const ScenarioEditor = ({
                       </button>
                     ) : null}
                   </div>
+
+                  {/* What the list is, and its item's name in the prompts - read by the main thread as the stage begins. */}
+                  {stage.each ? (
+                    <>
+                      <input
+                        className={`${m.input} ${m.inputMono}`}
+                        value={stage.each.name}
+                        placeholder={t.scenarios.editor.itemName}
+                        autoCapitalize="off"
+                        autoCorrect="off"
+                        onChange={(event) =>
+                          editStage(stage.id, (one) => ({
+                            ...one,
+                            each: { name: event.target.value, description: one.each?.description ?? '' },
+                          }))
+                        }
+                      />
+                      <textarea
+                        className={`${m.input} ${m.sheetArea}`}
+                        value={stage.each.description}
+                        placeholder={t.scenarios.editor.listHint}
+                        autoCapitalize="sentences"
+                        onChange={(event) =>
+                          editStage(stage.id, (one) => ({
+                            ...one,
+                            each: { name: one.each?.name ?? '', description: event.target.value },
+                          }))
+                        }
+                      />
+                      <p className={m.listNote}>{t.scenarios.editor.itemNote(stage.each.name || ITEM_NAME)}</p>
+                    </>
+                  ) : null}
 
                   {stage.cards.length > 0 ? (
                     <div className={m.stageCards}>
@@ -512,9 +556,18 @@ const problemWords = (
 ): string => {
   const card = draft.stages.flatMap((stage) => stage.cards).find((one) => one.id === problem.cardId)
   const where = card?.title || t.scenarios.editor.untitledCard
+  const stage = draft.stages.find((one) => one.id === problem.stageId)?.title || t.scenarios.editor.untitledStage
   const name = problem.name ?? ''
 
   switch (problem.kind) {
+    case 'badItemName':
+      return t.scenarios.problems.badItemName(stage, name)
+    case 'noItemList':
+      return t.scenarios.problems.noItemList(stage)
+    case 'itemSlotClash':
+      return t.scenarios.problems.itemSlotClash(where, name)
+    case 'unusedItem':
+      return t.scenarios.problems.unusedItem(stage, name)
     case 'noStages':
       return t.scenarios.problems.noStages
     case 'emptyStage':

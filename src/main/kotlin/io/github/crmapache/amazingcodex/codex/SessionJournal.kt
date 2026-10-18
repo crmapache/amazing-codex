@@ -24,6 +24,13 @@ internal class SessionJournal(
     private val maxEntries: Int = MAX_ENTRIES,
     /** And how many characters in total: a few large entries outweigh a great many small ones. */
     private val maxChars: Int = MAX_CHARS,
+    /**
+     * The last number an earlier journal of the same tab gave out - a tab closed and opened again. Its numbering
+     * carries on from there, as it does across a [reset], and for the same reason: a client back from a break
+     * with an old number would otherwise be handed nothing after it, or entries it has seen under numbers it
+     * recognises. What it numbered is gone for good (see [wiped]).
+     */
+    after: Long = 0,
 ) {
 
     data class Entry(
@@ -109,7 +116,7 @@ internal class SessionJournal(
 
     private val entries = ArrayDeque<Entry>()
 
-    private var nextSeq = 1L
+    private var nextSeq = after + 1
 
     /** How many entries have been pushed out of the head - the client is told about them explicitly. */
     private var dropped = 0L
@@ -122,7 +129,13 @@ internal class SessionJournal(
      * entries out of the middle, and when one of them happens to be the oldest the first number jumps with
      * nothing lost at all.
      */
-    private var goneThrough = 0L
+    private var goneThrough = after
+
+    /**
+     * The last number given out before the journal last started over - a [reset], or the close of the tab's earlier
+     * journal (see the constructor). A client holding anything numbered up to it holds a feed that is gone.
+     */
+    private var wipedThrough = after
 
     private var chars = 0L
 
@@ -272,10 +285,20 @@ internal class SessionJournal(
         // conversation is replayed from a page of its end, and that gap is where the rest of it is loaded
         // from.
         goneThrough = nextSeq - 1
+        wipedThrough = nextSeq - 1
         entries.clear()
         chars = 0
         dropped = 0
     }
+
+    /**
+     * Whether a client that holds everything up to [seq] holds a feed this journal started over from - see [reset].
+     * Such a client is handed the journal as one that has seen nothing: kept, its screen would have what came after
+     * added under what is gone - and a journal with nothing in it yet would have it keep what is gone outright,
+     * which "nothing after your number" says to it.
+     */
+    @Synchronized
+    fun wiped(seq: Long): Boolean = seq in 1..wipedThrough
 
     /**
      * Drop the entry that first mentions [marker] and everything after it - the conversation was cut back

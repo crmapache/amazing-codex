@@ -59,8 +59,8 @@ internal class CodexSessions(
      * otherwise be drawn by whatever the setting holds NOW - that is, by a choice made in a neighbouring
      * tab after this conversation had already started on something else.
      */
-    private val onBorn: (sessionId: String, effort: String, model: String, contextMode: String, accountId: String) -> Unit =
-        { _, _, _, _, _ -> },
+    private val onBorn: (sessionId: String, effort: String, model: String, contextMode: String, accountId: String, fast: Boolean?) -> Unit =
+        { _, _, _, _, _, _ -> },
     /**
      * A conversation is being stopped so that it can move to another account.
      *
@@ -94,8 +94,11 @@ internal class CodexSessions(
      * server takes the process down and puts it back up, and what that costs is not one bit different -
      * the same fleet, the same dev server, the same cards left ticking. It was announced on one road and
      * not on the other, and the difference between the two roads is nothing a person could see.
+     *
+     * [kept] names the questions that do NOT die with it: a plan waiting for a decision, which the conversation
+     * replacing this one holds as its own (see CodexSession.HeldPlan). Their cards stay where they are.
      */
-    private val onProcessDropping: (sessionId: String) -> Unit = {},
+    private val onProcessDropping: (sessionId: String, kept: Set<String>) -> Unit = { _, _ -> },
     /**
      * The conversation has been replaced and stands ready on the account now chosen.
      *
@@ -113,6 +116,23 @@ internal class CodexSessions(
     /** An MCP server of a conversation finished starting - see CodexSession.onMcpSettled. */
     private val onMcpSettled: (sessionId: String) -> Unit = {},
     private val onAppAuthRequired: (sessionId: String, appId: String) -> Unit = { _, _ -> },
+    /**
+     * A tab's process was replaced while the tab stood idle - a quiet move, a renewal, a restart - and the new
+     * one is in the register now.
+     *
+     * Nobody speaks for the tab on these roads: no turn ended, so no status goes out. Yet this is the moment a
+     * "carry on" can be owed - the background agents that died with the old process, a limit wait that the
+     * move to another account has just ended (see [carryOns]).
+     */
+    private val onReplacedQuietly: (sessionId: String) -> Unit = {},
+    /** What the panel owes a tab has changed - read it anew with [carryOnOf] (see CarryOns.onChange). */
+    private val onCarryOnChanged: (sessionId: String) -> Unit = {},
+    /**
+     * Whoever drives these conversations says what each still has to say (see CodexSession.onUnsentWaiting), and
+     * this is a conversation asking for it - with [sayUnsent], in its turn among everything else waiting to be said.
+     * Null: each conversation says it itself at its turn's end, which is how one stands when nothing drives it.
+     */
+    private val onUnsentWaiting: ((sessionId: String) -> Unit)? = null,
 ) : Disposable {
 
     private val sessions = ConcurrentHashMap<String, CodexSession>()
@@ -125,6 +145,15 @@ internal class CodexSessions(
      * survive until somebody writes into it.
      */
     private val launches = ConcurrentHashMap<String, SessionLaunch>()
+
+    /**
+     * The files each tab's person put back since its agent last heard of it (see PutBack) - by tab, not by process:
+     * a move to another account replaces the process between the revert and the next message.
+     */
+    private val putBacks = ConcurrentHashMap<String, PutBack>()
+
+    /** What this run of the IDE settled of each tab's turns against the disk (see TurnFiles.Settled) - by tab, as above. */
+    private val settlements = ConcurrentHashMap<String, TurnFiles.Settled>()
 
     /**
      * The tabs holding a conversation that was a scenario run's main thread - see
@@ -250,6 +279,9 @@ internal class CodexSessions(
             effort = chosen.effort.ifEmpty { parent?.effort.orEmpty() },
             mode = chosen.mode.ifEmpty { parent?.permissionMode.orEmpty() },
             contextMode = chosen.contextMode.ifEmpty { parent?.contextMode.orEmpty() },
+            // The same conversation in another tab, and so at the same speed: fast mode was asked for this
+            // conversation, and a fork of it is no new one (see SessionLaunch.fast).
+            fast = chosen.fast ?: parent?.fastMode,
         )
         // The account does NOT travel with it, unlike the three above. A fork starts on the account
         // everything else on this machine is on: that is the whole of the rule now, and a fork of a tab
@@ -339,9 +371,10 @@ internal class CodexSessions(
      * A tab whose turn is running is INTERRUPTED for it, the way Stop interrupts it, and moves on the
      * result that follows (see [pendingAccounts] and CodexSessionHub, onTurnEnded). A turn runs for
      * minutes, and a conversation billed all that time to the account the person has just left is not
-     * what pressing Select says. Nothing written is lost by it: the CLI closes the interrupted call and
-     * puts a "[Request interrupted by user]" line into the transcript, so the process raised on the new
-     * account resumes onto everything that was said.
+     * what pressing Select says. Nothing written is lost by it: Codex ends the interrupted turn as aborted
+     * and keeps what it wrote in the thread, so the process raised on the new account resumes onto
+     * everything that was said - and is then told to carry on, because what the agent is handed of the stop
+     * is `<turn_aborted>`, "the user interrupted the previous turn on purpose" (see [carryOns]).
      *
      * Unless the account chosen is the one the tab is already on under another row - the CLI's own
      * sign-in holding the very account of an added row, which is what a merge leaves behind (see
@@ -415,6 +448,57 @@ internal class CodexSessions(
      * to happen before the conversation says anything else.
      */
     private val pendingRenewals = ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * The "carry on" each tab is owed - see CarryOns.
+     *
+     * An account switch's is marked at the interrupt rather than when the move lands, because the interrupt is
+     * the fact. A switch changed back inside the eight seconds voids the move and not the stop: that has
+     * already gone to the CLI, and the feed under the turn says "Stopped to switch account" all the same.
+     *
+     * Dropped by everything that ends what there was to carry on and runs through here: a rewind of the
+     * conversation, the tab closed or given another conversation. A person's Stop or kill says no to the words
+     * and keeps a limit's wait for the queue (see CarryOns.cancel). A person's own message drops it too, at the
+     * hub, which is the one that knows a message of theirs from the panel's (see CodexSessionHub.deliverPrompt).
+     */
+    private val carryOns = CarryOns(onChange = { sessionId -> onCarryOnChanged(sessionId) })
+
+    /** What this tab is owed now, settled - null when nothing is or it is not due yet (see CarryOns.take). */
+    fun takeCarryOn(sessionId: String, now: Long = System.currentTimeMillis()): CarryOns.Owed? =
+        carryOns.take(sessionId, now)
+
+    /** The tabs whose "carry on" is due at [now] - see CarryOns.due. */
+    fun dueCarryOns(now: Long): List<String> = carryOns.due(now)
+
+    /** What this tab is owed, due or not - see CarryOns. */
+    fun carryOnOf(sessionId: String): CarryOns.Owed? = carryOns.of(sessionId)
+
+    /** The "carry on" the panel said last in this tab, while nobody else has spoken there since. */
+    fun lastCarryOn(sessionId: String): CarryOns.Owed? = carryOns.lastSaid(sessionId)
+
+    fun oweCarryOn(sessionId: String, owed: CarryOns.Owed) {
+        // Only for a tab there is: a note about one closed a moment ago would be found by a tab opened under
+        // the same id later.
+        if (sessions.containsKey(sessionId)) carryOns.owe(sessionId, owed)
+    }
+
+    /** [next] in place of [read], only if [read] still stands - see CarryOns.replace. */
+    fun replaceCarryOn(sessionId: String, read: CarryOns.Owed, next: CarryOns.Owed?): Boolean =
+        carryOns.replace(sessionId, read, next)
+
+    fun dropCarryOn(sessionId: String) {
+        carryOns.drop(sessionId)
+    }
+
+    /** The person said no to the carry-on - see CarryOns.cancel. */
+    fun cancelCarryOn(sessionId: String) {
+        carryOns.cancel(sessionId)
+    }
+
+    /** A turn of this tab went through - see CarryOns.answered. */
+    fun carryOnAnswered(sessionId: String) {
+        carryOns.answered(sessionId)
+    }
 
     /**
      * The deadline under a move that is waiting for a turn to stop.
@@ -502,7 +586,24 @@ internal class CodexSessions(
             return
         }
 
-        if (session.isBusy && !force) {
+        // Continued only if there is something to continue. The CLI mints an identifier the moment a
+        // process comes up, before a single word has been said, and asking it to resume that identifier
+        // fails outright - "No conversation found with session ID", exit code 1, on the person's first
+        // message after choosing an account. The transcript on disk is what tells the two apart: a tab
+        // that has said nothing has no file, and moves as the empty tab it is. Looked up only when needed: a turn
+        // about to be interrupted moves later, and looks then.
+        val conversationId by lazy {
+            session.conversationId?.takeIf { CodexHistory.transcriptFile(workingDirectory, it) != null }
+        }
+
+        // A plan waiting for a decision is not a turn: Codex ended that turn with the plan, which is in the thread,
+        // and the decision is a turn the panel starts itself (see CodexSession.HeldPlan). So there is nothing to
+        // interrupt and nothing to wait for - the conversation moves now, and the plan with it, its card live on
+        // every screen. Only onto the same thread: a conversation coming up without one would be asked to carry
+        // out a plan it has never seen, so then the plan is set aside, the way Stop sets it aside, as it always was.
+        val carriesPlan = session.waitsOnPlan && conversationId != null
+
+        if ((session.isBusy || session.waitsOnPlan) && !carriesPlan && !force) {
             // A renewal waits for the turn instead of taking it away, and the test is the account rather
             // than the flag: nothing is being billed anywhere it should not be - it is the same
             // subscription on both sides of this - so a turn stopped mid-sentence would cost the person
@@ -524,32 +625,46 @@ internal class CodexSessions(
             // Select says - so the turn is interrupted exactly as the Stop button interrupts it, and the
             // move lands on the result that follows (see CodexSessionHub, onTurnEnded).
             //
-            // The partial answer is not lost by it: the CLI closes the interrupted call and writes a
-            // "[Request interrupted by user]" line into the transcript, so the process raised on the new
-            // account resumes onto everything that was said.
+            // The partial answer is not lost by it: Codex ends the turn as aborted and keeps everything it
+            // wrote in the thread (measured on 0.163: the thread is let go of within a second), so the process
+            // raised on the new account resumes onto everything that was said.
             if (pendingAccounts.put(sessionId, accountId) == accountId) return
 
+            // Nobody asked for this stop, so nobody will ask for the rest of the turn either: the work is
+            // carried on by the panel once the tab stands on the new account (see [carryOns]). Codex hands the
+            // agent the stop as `<turn_aborted>` - "the user interrupted the previous turn on purpose" - so
+            // the agent too reads it as the person's, and stands.
+            //
+            // Only over a turn Codex is running. A plan set aside here (one that cannot go on with the thread -
+            // see [carriesPlan]) is busy as far as the panel knows, but its turn ended with the plan (see
+            // CodexSession.heldPlanTurn): nothing is aborted, and "the interruption above was an automatic
+            // switch" would be said about an interruption that is not there.
+            if (session.runsATurn) carryOns.owe(sessionId, CarryOns.Owed(CarryOns.Reason.ACCOUNT_SWITCH))
             onMoveStopping(sessionId)
-            session.interrupt()
+            // What the person wrote into the turn and the turn would not take in (see CodexSession.unsent) is not
+            // the turn's to lose: it waits in this conversation and goes on with the move, said in the new process
+            // after the panel's "carry on" - after the work it was written into - and before anything queued.
+            session.interrupt(keepUnsent = true)
             armForcedMove(sessionId, accountId)
             return
         }
 
         forcedMoves.remove(sessionId)?.cancel(false)
 
+        // What goes on with the conversation rather than with the process: the plan waiting for a decision, and
+        // what is still to be said. Taken before anything below can tell the old process's end - the plan's turn
+        // would be told to have ended, and the messages would go with it.
+        val plan = if (carriesPlan) session.handOverPlan() else null
+        val unsent = session.takeUnsent()
+        // And the names its messages went by, for the same thread going on: a rewind, a fork and a picture's preview
+        // name a message sent before the move by the name the panel gave it then (see CodexSession.placeOf).
+        val names = if (conversationId != null) session.messageNames() else null
+
         // The process is alive and about to be thrown away, and it is holding work that will not survive
         // it - see [onProcessDropping]. Only a live one: a tab that never started a process, or whose
         // process is already gone, has nothing to lose and nothing to announce. And only when nobody has
         // said it yet - see [told].
-        if (session.isRunning && !told) onProcessDropping(sessionId)
-
-        // Continued only if there is something to continue. The CLI mints an identifier the moment a
-        // process comes up, before a single word has been said, and asking it to resume that identifier
-        // fails outright - "No conversation found with session ID", exit code 1, on the person's first
-        // message after choosing an account. The transcript on disk is what tells the two apart: a tab
-        // that has said nothing has no file, and moves as the empty tab it is.
-        val conversationId = session.conversationId
-            ?.takeIf { CodexHistory.transcriptFile(workingDirectory, it) != null }
+        if (session.isRunning && !told) onProcessDropping(sessionId, setOfNotNull(plan?.requestId))
 
         // A fork nobody has spoken in yet has no transcript of its own, and everything it is about
         // belongs to its source: raised as an ordinary tab it would come up empty, which is the same
@@ -566,11 +681,14 @@ internal class CodexSessions(
             effort = session.effort,
             mode = session.permissionMode.orEmpty(),
             contextMode = session.contextMode,
+            // Asked for this conversation, so it moves with it. Whether the new account serves it is Codex's to
+            // say, and it says so on the next turn (see CodexSession.fastReport).
+            fast = session.fastMode,
         )
 
         moving.add(sessionId)
         try {
-            close(sessionId)
+            close(sessionId, goesOn = true)
             launches[sessionId] = carried
 
             sessions[sessionId] = newSession(
@@ -579,10 +697,15 @@ internal class CodexSessions(
                 resumeFrom = conversationId,
             ).also {
                 Disposer.register(this, it)
+                it.adopt(plan, unsent, names)
             }
         } finally {
             moving.remove(sessionId)
         }
+
+        // A move that cut a turn short is spoken for by the end of that turn, or by the deadline under it (see
+        // [onMoved]); every other one is not, and it may be exactly what a "carry on" was waiting for.
+        if (!told) onReplacedQuietly(sessionId)
     }
 
     /**
@@ -800,6 +923,9 @@ internal class CodexSessions(
         files: Boolean,
         onOutcome: (Rewind.Outcome) -> Unit,
     ) {
+        // What was to be carried on is about to be cut back with the rest, or kept by somebody who has just
+        // shown they are here and deciding (see [carryOns]).
+        if (conversation) carryOns.drop(sessionId)
         awake(sessionId).rewind(target, lastSeen, conversation, files, onOutcome)
     }
 
@@ -808,13 +934,20 @@ internal class CodexSessions(
         sessions[sessionId]?.cancelAside(id)
     }
 
-    /** Interrupting a turn: the conversation stays alive, unlike closing the session. */
+    /**
+     * Interrupting a turn: the conversation stays alive, unlike closing the session.
+     *
+     * The person's Stop - a move interrupts the session itself (see [moveTo]) - so whatever the panel was
+     * going to carry on here is now stopped by somebody who meant it (see [carryOns]).
+     */
     fun interrupt(sessionId: String, onTimeout: () -> Unit = {}) {
+        carryOns.cancel(sessionId)
         // The conversation is already gone - the panel will show it as free anyway, nothing to explain.
         sessions[sessionId]?.interrupt(onTimeout)
     }
 
     fun stop(sessionId: String) {
+        carryOns.cancel(sessionId)
         sessions[sessionId]?.stop()
     }
 
@@ -957,13 +1090,15 @@ internal class CodexSessions(
     private fun restartNow(sessionId: String, session: CodexSession, then: () -> Unit): Boolean {
         // Asked after the move above, not before: that one may have replaced the process already and
         // said so, and the process standing here now is the one about to be thrown away.
-        if (session.isRunning) onProcessDropping(sessionId)
+        if (session.isRunning) onProcessDropping(sessionId, emptySet())
 
         val raised = session.restart()
         // Whoever asked for the restart is told at the moment it happens rather than at the moment it
         // was asked for: the MCP screen questions the process next, and questioning the one that is
         // being replaced answers with the very list the person has just changed.
         then()
+        // And the agents that worked in the background are gone with the old process (see [onReplacedQuietly]).
+        onReplacedQuietly(sessionId)
 
         return raised
     }
@@ -1009,6 +1144,15 @@ internal class CodexSessions(
 
     /** The transcript this conversation is filed under, once the CLI has named one - see CodexHistory. */
     fun conversationIdOf(sessionId: String): String? = sessions[sessionId]?.conversationId
+
+    /** Where a message the panel named stands in the conversation's thread - see CodexSession.placeOf. */
+    fun placeOf(sessionId: String, uuid: String): Pair<String, Int>? = sessions[sessionId]?.placeOf(uuid)
+
+    /** What the conversation still has to say at its turn's end - see CodexSession.unsent. */
+    fun unsentOf(sessionId: String): List<CodexSession.Outgoing> = sessions[sessionId]?.unsent().orEmpty()
+
+    /** The first of what the conversation still has to say, said now as a turn - see CodexSession.sayUnsent. */
+    fun sayUnsent(sessionId: String): Boolean = sessions[sessionId]?.sayUnsent() == true
 
     /**
      * The conversation's id only once it has something on disk to come back to (see
@@ -1079,6 +1223,18 @@ internal class CodexSessions(
                 // over its untouched tabs (see StartingChoice).
                 CodexSessionHub.announceNewTabDefaults()
             }
+            // A model without a fast tier turns this conversation's ask off - Codex drops the tier from that
+            // model's requests anyway (see CodexSession.fastReport) - and it stays off when the next model has
+            // one again: the fast tier spends the plan's limits faster, and coming back on by itself would be a
+            // cost nobody asked for. Only an ask of the panel's: a tier set in Codex's own config is Codex's to
+            // apply, and it says so on the next turn. And only on the catalogue's word: a model it has not
+            // described ("default" is described, as the model it comes to) keeps what was asked.
+            val session = sessions[sessionId]
+            if (change.applied && session?.fastMode == true &&
+                CodexAccounts.getInstance().hasFastMode(accountOf(sessionId), change.model) == false
+            ) {
+                session.setFastMode(false)
+            }
             val needsRestart = change.applied && current.isRunning && current.contextWindow() != beforeWindow
             if (needsRestart) restart(sessionId) { onApplied(change) } else onApplied(change)
         }
@@ -1125,6 +1281,20 @@ internal class CodexSessions(
     fun effort(sessionId: String): String? = sessions[sessionId]?.effort
 
     /**
+     * Fast mode for this conversation - and for no other, nor for the tabs opened after it (see
+     * SessionLaunch.fast). Nothing is written to the settings, so there is no `remember` here, unlike [setEffort].
+     */
+    fun setFastMode(sessionId: String, on: Boolean) {
+        session(sessionId).setFastMode(on)
+    }
+
+    /**
+     * What this conversation asks of the fast tier - null when it asks nothing, and then Codex's own config decides
+     * (see CodexSession.fastMode), or when there is no conversation yet.
+     */
+    fun fastMode(sessionId: String): Boolean? = sessions[sessionId]?.fastMode
+
+    /**
      * The model this conversation runs on, or null when there is no such conversation - then the saved
      * setting is the honest answer, exactly as with the effort above.
      *
@@ -1167,6 +1337,9 @@ internal class CodexSessions(
             model = StartingChoice.model(account, requested = launch.model),
             effort = StartingChoice.effort(account, requested = launch.effort),
             mode = launch.mode,
+            // And the window, the way its birth works it out: a tab opened on Long showed Std until its first step.
+            contextMode = StartingChoice.contextMode(requested = launch.contextMode),
+            fast = launch.fast,
         )
     }
 
@@ -1188,17 +1361,21 @@ internal class CodexSessions(
         }
     }
 
-    /** A live conversation's context window usage - a sleeping one's is empty by definition. */
+    /**
+     * A conversation's context window usage - Codex's last count, in the window the conversation is in now (see
+     * CodexSession.contextNow).
+     *
+     * A sleeping one is asked too, unlike in the original, where a CLI given back held nothing: Codex's count is of
+     * the thread, which the process going to sleep does not change. And it is what a window picked while it sleeps
+     * needs: no process comes up for the pick, so this is the only way the count measured against the new window
+     * reaches the clients and the conversation's snapshot - a panel reloaded afterwards was handed the old one.
+     */
     fun requestContextUsage(
         sessionId: String,
         onResult: (JsonObject) -> Unit,
         onFailure: (String) -> Unit = {},
     ) {
-        val session = sessions[sessionId]
-        if (session == null || !session.isRunning) {
-            onFailure("no live session")
-            return
-        }
+        val session = sessions[sessionId] ?: return onFailure("no conversation")
         session.requestContextUsage(onResult, onFailure)
     }
 
@@ -1214,7 +1391,13 @@ internal class CodexSessions(
         session(sessionId).requestUsage(onUsage, onFailure)
     }
 
-    fun close(sessionId: String) {
+    /**
+     * The tab's conversation taken down. [goesOn] - the same conversation goes on in this tab under a new process
+     * (a move to another account), and what the old one still says on its way out is part of it: it happened,
+     * and the feed is a record. Otherwise the tab is closed, or is given another conversation, and the old
+     * process is muted first (see CodexSession.mute).
+     */
+    fun close(sessionId: String, goesOn: Boolean = false) {
         // A tab closed before anything was written into it takes its unspent choice with it.
         launches.remove(sessionId)
         // And what its conversation used to be: the next one opened here is somebody else's (see
@@ -1227,12 +1410,38 @@ internal class CodexSessions(
         pendingAccounts.remove(sessionId)
         pendingRenewals.remove(sessionId)
         forcedMoves.remove(sessionId)?.cancel(false)
+        // What the tab was to be told to carry on, unless this close IS the move it waits for (see [carryOns]).
+        if (!goesOn) carryOns.drop(sessionId)
+        // And what its agent was still to be told about files put back: there is no agent left to tell.
+        if (!goesOn) putBacks.remove(sessionId)
+        if (!goesOn) settlements.remove(sessionId)
 
         sessions.remove(sessionId)?.let { session ->
+            if (!goesOn) session.mute()
             session.stop()
             Disposer.dispose(session)
         }
     }
+
+    /**
+     * The person put back [path] in this tab's conversation - a row of a turn's list reverted or brought back (see
+     * CodexSessionHub.revertChanges). Its agent is told before its next turn (see PutBack). [origin] is where a moved file
+     * stood before the turn moved it.
+     */
+    /** A press on a turn's list of [sessionId] went to the IDE - the next turn waits for its answer (see PutBack.pressed). */
+    fun putBackPressed(sessionId: String) = putBacks.computeIfAbsent(sessionId) { PutBack() }.pressed()
+
+    /** And the IDE answered it, its files noted (see [notePutBack]). */
+    fun putBackAnswered(sessionId: String) {
+        putBacks[sessionId]?.answered()
+    }
+
+    fun notePutBack(sessionId: String, path: String, way: PutBack.Way, origin: String? = null) {
+        putBacks.computeIfAbsent(sessionId) { PutBack() }.note(path, way, origin)
+    }
+
+    /** The conversation behind a tab - for the tests, which feed it what a process would say. */
+    internal fun conversation(sessionId: String): CodexSession? = sessions[sessionId]
 
     override fun dispose() {
         sessions.keys.toList().forEach(::close)
@@ -1258,6 +1467,8 @@ internal class CodexSessions(
          *
          * Only the callbacks that speak about the tab's STATE are held to this. What the dying process
          * still has to say - its last lines, its crash - is said: it happened, and the feed is a record.
+         * Unless the tab was closed or given another conversation: then there is nobody it is said to (see
+         * [close]).
          */
         val slot = arrayOfNulls<CodexSession>(1)
         val current = { sessions[sessionId] === slot[0] }
@@ -1286,7 +1497,11 @@ internal class CodexSessions(
         val model = StartingChoice.model(account, requested = launch.model)
         val contextMode = StartingChoice.contextMode(requested = launch.contextMode)
 
-        onBorn(sessionId, effort, model, contextMode, account)
+        // Codex's own config decides unless this conversation itself asked: no setting of the panel carries it into
+        // a new tab (see SessionLaunch.fast).
+        val fast = launch.fast
+
+        onBorn(sessionId, effort, model, contextMode, account, fast)
 
         return CodexSession(
             workingDirectory = workingDirectory,
@@ -1296,6 +1511,7 @@ internal class CodexSessions(
             model = model,
             effort = effort,
             contextMode = contextMode,
+            fastMode = fast,
             accountId = account,
             // A tab is told where it is running; one continuing a finished run's main thread is told one
             // thing more - that the role the transcript keeps insisting on is over (see
@@ -1320,10 +1536,13 @@ internal class CodexSessions(
             onRenamed = { title -> onRenamed(sessionId, title) },
             onTurnEnded = { if (current()) onTurnEnded(sessionId) },
             onTurnStarted = { if (current()) onTurnStarted(sessionId) },
+            onUnsentWaiting = onUnsentWaiting?.let { ask -> { if (current()) ask(sessionId) } },
             onContext = { used, max -> if (current()) onContext(sessionId, used, max) },
             onRateLimits = { usage -> onRateLimits(sessionId, usage) },
             onMcpSettled = { if (current()) onMcpSettled(sessionId) },
             onAppAuthRequired = { app -> if (current()) onAppAuthRequired(sessionId, app) },
+            putBack = putBacks.computeIfAbsent(sessionId) { PutBack() },
+            settled = settlements.computeIfAbsent(sessionId) { TurnFiles.Settled() },
         ).also { slot[0] = it }
     }
 

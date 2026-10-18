@@ -17,8 +17,8 @@ export interface MenuOption {
    * stands in is exactly the width of an icon.
    */
   icon?: string
-  /** The icon's paint. The default is the accent's, as the tick's is. */
-  iconTone?: 'accent' | 'warn'
+  /** The icon's paint. The default is the accent's, as the tick's is; `dim` is a switch that is off. */
+  iconTone?: 'accent' | 'warn' | 'dim'
 }
 
 interface MenuProps {
@@ -131,7 +131,9 @@ export const Menu = ({ title, hint, width, anchor, options, selected, onPick, on
               onMouseEnter={() => setHot(option.id)}
               onClick={() => onPick(option.id)}
             >
-              <span className={`${s.menuTick} ${option.iconTone === 'warn' ? s.menuIconWarn : ''}`}>
+              <span
+                className={`${s.menuTick} ${option.iconTone === 'warn' ? s.menuIconWarn : option.iconTone === 'dim' ? s.menuIconDim : ''}`}
+              >
                 {option.icon ?? (on ? '✓' : '')}
               </span>
               <div className={s.menuBody}>

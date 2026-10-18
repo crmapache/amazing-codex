@@ -56,6 +56,7 @@ internal object UsageFacts {
             "sendKey" to if (preferences.sendKey == "modEnter") "modEnter" else "enter",
             "restoreTabs" to preferences.restoreTabs,
             "shareEditor" to preferences.shareEditor,
+            "spellcheck" to preferences.spellcheck,
             "calmColors" to preferences.gaugeVivid,
             "hiddenIndicators" to preferences.hiddenIndicators.size,
             "customModels" to preferences.customModels.size,

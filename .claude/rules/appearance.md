@@ -10,16 +10,16 @@ paths:
   - "webview/src/main.tsx"
   - "webview/src/mobile/main.tsx"
   - "webview/mobile.html"
-  - "src/main/kotlin/io/github/crmapache/amazingclaudecode/webview/PanelTheme.kt"
-  - "src/main/kotlin/io/github/crmapache/amazingclaudecode/webview/IdeTypography.kt"
-  - "src/test/kotlin/io/github/crmapache/amazingclaudecode/webview/PanelAppearanceTest.kt"
+  - "src/main/kotlin/io/github/crmapache/amazingcodex/webview/PanelTheme.kt"
+  - "src/main/kotlin/io/github/crmapache/amazingcodex/webview/IdeTypography.kt"
+  - "src/test/kotlin/io/github/crmapache/amazingcodex/webview/PanelAppearanceTest.kt"
 ---
 
 ## Внешний вид: светлая тема и свой размер текста
 
 Просили из отзыва: «можно светлую тему вместо тёмной и размер шрифта независимо от настроек IDE». В
 «Settings» первой строкой стоит «Appearance»: сверху размер текста, под ним тема. Обе настройки машинные
-(`ClaudePreferences.theme` / `textSize`), идут в каждое окно через `ClaudePanels.everyPanel` и на телефон
+(`CodexPreferences.theme` / `textSize`), идут в каждое окно через `CodexPanels.everyPanel` и на телефон
 не попадают вовсе (`setTheme`/`setTextSize` в `RemoteCommands.DENIED`).
 
 ### Тема

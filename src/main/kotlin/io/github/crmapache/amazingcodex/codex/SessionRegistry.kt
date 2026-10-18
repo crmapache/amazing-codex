@@ -93,6 +93,67 @@ internal class SessionRegistry {
         return true
     }
 
+    /**
+     * A tab closed by hand, opened again where it stood - see ClosedTabs and TabMemory.Closed for what is
+     * remembered of the place. False means the identifier is taken.
+     *
+     * Its group may still stand: forks outlive the tab they were made from, and siblings stay when a fork
+     * goes. Then the tab goes back into it - the group's head to the front (the forks under it are its own
+     * again, the colour and the indent with them), a fork after the last of its former left neighbours that
+     * is still there - or, with none of them left, right after the group's head, which a fork never stands before.
+     * Its parent, if gone, is not invented: the fork stays in the group and points at no
+     * one, as its siblings already do.
+     *
+     * With the group gone it is a group of its own, put back right after the last of the groups it stood after
+     * that is still there - by its neighbours rather than by a number, so that the groups closed, opened or
+     * brought back since do not shift it: the rule the panel places its own tabs by (see placeIn in tabs.ts).
+     */
+    @Synchronized
+    fun reopen(
+        id: String,
+        title: String,
+        titleSource: String,
+        parentId: String?,
+        groupId: String,
+        depth: Int,
+        groupsLeft: List<String>,
+        tabsLeft: List<String>,
+        at: Long = System.currentTimeMillis(),
+    ): Boolean {
+        if (id.isEmpty() || tabs.any { it.id == id }) return false
+
+        val name = title.ifBlank { if (id == CodexSessions.MAIN_SESSION) MAIN_TITLE else NEW_TITLE }
+        val source = if (title.isBlank()) SessionSnapshot.TITLE_DEFAULT else titleSource
+
+        val start = tabs.indexOfFirst { it.groupId == groupId }
+        if (start >= 0) {
+            val head = groupId == id
+            val parent = parentId?.takeIf { parentTab -> tabs.any { it.id == parentTab } }
+            val after = tabs.indexOfLast { it.groupId == groupId && it.id in tabsLeft }
+                .takeIf { it >= 0 } ?: tabs.indexOfFirst { it.id == groupId }
+            val tab = Tab(
+                id = id,
+                groupId = groupId,
+                depth = if (head) 0 else maxOf(depth, 1),
+                title = name,
+                titleSource = source,
+                parentId = if (head) null else parent,
+                createdAt = at,
+            )
+            tabs.add(if (head || after < 0) start else after + 1, tab)
+            return true
+        }
+
+        val groups = tabs.map { it.groupId }.distinct()
+        val before = groups.getOrNull(groups.indexOfLast { it in groupsLeft } + 1)
+        val index = before?.let { group -> tabs.indexOfFirst { it.groupId == group } } ?: tabs.size
+        tabs.add(
+            index,
+            Tab(id = id, groupId = id, depth = 0, title = name, titleSource = source, parentId = null, createdAt = at),
+        )
+        return true
+    }
+
     /** Close a tab. False means there was nothing to close. */
     @Synchronized
     fun close(id: String): Boolean = tabs.removeIf { it.id == id }

@@ -8,6 +8,7 @@ import { useCardState } from '../../hooks/useCardState'
 import { useT } from '../../i18n'
 import { Back } from './Back'
 import m from '../mobile.module.css'
+import { EmptyPlate } from './EmptyPlate'
 
 /**
  * What one step actually said, on a screen of its own.
@@ -78,7 +79,7 @@ export const ScenarioStep = ({
         {!log?.loaded ? (
           <p className={m.empty}>{t.scenarios.log.loading}</p>
         ) : !log.found || items.length === 0 ? (
-          <p className={m.empty}>{t.scenarios.log.missing}</p>
+          <EmptyPlate title={t.scenarios.log.missing} inset />
         ) : (
           /*
             Every "something is happening" prop is empty, and that is the whole difference between this

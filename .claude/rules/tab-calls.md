@@ -4,7 +4,7 @@ paths:
   - "webview/src/sounds.test.ts"
   - "webview/src/hooks/useResting.ts"
   - "webview/src/components/Header.tsx"
-  - "src/main/kotlin/io/github/crmapache/amazingclaudecode/toolwindow/ClaudePanel.kt"
+  - "src/main/kotlin/io/github/crmapache/amazingcodex/toolwindow/CodexPanel.kt"
 ---
 
 ## Вкладка, которая позвала, светится
@@ -22,7 +22,7 @@ paths:
 - **Светится только то, что прозвучало** (`alert` в `App.tsx`). Выключенный галочкой повод не звал и не
   светится. Выход из аккаунта звучит с открытой вкладки и свечения не даёт.
 - **Открытая вкладка светится, только если звук сыграл в твоё отсутствие** (сообщение `calledAway` из
-  `ClaudePanel.playAlert`). Звук с открытой вкладки уходит с `onlyIfAway`, и играет его IDE, только когда
+  `CodexPanel.playAlert`). Звук с открытой вкладки уходит с `onlyIfAway`, и играет его IDE, только когда
   панель скрыта или окно IDE не впереди - то есть ровно когда на неё не смотрят. Сыграв, IDE говорит об
   этом панели, и вкладка загорается как фоновая. Сначала открытая не светилась никогда («на неё и так
   смотрят»), и жалоба была ровно про это: одна вкладка, свёрнутое окно, звук есть, а вернулся - где

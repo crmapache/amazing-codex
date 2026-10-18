@@ -24,6 +24,16 @@ internal const val SCENARIO_VERSION = 1
 /** How many passes a stage may be given. Ten because the picker has to end somewhere. */
 internal const val MAX_STAGE_REPEAT = 10
 
+/**
+ * How many items the list of a stage that runs once per item may hold (see [Stage.each]).
+ *
+ * Not a picker's end like [MAX_STAGE_REPEAT] - the list's length is the head's answer, not a number a person
+ * chose - but a guard against an answer that is no list at all: a head that pasted a log line by line. A list
+ * over it ends the run saying so rather than being cut short, because a list cut short silently is the very
+ * thing this kind of stage exists to put an end to.
+ */
+internal const val MAX_STAGE_ITEMS = 50
+
 /** How many extra goes the head may give one card before the card is called failed. */
 internal const val MAX_CARD_RETRIES = 5
 
@@ -152,7 +162,35 @@ internal data class Stage(
      * happened yet as planned rather than as work, and drops them when the head ends the loop early.
      */
     val untilDone: Boolean = false,
+    /**
+     * Whether this stage runs once for each item of a list rather than a number of times - and, when it
+     * does, what the list is.
+     *
+     * The loop for work whose length is known the moment it begins and not a moment before: the cards of an
+     * umbrella, the files a review flagged. Counted with [repeat] it was a ceiling with the head picking "the
+     * next one" on every pass, so a pass spent going back to an item that half-failed was a pass the last
+     * item did not get, and nothing on the screen said how many items there were. Here the head is asked for
+     * the list once, as the stage begins, and the stage becomes exactly one pass per item, each named after
+     * its item (see StageList). [repeat] and [untilDone] are not read while this is set.
+     */
+    val each: StageEach? = null,
     val cards: List<Card> = emptyList(),
+)
+
+/**
+ * The list a stage runs once per item of (see [Stage.each]).
+ *
+ * The item reaches the cards the way a slot does - written in their prompts as `[[name]]` - because that is
+ * what it is: a value the run fills in, one per pass. The difference is who fills it and when: the head
+ * gives every item at once, as the stage begins, and the panel writes each into its own pass, rather than
+ * the head choosing it card by card.
+ */
+@Serializable
+internal data class StageEach(
+    /** Written in the stage's prompts as `[[name]]`. The same rule as a slot's name. */
+    val name: String = "",
+    /** What the list is, in the person's words - the whole of what the head is told when it is asked for it. */
+    val description: String = "",
 )
 
 /**

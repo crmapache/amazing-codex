@@ -215,4 +215,18 @@ class RunSummaryTest {
         assertEquals(false, finished.summarise().starred)
         assertEquals(true, finished.copy(starred = true).summarise().starred)
     }
+    // Seven stops of one card are seven items of a list, and the item is the one thing telling them apart.
+    @Test
+    fun `a stop of a pass of a list is named after its item`() {
+        val run = ScenarioRun(
+            state = RunState.RUNNING,
+            snapshot = scenario(),
+            steps = listOf(
+                step("c1", "read", "Plan it", StepState.RUNNING).copy(item = RunItem(label = "Titles for the test", value = "https://x", index = 1, count = 2)),
+                step("c1", "read", "Plan it", StepState.WAITING, pass = 2).copy(item = RunItem(label = "", value = "https://y", index = 2, count = 2)),
+            ),
+        )
+
+        assertEquals(listOf("Titles for the test", "Plan it"), run.summarise().roadmap.map { it.title })
+    }
 }

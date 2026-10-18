@@ -14,6 +14,12 @@ import type { Scenario, ScenarioCard, ScenarioCardSlot, ScenarioStage } from '..
 /** How many passes a stage may be given. Ten because the picker has to end somewhere. */
 export const MAX_STAGE_REPEAT = 10
 
+/**
+ * How many items the list of a stage that runs once per item may hold - a guard against an answer that is no
+ * list at all; a longer one ends the run rather than being cut short (see MAX_STAGE_ITEMS in Scenario.kt).
+ */
+export const MAX_STAGE_ITEMS = 50
+
 /** How many extra goes the head may give one card before the card is called failed. */
 export const MAX_CARD_RETRIES = 5
 
@@ -64,13 +70,38 @@ export const declaredSlots = (card: ScenarioCard): ScenarioCardSlot[] => {
   return [...declared, ...stray]
 }
 
+/**
+ * The slots the main thread is asked for before a card of `stage` starts: all of `declaredSlots` but the item
+ * of a stage that runs once per item, which the panel writes in itself.
+ */
+export const slotsToFill = (stage: ScenarioStage, card: ScenarioCard): ScenarioCardSlot[] =>
+  declaredSlots(card).filter((slot) => slot.name !== stage.each?.name)
+
 /** How many passes a stage is given - clamped, because the file on disk is not to be trusted. */
 export const passesOf = (stage: ScenarioStage): number =>
   Math.min(MAX_STAGE_REPEAT, Math.max(1, Math.floor(stage.repeat || 1)))
 
-/** How many cards a whole run of the scenario will start, every pass counted. */
+/** Whether a stage runs once for each item of a list rather than a number of times. */
+export const runsPerItem = (stage: ScenarioStage): boolean => Boolean(stage.each)
+
+/** Whether a stage goes round at all - a number of times, or once per item of a list. */
+export const loops = (stage: ScenarioStage): boolean => runsPerItem(stage) || passesOf(stage) > 1
+
+/**
+ * How many passes are written down for a stage before the run begins: its count, or a single pass for one
+ * that runs once per item - the place its list is asked for.
+ */
+const plannedPasses = (stage: ScenarioStage): number => (runsPerItem(stage) ? 1 : passesOf(stage))
+
+/**
+ * How many cards a whole run of the scenario will start, every pass counted. A stage that runs once per item
+ * counts one pass - its length is the main thread's answer - so this is the least a run starts.
+ */
 export const cardRuns = (scenario: Scenario): number =>
-  scenario.stages.reduce((sum, stage) => sum + stage.cards.length * passesOf(stage), 0)
+  scenario.stages.reduce((sum, stage) => sum + stage.cards.length * plannedPasses(stage), 0)
+
+/** Where the main thread's words about a stage's list are filed - drawn at the head of that stage (see ScenarioRules.listKey). */
+export const listKey = (stageId: string): string => `${stageId}:list`
 
 /**
  * What is wrong with a scenario, as names the interface has words for.
@@ -90,6 +121,14 @@ export type ProblemKind =
   | 'duplicateSlot'
   | 'badInputName'
   | 'badSlotName'
+  /** A stage that runs once per item, whose item is called something a prompt cannot write. */
+  | 'badItemName'
+  /** Such a stage, with nothing said about what the list is. */
+  | 'noItemList'
+  /** A card of such a stage declares a slot under the item's own name. */
+  | 'itemSlotClash'
+  /** No card of such a stage writes its item into its prompt. */
+  | 'unusedItem'
 
 export interface Problem {
   kind: ProblemKind
@@ -113,6 +152,17 @@ export const problemsOf = (scenario: Scenario): Problem[] => {
   for (const stage of scenario.stages) {
     if (stage.cards.length === 0) problems.push({ kind: 'emptyStage', stageId: stage.id })
 
+    // The item of a stage that runs once per item: a name the prompts write and the panel fills.
+    const each = stage.each
+    const item = each && NAME_RE.test(each.name) ? each.name : undefined
+    if (each) {
+      if (item === undefined) problems.push({ kind: 'badItemName', stageId: stage.id, name: each.name })
+      if (each.description.trim().length === 0) problems.push({ kind: 'noItemList', stageId: stage.id })
+      if (item !== undefined && !stage.cards.some((one) => mentionedSlots(one.prompt).includes(item))) {
+        problems.push({ kind: 'unusedItem', stageId: stage.id, name: item })
+      }
+    }
+
     for (const card of stage.cards) {
       if (card.prompt.trim().length === 0) problems.push({ kind: 'noPrompt', cardId: card.id })
 
@@ -120,6 +170,7 @@ export const problemsOf = (scenario: Scenario): Problem[] => {
       for (const slot of card.slots) {
         if (!NAME_RE.test(slot.name)) problems.push({ kind: 'badSlotName', cardId: card.id, name: slot.name })
         else if (slotNames.has(slot.name)) problems.push({ kind: 'duplicateSlot', cardId: card.id, name: slot.name })
+        else if (slot.name === item) problems.push({ kind: 'itemSlotClash', cardId: card.id, name: slot.name })
         slotNames.add(slot.name)
       }
 
@@ -130,7 +181,7 @@ export const problemsOf = (scenario: Scenario): Problem[] => {
       }
       const used = new Set(mentionedSlots(card.prompt))
       for (const name of used) {
-        if (!slotNames.has(name)) problems.push({ kind: 'undeclaredSlot', cardId: card.id, name })
+        if (!slotNames.has(name) && name !== item) problems.push({ kind: 'undeclaredSlot', cardId: card.id, name })
       }
       for (const slot of card.slots) {
         if (slot.name.length > 0 && !used.has(slot.name)) {
@@ -149,7 +200,7 @@ export const problemsOf = (scenario: Scenario): Problem[] => {
  * A slot declared and never used is untidy; a slot used and never declared is a card whose prompt reaches
  * the agent with `[[findings]]` still in it, because nobody was ever asked to fill it.
  */
-export const blocking = (problem: Problem): boolean => problem.kind !== 'unusedSlot'
+export const blocking = (problem: Problem): boolean => problem.kind !== 'unusedSlot' && problem.kind !== 'unusedItem'
 
 /** Whether the scenario may be started at all. A warning is not a refusal. */
 export const runnable = (scenario: Scenario): boolean => !problemsOf(scenario).some(blocking)
@@ -182,12 +233,13 @@ export interface Planned {
  * Written down rather than worked out as it goes, because it is the picture: the timeline shows six cards
  * for two cards looped three times, and it shows them before any of them has happened. A stage that stops
  * as soon as the head says so simply leaves the tail of its passes unrun - the plan is what was intended,
- * not a promise.
+ * not a promise. A stage that runs once per item is one pass here, and grows by its list once the main
+ * thread gives it.
  */
 export const plan = (scenario: Scenario): Planned[] => {
   const planned: Planned[] = []
   for (const stage of scenario.stages) {
-    for (let pass = 1; pass <= passesOf(stage); pass += 1) {
+    for (let pass = 1; pass <= plannedPasses(stage); pass += 1) {
       for (const card of stage.cards) {
         planned.push({
           key: keyOf(stage.id, card.id, pass),

@@ -3,13 +3,14 @@ import type {
   AgentRateLimitEvent,
   AgentSystemEvent,
   AgentUsage,
+  CarryOnReason,
   ContentBlock,
   MessageContent,
   TextBlock,
   ToolResultBlock,
   ToolUseBlock,
 } from '../protocol'
-import { modelFamily, normalizeMode, sameModel } from '../catalog'
+import { carriesPick, modelFamily, normalizeMode, sameModel } from '../catalog'
 import { parseParagraphs } from './markdown'
 import { initialPanelState, push, type PanelAction, type PanelState } from './panelState'
 import { togglePin } from './pins'
@@ -24,8 +25,10 @@ import {
   noteSubagent,
 } from './tasks'
 import { replayedMessage } from './replayed'
+import { applyChangesReverted, closeChanges, noteChanges, settleChanges } from './changes'
 import { editorOfBlocks } from './editorContext'
 import { applyModEvent } from './mods'
+import { fastModeShown, type FastModeReport } from './fastMode'
 import { readPlan, readQuestions, readTodos } from './toolInput'
 import { readReview } from './findings'
 import {
@@ -210,9 +213,11 @@ export const reducePanel = (state: PanelState, action: PanelAction, now = Date.n
       // they were launched to run apart from it. They do NOT survive a move to another account: the
       // process is replaced, and everything it was running goes with it, so a chip left ticking is a
       // clock against a CLI that is gone.
+      // A stopped turn changed files all the same, and they are listed before the line saying it was stopped.
+      const closing = stoppedSilently ? closeChanges(state) : state
       const settled = stoppedSilently
         ? closeUnfinished(
-            state,
+            closing,
             now,
             { reason: 'stopped', tone: 'bad' },
             state.stoppedForAccount === true ? 'none' : 'background',
@@ -245,7 +250,8 @@ export const reducePanel = (state: PanelState, action: PanelAction, now = Date.n
         // charge the agent with the minutes spent waiting for a decision earlier in the same work.
         pausedMs: stintOver || stintStarts ? 0 : state.pausedMs,
         waitStartedAt: action.status === 'idle' ? undefined : state.waitStartedAt,
-        seq: stoppedSilently ? state.seq + 1 : state.seq,
+        seq: stoppedSilently ? closing.seq + 1 : state.seq,
+        turnChanges: closing.turnChanges,
         startedAt: settled?.startedAt ?? state.startedAt,
         items: settled
           ? [
@@ -254,7 +260,7 @@ export const reducePanel = (state: PanelState, action: PanelAction, now = Date.n
               // same hole the result route below has always covered and this one never did.
               ...settled.items,
               {
-                id: `meta-${state.seq}`,
+                id: `meta-${closing.seq}`,
                 kind: 'meta',
                 stats: [STOPPED_BY_YOU],
                 outcome: {
@@ -329,6 +335,9 @@ export const reducePanel = (state: PanelState, action: PanelAction, now = Date.n
     case 'stoppedForAccount':
       return { ...state, stoppedForAccount: true }
 
+    case 'carryOnWait':
+      return { ...state, carryOn: action.at === undefined ? undefined : { at: action.at, guess: action.guess === true } }
+
     case 'processExited':
       // The process is gone right in the middle of a pause before a retry - there is nobody left to
       // retry, and the card has to stop waiting along with it.
@@ -364,6 +373,7 @@ export const reducePanel = (state: PanelState, action: PanelAction, now = Date.n
         ...(action.editor ? { editor: action.editor } : {}),
         ...(action.uuid ? { uuid: action.uuid } : {}),
         ...(action.steering ? { steering: true } : {}),
+        ...(action.auto ? { auto: action.auto } : {}),
       }
 
       // A message written into a running turn starts nothing afresh: the agent carries on with its own,
@@ -373,8 +383,12 @@ export const reducePanel = (state: PanelState, action: PanelAction, now = Date.n
         return { ...state, seq: state.seq + 1, items: [...state.items, message] }
       }
 
+      // A turn that ended without a result to list its files (see closeChanges) has them listed here, at
+      // the edge of the next one.
+      const closed = closeChanges(state)
+
       return {
-        ...state,
+        ...closed,
         status: 'running',
         turnStartedAt: now,
         // A turn of one's own is a new request by definition, so a pick made before it is now answerable
@@ -389,8 +403,8 @@ export const reducePanel = (state: PanelState, action: PanelAction, now = Date.n
         streamingThinking: '',
         stopRequestedAt: undefined,
         crashed: false,
-        seq: state.seq + 1,
-        items: [...state.items, message],
+        seq: closed.seq + 1,
+        items: [...closed.items, message],
         // A new request is the boundary of the new tracker's task list - but a mark on it rather than a
         // reset of it: see the comment on tasksCarried in PanelState. A started task with no TaskCreate
         // answer is nothing dreadful to break off here - pendingTasks will simply never resolve, which is
@@ -398,11 +412,17 @@ export const reducePanel = (state: PanelState, action: PanelAction, now = Date.n
         // for it.
         tasksCarried: Object.keys(state.tasks).length > 0,
         pendingTasks: {},
+        // Whatever the IDE was going to carry on is spent or set aside by this turn - its own word comes after
+        // (see carryOnWait), and the row must not stand over the turn in the meantime.
+        carryOn: undefined,
       }
     }
 
     case 'rewound':
       return applyRewound(state, action.uuid, action.all === true, now)
+
+    case 'changesReverted':
+      return applyChangesReverted(state, action.id, action.files, action.restore === true)
 
     /**
      * A bash-mode command. It neither starts nor touches the agent's turn: one may have been running at
@@ -504,12 +524,14 @@ export const reducePanel = (state: PanelState, action: PanelAction, now = Date.n
         pendingModel: undefined,
         model: action.model,
         // A model may have another window. The old process's exact maximum is worse than no exact
-        // maximum here: while the next turn has not reported one, the catalogue supplies the selected
-        // model's size to the CTX chip and the gauge keeps its ordinary fallback.
-        ...(action.born ? {} : { context: undefined, liveContextUsed: undefined }),
+        // maximum here: while Codex has not counted in the new one, the catalogue supplies the selected
+        // model's size to the CTX chip and to the gauge (see contextOf) - and what the window holds is
+        // still what it held (see windowMoved).
+        ...(action.born ? {} : windowMoved(state)),
         // The tab's own model either way: an announcement exists precisely so that a tab nobody has
         // touched is drawn by what it runs on rather than by the setting (see PanelState.ownModel).
         ownModel: action.model,
+        ownModelResolved: action.resolved,
         // Only a choice is judged, and an announcement is not one (see the `born` half of the action).
         // The shell names a tab's model at its birth, to every client that joins and after every reset,
         // and it names the CHOICE it was launched on - "opus[1m]", never the signature the answers carry.
@@ -519,7 +541,7 @@ export const reducePanel = (state: PanelState, action: PanelAction, now = Date.n
         ...(action.born
           ? {}
           : {
-              ownSwap: expectingOwnSwap(state, action.model, action.error),
+              ownSwap: expectingOwnSwap(state, action.model, action.resolved, action.error),
               // A pick is judged only once a request that could carry it has begun - see
               // PanelState.ownSwapDue.
               ownSwapDue: false,
@@ -546,19 +568,45 @@ export const reducePanel = (state: PanelState, action: PanelAction, now = Date.n
     case 'contextModeRequested':
       return { ...state, pendingContextMode: action.mode }
 
+    // An announcement of the window changes nothing about the count: the IDE names it to every client that joins,
+    // right AFTER handing a feed built from nothing the last exact figure (see lastContextMessage in the hub), and
+    // read as a change it threw that figure away - a panel reloaded mid-conversation measured by a guess until the
+    // next step. A change makes the count Codex's in another window (see windowMoved).
     case 'contextModeApplied':
       return {
         ...state,
         pendingContextMode: undefined,
         contextMode: action.mode,
-        context: undefined,
-        liveContextUsed: undefined,
+        ...(action.born || action.mode === state.contextMode ? {} : windowMoved(state)),
       }
+
+    // Asked for anew: whatever the feed was told about why it could not serve is about the last ask - and so is
+    // what Codex last said it runs on, until the next turn carries the new one (see fastModeShown). Without that,
+    // fast mode from Codex's config turned off here would stand lit until the next answer.
+    case 'fastModeApplied':
+      return action.on === state.fastMode
+        ? state
+        : { ...state, fastMode: action.on, fastReport: undefined, ...(action.on ? { fastNoted: undefined } : {}) }
+
+    // The answer to `/status`, standing where it was asked rather than above the field: a terminal prints it
+    // into the conversation too, and the id is copied from it while the talk goes on below.
+    case 'sessionInfo': {
+      const conversationId = action.conversationId ?? state.sessionId
+      return push(state, (id) => ({
+        id,
+        kind: 'session' as const,
+        ...(conversationId ? { conversationId } : {}),
+        // The IDE's line is about the id it named; one the feed falls back to has none of its own.
+        ...(action.conversationId && action.resume ? { resume: action.resume } : {}),
+        ...(action.account ? { account: action.account } : {}),
+        ...(action.onDefault ? { onDefault: true } : {}),
+      }))
+    }
 
     // The whole list rather than a change to it: the IDE holds the queue, either window may have been
     // the one that changed it, and what arrives is how it stands now (see SessionQueue.kt).
     case 'queue':
-      return { ...state, queue: action.items }
+      return { ...state, queue: action.items, queueHeld: action.held === true }
 
     case 'agent':
       return noteOldest(applyAgentEvent(state, action.event, now, action.replay === true), action.event)
@@ -882,14 +930,16 @@ const applyReplayFinished = (state: PanelState, now: number): PanelState => {
    */
   if (state.turnStartedAt !== undefined) return state
 
+  // The replay's last turn has no result to close its list of changed files (see addReplayedPrompt).
+  const closed = closeChanges(state)
   const { items, startedAt } = closeUnfinished(
-    state,
+    closed,
     now,
     { reason: 'replay', tone: 'dim' },
     'none',
   )
 
-  return { ...state, items, startedAt }
+  return { ...closed, items, startedAt }
 }
 
 /**
@@ -1046,7 +1096,9 @@ const applyRewound = (state: PanelState, uuid: string, all: boolean, now: number
   return closeRetry(finishCompacting(cut), 'stopped', now)
 }
 
-const applyProcessExited = (state: PanelState, exitCode: number, now: number): PanelState => {
+const applyProcessExited = (exited: PanelState, exitCode: number, now: number): PanelState => {
+  // What the broken-off turn had changed is on disk regardless, and is listed above the crash.
+  const state = closeChanges(exited)
   const { items, startedAt } = closeUnfinished(
     state,
     now,
@@ -1100,8 +1152,10 @@ const applyProcessExited = (state: PanelState, exitCode: number, now: number): P
  * Silent when there was nothing running: a swap that cost nothing is not news, and a line in the feed
  * about it would appear on every account change in every idle tab.
  */
-const applyProcessReplaced = (state: PanelState, now: number): PanelState => {
-  if (!isRunningSomething(state)) return state
+const applyProcessReplaced = (replaced: PanelState, now: number): PanelState => {
+  if (!isRunningSomething(replaced)) return replaced
+
+  const state = closeChanges(replaced)
 
   const { items, startedAt } = closeUnfinished(state, now, { reason: 'restarted', tone: 'bad' }, 'none')
 
@@ -1239,32 +1293,28 @@ const realModel = (model: string | undefined): string | undefined =>
  * at work moves nothing either, and a tab whose stream has never named a model has no signature to be
  * compared against - a fork, for one, is told its parent's model before its own process is up (see App).
  * A flag raised in any of those cases would wait forever and swallow the first real swap that came.
+ *
+ * "Already at work" is asked by carriesPick, the same yardstick arrivedAsPicked measures the answer by -
+ * deliberately so. Asked by sameModel alone, a pick of a whole family ("opus[1m]") never matched the
+ * signature of that very model ("claude-opus-5[1m]"), and the wait it raised could never be answered.
+ * Asked by the family alone, a pick of another generation ("claude-opus-4-8" on Opus 5.5) matched the
+ * model it was leaving, no wait was raised, and the pick arriving was announced as the agent's swap.
+ *
+ * A pick that cannot be read ("default" with no catalogue, a model of somebody else's provider) settles
+ * nothing, and then something may well be coming: the wait is raised, because it is also what keeps a
+ * swap the person asked for from being announced as the agent's doing.
  */
-const expectingOwnSwap = (state: PanelState, model: string, error?: string): boolean | undefined => {
+const expectingOwnSwap = (
+  state: PanelState,
+  model: string,
+  resolved: string | undefined,
+  error?: string,
+): boolean | undefined => {
   if (error) return state.ownSwap
   if (!state.streamModel || sameModel(state.streamModel, model)) return state.ownSwap
-  if (!picksAnother(model, state.streamModel)) return state.ownSwap
+  if (carriesPick(model, state.streamModel, resolved)) return state.ownSwap
 
   return true
-}
-
-/**
- * Does the pick name a model other than the one the answers are already coming on?
- *
- * By family, and this is the same yardstick arrivedAsPicked measures the answer by - deliberately so.
- * The check above it is by sameModel, which compares generations: a pick carries none ("opus[1m]"), a
- * signature always does ("claude-opus-5[1m]"), so on that pair sameModel says "different models" about
- * one and the same model, and the guard right above never fired for a pick of a whole family. Picking
- * the model already at work then raised a wait that nothing could ever answer: the signature that came
- * next was that same model, and the only reading left for it was "the pick did not take".
- *
- * A family the panel does not know ("default", a model of somebody else's provider) settles nothing, and
- * then something may well be coming: the wait is raised, because it is also what keeps a swap the person
- * asked for from being announced as the agent's doing.
- */
-const picksAnother = (pick: string, running: string): boolean => {
-  const family = modelFamily(pick)
-  return family ? family !== modelFamily(running) : true
 }
 
 /**
@@ -1315,7 +1365,14 @@ const noteStreamModel = (state: PanelState, named: string, reason = '', replay =
     // been overtaken, and holding the flag would swallow the next real swap.
   }
 
-  return push(swapNoted({ ...moved, ownSwap: false, ownSwapDue: false }, previous, replay), (id) => ({
+  // Back on the model the agent's own swap had moved the conversation off: a Codex reroute is about its turn
+  // alone, and the next turn is the thread's model again. Still a row - the feed's last word was the swap away -
+  // but the accent goes: it says "you did not pick this" (see PanelState.switchedFrom), and the model now at work
+  // is the one that was there before anybody moved anything.
+  const undone = !replay && state.switchedFrom !== undefined && sameModel(state.switchedFrom, named)
+  const settled: PanelState = { ...moved, ownSwap: false, ownSwapDue: false }
+
+  return push(undone ? { ...settled, switchedFrom: undefined } : swapNoted(settled, previous, replay), (id) => ({
     id,
     kind: 'model',
     from: previous,
@@ -1327,15 +1384,13 @@ const noteStreamModel = (state: PanelState, named: string, reason = '', replay =
 /**
  * Is this signature the pick coming true?
  *
- * By family, because that is all a pick and a signature have in common (see modelFamily). Where the pick
- * has no family the panel knows - "default", a model of somebody else's provider - the question cannot be
- * answered, and the old rule stands: anything other than the model being left is the answer to it. Better
- * to keep quiet than to accuse a pick of not working because its name is unfamiliar.
+ * By the exact model, as Codex names it (see carriesPick). Where the pick cannot be read - "default", which
+ * names no model in advance - the question cannot be answered, and the old rule stands: anything other than
+ * the model being left is the answer to it. Better to keep quiet than to accuse a pick of not working because
+ * nothing says what it stands for.
  */
-const arrivedAsPicked = (state: PanelState, named: string): boolean => {
-  const family = state.ownModel ? modelFamily(state.ownModel) : ''
-  return family ? family === modelFamily(named) : true
-}
+const arrivedAsPicked = (state: PanelState, named: string): boolean =>
+  !state.ownModel || carriesPick(state.ownModel, named, state.ownModelResolved) !== false
 
 /**
  * The pick did not take: a new request has gone out and come back signed by the model being left.
@@ -1379,7 +1434,7 @@ const applyAgentEvent = (
 ): PanelState => {
   // The first event after a chain of retries is the whole account of how it ended: its end has no event
   // of its own (see closeRetryFor).
-  const state = closeRetryFor(incoming, event, now)
+  const state = noteFastReport(learnWindows(closeRetryFor(incoming, event, now), event), event, replay)
 
   switch (event.type) {
     case 'system':
@@ -1400,6 +1455,13 @@ const applyAgentEvent = (
         targetKey: event.cut ? 'forkedAt' : 'forked',
         source: event.source,
       }))
+
+    /**
+     * What the turn really did to the files its diffs do not account for - said by the IDE right before the
+     * result that closes their list (see settleChanges).
+     */
+    case 'files_settled':
+      return settleChanges(state, event.files)
 
     /**
      * The subscription limit. The event arrives in ordinary life too - with a "let through" status - and
@@ -1468,6 +1530,8 @@ const applyAgentEvent = (
         turnStartedAt: undefined,
         stintStartedAt: undefined,
         pausedMs: 0,
+        // And the files that turn changed: the feed they would be listed in has just been cleared.
+        turnChanges: [],
         waitStartedAt: undefined,
         stopRequestedAt: undefined,
         starting: false,
@@ -1553,7 +1617,8 @@ const applyAgentEvent = (
       // when the button was pressed, and the transcript kept only the tool's result (see
       // addReplayedAnswers).
       const withAnswers = replay ? addReplayedAnswers(withPrompt, event, now) : withPrompt
-      return applyToolResults(withAnswers, blocks, now, replay)
+      // What the results changed goes into the turn's list on the way (see feed/changes.ts).
+      return noteChanges(applyToolResults(withAnswers, blocks, now, replay), event, blocks)
     }
 
     case 'result': {
@@ -1615,12 +1680,17 @@ const applyAgentEvent = (
       // Never from a replay, for the reason the sign-in's door is never offered there: what the row adds
       // is an explanation of a route that is being used right now, and a conversation opened from the
       // history is a record of one that was.
-      const withError = finishCompacting(
-        event.is_error && event.result
-          ? addError(state, event.result, {
-              sampling: !replay && overSampling(event.api_error_status, event.result),
-            })
-          : state,
+      //
+      // The files the turn changed stand between the two - the last thing the turn did, and "Worked" under
+      // them (see ChangesItem).
+      const withError = closeChanges(
+        finishCompacting(
+          event.is_error && event.result
+            ? addError(state, event.result, {
+                sampling: !replay && overSampling(event.api_error_status, event.result),
+              })
+            : state,
+        ),
       )
 
       /**
@@ -1699,6 +1769,9 @@ const applyAgentEvent = (
         usage,
         cost: event.total_cost_usd ?? state.cost,
         sessionId: event.session_id ?? state.sessionId,
+        // The turn a pick was made in is over, so the next answer is a new turn's - the one request Codex takes a
+        // pick with (see PanelState.ownSwapDue). Whoever starts that turn: the queue, a phone, the plan approved.
+        ownSwapDue: !replay && state.ownSwap ? true : state.ownSwapDue,
         seq: withError.seq + 1,
         suppressNextMeta: false,
         items: state.suppressNextMeta
@@ -1716,7 +1789,8 @@ const applyAgentEvent = (
  * The system events by which the CLI announces that it has moved the conversation to another model on its
  * own: safeguards that flagged the message (`model_refusal_fallback`) and a model that needs credits or a
  * consent nobody gave (`model_consent_fallback`). Both hold the swap for the whole session, not for one
- * request.
+ * request. Codex's reroute, said in the first of them by the IDE (`model/rerouted`), holds for its turn alone:
+ * the IDE signs that turn's answers by the model it moved to, and the next turn is the thread's again.
  */
 const MODEL_FALLBACK_SUBTYPES = ['model_refusal_fallback', 'model_consent_fallback']
 
@@ -1740,6 +1814,10 @@ const applyModelFallback = (state: PanelState, event: AgentSystemEvent, replay: 
   // answered by this event too, and the flag it left has nothing to wait for any more.
   const moved: PanelState = { ...state, model: to, streamModel: to, ownSwap: false }
   if (from === to) return moved
+  // The same swap again over a stream already on it: Codex reroutes turn by turn, and a conversation it keeps
+  // flagging was told so once - its row is in the feed and the accent is on. Unless a pick of the person's own
+  // was waiting: then this is the answer to it, and worth its row.
+  if (!state.ownSwap && state.streamModel !== undefined && sameModel(state.streamModel, to)) return moved
 
   return push(from ? swapNoted(moved, from, replay) : moved, (id) => ({
     id,
@@ -2384,6 +2462,24 @@ const replayedPromptText = (blocks: ContentBlock[]): string => {
 }
 
 /**
+ * The panel's own "carry on", as a transcript keeps it (see CarryOnWords.kt, which writes the tag): the
+ * reason, then the words. The words are in whichever of ten languages the panel spoke; the tag is in one, and
+ * once the message is only a line on disk it is all that says the person did not write it. Its end is
+ * optional for the reason a service block's is (see SERVICE_BLOCK): a phone's frame can cut it.
+ */
+const CARRY_ON = /^<panel-carry-on(?: reason="([A-Za-z]*)")?>([\s\S]*?)(?:<\/panel-carry-on>|$)/
+
+const CARRY_ON_REASONS: readonly CarryOnReason[] = ['accountSwitch', 'limit', 'restart']
+
+/**
+ * The reason a carry-on was written with. A word this panel does not know - written by a newer plugin and read
+ * after going back to an older one - is still the panel's message: it says PANEL, and no reason it cannot vouch
+ * for (see UserItem.auto).
+ */
+const carryOnReason = (word: string | undefined): NonNullable<UserItem['auto']> =>
+  CARRY_ON_REASONS.find((reason) => reason === word) ?? 'unknown'
+
+/**
  * What the agent has already said in this conversation - what tells a quotation of its words from a
  * sentence somebody merely put in quotation marks (see replayedMessage).
  *
@@ -2434,12 +2530,22 @@ const addReplayedPrompt = (
   // whole past conversation would look like today's.
   const said = Date.parse(event.timestamp ?? '')
 
+  // The panel's own "carry on" is drawn as it was drawn live: its words, without the tag that tells whose they
+  // are, and PANEL over them with the reason (see CARRY_ON).
+  const carried = text.match(CARRY_ON)
+  const carryOn = carried?.[2]?.trim()
+
   // Back into the pieces it was sent as - a file, an image, a quote of the agent's words - rather than
   // as the one string a transcript keeps (see replayed.ts). Without it a conversation opened from the
   // history read as a wall of paths and quotation marks where at the desk it had been a line of chips.
-  const { tokens, quotes } = replayedMessage(text, agentAnswers(state))
+  const { tokens, quotes } =
+    carryOn !== undefined
+      ? { tokens: [{ kind: 'text', value: carryOn }] satisfies UserToken[], quotes: [] }
+      : replayedMessage(text, agentAnswers(state))
 
-  return push(state, (id) => ({
+  // A transcript keeps no result of a turn, so a person's next message is where the turn before it ended -
+  // and where its list of changed files goes (see closeChanges).
+  return push(closeChanges(state), (id) => ({
     id,
     kind: 'user',
     time: formatClock(Number.isNaN(said) ? now : said),
@@ -2448,6 +2554,7 @@ const addReplayedPrompt = (
     // The transcript's name for the line, so a search hit on it can be found in the feed (see rowOf).
     ...(event.uuid ? { uuid: event.uuid } : {}),
     ...(editor ? { editor } : {}),
+    ...(carried ? { auto: carryOnReason(carried[1]) } : {}),
   }))
 }
 
@@ -2519,10 +2626,10 @@ const applyToolResults = (
   const results = blocks.filter((block): block is ToolResultBlock => block.type === 'tool_result')
   if (results.length === 0) return state
 
-  // A tool has answered, so the agent goes back to the model with its result: whatever is signed next
-  // comes out of a request made after the person's pick, and is a verdict on it (see PanelState.ownSwapDue).
-  const due = !replay && state.ownSwap ? true : state.ownSwapDue
-
+  // No verdict on a pick here, unlike in the original: the agent goes back to the model with a tool's result,
+  // but Codex keeps the turn on the model it was started on, and a pick reaches it with the next turn alone
+  // (see PanelState.ownSwapDue). Read as a verdict, every answer after a tool in the rest of the turn announced
+  // that the pick had not arrived.
   const startedAt = { ...state.startedAt }
 
   const resolveTool = (item: ToolItem): ToolItem => {
@@ -2602,7 +2709,7 @@ const applyToolResults = (
     return { ...item, tools, pending }
   })
 
-  return applyTaskCreated({ ...state, items, startedAt, ownSwapDue: due }, results, replay)
+  return applyTaskCreated({ ...state, items, startedAt }, results, replay)
 }
 
 /** "Task #3 created successfully: …" - the only place TaskCreate names the number it assigned. */
@@ -2820,16 +2927,99 @@ const formatClock = (ms: number): string => {
  * day on the large one.
  *
  * Only what the name genuinely says. A "[1m]" mark is the CLI's own way of naming the large window, and
- * the three families named here have the ordinary one; a model this cannot place keeps the fallback
+ * the three families named here had the ordinary one; a model this cannot place keeps the fallback
  * rather than a guess, and the CLI corrects all of it with the first turn.
+ *
+ * The name no longer says it for every generation: Opus 5.5 and Haiku 5.5 come with a million and no mark
+ * (CLI 2.1.293). So this is the last resort before anything the CLI has said - the window a turn's result
+ * names comes first (see learnedWindow), and a feed built from a journal's end is handed the last exact
+ * figure (see lastContextMessage in CodexSessionHub).
+ *
+ * Under Codex the name says even less: the window is the model's and the mode's, and the tab's catalogue says
+ * both (see contextOf, catalogueWindow). This answers only until that catalogue arrives, seconds after the
+ * panel opens, and in [mode] Long it does not answer at all.
  */
-export const modelContextWindow = (model: string | undefined): number | undefined => {
+export const modelContextWindow = (model: string | undefined, mode?: 'standard' | 'long'): number | undefined => {
   if (!model) return undefined
-  // Codex's own count arrives with every step (the IDE's `context` message); this only stands in for it in
-  // the moment before the first one. The GPT-5 family Codex runs holds a little over a quarter of a million
-  // tokens (258,400 as Codex reports it), and that is the nearest honest guess.
+  // Codex's own count arrives with every step (the IDE's `context` message), and its catalogue names every
+  // model's window in both modes (see contextOf); this only stands in for both in the moment before the
+  // catalogue has arrived. Most of the models Codex runs hold a little over a quarter of a million tokens in
+  // the standard window (258,400 as Codex reports it) - not all: gpt-6.1-sol holds 475,000 - and that is the
+  // nearest honest guess. The long window the name does not tell at all.
+  if (mode === 'long') return undefined
   if (/^gpt-/i.test(model)) return 258_400
   return undefined
+}
+
+/**
+ * The window has moved under the conversation - another model, Std switched to Long - and Codex's exact figure is
+ * about the window it was counted in. What the window holds has not moved: it is kept as the estimate (see
+ * liveContextUsed), measured against the window the conversation is in now until Codex counts in it (see
+ * contextOf). Thrown away with the figure, it left the gauge on the last turn's usage, which is no count of the
+ * window at all.
+ */
+const windowMoved = (state: PanelState): Pick<PanelState, 'context' | 'liveContextUsed'> => ({
+  context: undefined,
+  liveContextUsed: state.liveContextUsed ?? state.context?.used,
+})
+
+/**
+ * What the stream says about fast mode when the thread opens (`system/init` of the main stream) and at a turn's end
+ * (`result`) - see feed/fastMode.ts - and a row in the feed the first time since the ask that it did not serve it.
+ *
+ * Live turns only: a replay's lines are no news about now, and a transcript does not keep these events anyway.
+ */
+const noteFastReport = (state: PanelState, event: AgentEvent, replay: boolean): PanelState => {
+  if (replay) return state
+  const about = event.type === 'result' || (event.type === 'system' && event.subtype === 'init' && event.task_id === undefined)
+  if (!about) return state
+
+  const fast = event.fast_mode_state
+  if (!fast) return state
+
+  const reason = event.fast_mode_disabled_reason
+  const report: FastModeReport = reason ? { state: fast, reason } : { state: fast }
+  const shown = fastModeShown(state.fastMode, report)
+  // Serving again: should it stop once more for the same reason, that is news again.
+  const reported: PanelState = { ...state, fastReport: report, ...(shown.kind === 'on' ? { fastNoted: undefined } : {}) }
+  if (shown.kind !== 'unavailable' || shown.reason === state.fastNoted) return reported
+
+  return push({ ...reported, fastNoted: shown.reason }, (id) => ({ id, kind: 'fast' as const, reason: shown.reason }))
+}
+
+/**
+ * The windows the CLI gives this conversation's models, taken off a turn's result (see
+ * PanelState.contextWindows).
+ *
+ * From a replay as well, unlike the usage beside it: a window is a fact about the model rather than about the
+ * moment, and an old result says it as truly as a new one.
+ */
+const learnWindows = (state: PanelState, event: AgentEvent): PanelState => {
+  if (event.type !== 'result' || !event.modelUsage) return state
+
+  const known = state.contextWindows ?? {}
+  const said = Object.entries(event.modelUsage).flatMap(([model, use]) => {
+    const window = use?.contextWindow
+    return typeof window === 'number' && window > 0 && known[model] !== window ? [[model, window] as const] : []
+  })
+  if (said.length === 0) return state
+
+  return { ...state, contextWindows: { ...known, ...Object.fromEntries(said) } }
+}
+
+/**
+ * The window the CLI gives the model this tab's stream runs on, if a turn has said it.
+ *
+ * Not while a pick of another model is on its way: the window known is the old model's. By the stream's own
+ * id, with the window mark the CLI may keep on its key ("claude-opus-5[1m]") left aside: the answers are
+ * signed without it.
+ */
+const learnedWindow = (state: PanelState): number | undefined => {
+  const model = state.model
+  const windows = state.contextWindows
+  if (!model || !windows || state.pendingModel !== undefined) return undefined
+
+  return windows[model] ?? Object.entries(windows).find(([key]) => key.replace(/\[[^\]]*\]$/, '') === model)?.[1]
 }
 
 /**
@@ -2844,7 +3034,7 @@ export const modelContextWindow = (model: string | undefined): number | undefine
  * stream names the same model, and the stream takes over only when it means another one - the CLI does
  * swap on its own (see ModelSwitchItem).
  *
- * By family rather than by sameModel, for the reason arrivedAsPicked gives: a choice is a family
+ * By family rather than by sameModel, for the reason modelFamily gives: a choice is a family
  * ("opus[1m]") and a signature is an identifier ("claude-opus-5"), and sameModel says no to that pair -
  * it compares generations, which a choice never carries. The window is a matter of the family and the
  * mark, and the mark is in the choice alone; a choice of no family the panel knows ("default", a model of
@@ -2862,10 +3052,14 @@ const windowModel = (state: PanelState): string | undefined => {
 /**
  * What the context meter shows: taken, total and the share.
  *
- * The window's size comes from the CLI itself (see PanelState.context): it depends on the model, with
- * "1M" models it is five times the usual, and arithmetic of ours cannot guess it. Until it has said, the
- * tab's own model is the next best answer (see modelContextWindow), and only then the fallback the
- * caller brings - which is the account's last known window, and may be about another model entirely.
+ * The window's size comes from Codex itself (see PanelState.context): it depends on the model and on the
+ * window mode - gpt-6.1-sol holds 475,000 in Std where most hold 258,400, and every one of them 828,400 in
+ * Long - and arithmetic of ours cannot guess it. Without that figure the next is [catalogueWindow]: what the
+ * tab's catalogue names for its model in its mode, the very number the CTX chip shows (see contextWindowOf in
+ * catalog.ts) - the caller brings it, the reducer has no catalogue of its own. Then the window the CLI gave this
+ * model at the end of a turn (see PanelState.contextWindows - never filled under Codex), then the tab's own
+ * model's name (see modelContextWindow), and only then the fallback the caller brings - which is the account's
+ * last known window, and may be about another model entirely.
  *
  * What is taken, though, is chosen by freshness. The exact figure from the CLI arrives only at a turn's
  * end, so while a turn runs we show the estimate from the agent's latest answer (liveContextUsed):
@@ -2876,11 +3070,17 @@ const windowModel = (state: PanelState): string | undefined => {
 export const contextOf = (
   state: PanelState,
   fallbackLimit = 200_000,
+  catalogueWindow?: number,
 ): { percent: number; used: number; limit: number } => {
   const context = state.context
   const known = context && context.max > 0 ? context : undefined
   const live = state.liveContextUsed
-  const guessed = modelContextWindow(windowModel(state)) ?? (fallbackLimit > 0 ? fallbackLimit : 200_000)
+  const mode = state.pendingContextMode ?? state.contextMode
+  const guessed =
+    (catalogueWindow !== undefined && catalogueWindow > 0 ? catalogueWindow : undefined) ??
+    learnedWindow(state) ??
+    modelContextWindow(windowModel(state), mode) ??
+    (fallbackLimit > 0 ? fallbackLimit : 200_000)
 
   if (known || live !== undefined) {
     const limit = known?.max ?? guessed

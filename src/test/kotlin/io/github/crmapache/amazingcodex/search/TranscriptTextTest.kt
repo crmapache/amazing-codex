@@ -78,6 +78,12 @@ class TranscriptTextTest {
         assertNull(TranscriptText.messageOf("c1", """{"timestamp":"$at","type":"event_msg","payload":{"type":"item_completed","item":{"type":"FileChange","id":"f1","changes":{}}}}"""))
         assertNull(TranscriptText.messageOf("c1", """{"timestamp":"$at","type":"event_msg","payload":{"type":"token_count","info":null}}"""))
         assertNull(TranscriptText.messageOf("c1", """{"timestamp":"$at","type":"session_meta","payload":{"id":"t","cwd":"/p"}}"""))
+        // The panel's "carry on" - in the person's name, not in their words.
+        assertNull(TranscriptText.messageOf("c1", person("<panel-carry-on reason=\\\"limit\\\">Carry on from where you stopped.</panel-carry-on>")))
+        // And with a reminder put ahead of it - the feed takes the reminder off first, and so does this.
+        assertNull(TranscriptText.messageOf("c1", person("<system-reminder>x</system-reminder>\\n<panel-carry-on reason=\\\"limit\\\">Carry on.</panel-carry-on>")))
+        // The older form of the same message.
+        assertNull(TranscriptText.messageOf("c1", """{"timestamp":"$at","type":"event_msg","payload":{"type":"user_message","message":"<panel-carry-on reason=\"limit\">Carry on.</panel-carry-on>","images":[]}}"""))
         assertNull(TranscriptText.messageOf("c1", "not json"))
         assertNull(TranscriptText.messageOf("c1", """  {"type":"event_msg"}"""))
     }

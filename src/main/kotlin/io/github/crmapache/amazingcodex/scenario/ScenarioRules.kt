@@ -58,12 +58,42 @@ internal object ScenarioRules {
         return declared + stray
     }
 
-    /** How many cards a whole run of the scenario will start, every pass counted. */
+    /**
+     * The slots the head is asked for before a card of [stage] starts: all of [declaredSlots] but the item of
+     * a stage that runs once per item, which the panel writes in itself (see [Stage.each]).
+     */
+    fun slotsToFill(stage: Stage, card: Card): List<CardSlot> {
+        val item = stage.each?.name
+        return declaredSlots(card).filter { it.name != item }
+    }
+
+    /**
+     * How many cards a whole run of the scenario will start, every pass counted.
+     *
+     * A stage that runs once per item of a list counts one pass: how many items there are is not known
+     * before the head is asked, so this is the least the run will start rather than the whole of it.
+     */
     fun cardRuns(scenario: Scenario): Int =
-        scenario.stages.sumOf { stage -> stage.cards.size * passesOf(stage) }
+        scenario.stages.sumOf { stage -> stage.cards.size * plannedPasses(stage) }
 
     /** How many passes a stage is given - clamped, because the file on disk is not to be trusted. */
     fun passesOf(stage: Stage): Int = stage.repeat.coerceIn(1, MAX_STAGE_REPEAT)
+
+    /** Whether the head decides when this stage stops going round - never for one that runs once per item. */
+    fun loopsUntilDone(stage: Stage): Boolean = stage.untilDone && stage.each == null
+
+    /**
+     * How many passes are written down for a stage before the run begins: its count, or a single pass for
+     * one that runs once per item - the place the list will be asked for and written out (see StageList).
+     */
+    private fun plannedPasses(stage: Stage): Int = if (stage.each != null) 1 else passesOf(stage)
+
+    /**
+     * Where the head's words about the list of a stage are filed in the run's notes, so the timeline draws
+     * them at the head of that stage rather than under its first item: said before any item began, they are
+     * about the whole of it.
+     */
+    fun listKey(stageId: String): String = "$stageId:list"
 
     /**
      * What is wrong with a scenario, as names the interface has words for.
@@ -86,6 +116,18 @@ internal object ScenarioRules {
         const val BAD_INPUT_NAME = "badInputName"
         const val BAD_SLOT_NAME = "badSlotName"
         const val MISSING_INPUT = "missingInput"
+
+        /** A stage that runs once per item, whose item is called something a prompt cannot write. */
+        const val BAD_ITEM_NAME = "badItemName"
+
+        /** A stage that runs once per item, with nothing said about what the list is. */
+        const val NO_ITEM_LIST = "noItemList"
+
+        /** A card of such a stage declares a slot under the item's own name - one name, two fillers. */
+        const val ITEM_SLOT_CLASH = "itemSlotClash"
+
+        /** No card of such a stage writes its item into its prompt. */
+        const val UNUSED_ITEM = "unusedItem"
     }
 
     fun problemsOf(scenario: Scenario): List<Problem> {
@@ -104,6 +146,17 @@ internal object ScenarioRules {
         for (stage in scenario.stages) {
             if (stage.cards.isEmpty()) problems.add(Problem(Problems.EMPTY_STAGE, stageId = stage.id))
 
+            // The item of a stage that runs once per item: a name the prompts write and the panel fills.
+            val each = stage.each
+            val item = each?.name?.takeIf { NAME_RE.matches(it) }
+            if (each != null) {
+                if (item == null) problems.add(Problem(Problems.BAD_ITEM_NAME, stageId = stage.id, name = each.name))
+                if (each.description.isBlank()) problems.add(Problem(Problems.NO_ITEM_LIST, stageId = stage.id))
+                if (item != null && stage.cards.none { item in mentionedSlots(it.prompt) }) {
+                    problems.add(Problem(Problems.UNUSED_ITEM, stageId = stage.id, name = item))
+                }
+            }
+
             for (card in stage.cards) {
                 if (card.prompt.isBlank()) problems.add(Problem(Problems.NO_PROMPT, cardId = card.id))
 
@@ -115,6 +168,9 @@ internal object ScenarioRules {
 
                         !slotNames.add(slot.name) ->
                             problems.add(Problem(Problems.DUPLICATE_SLOT, cardId = card.id, name = slot.name))
+
+                        slot.name == item ->
+                            problems.add(Problem(Problems.ITEM_SLOT_CLASH, cardId = card.id, name = slot.name))
                     }
                 }
 
@@ -127,7 +183,7 @@ internal object ScenarioRules {
                 }
                 val used = mentionedSlots(card.prompt).toSet()
                 for (name in used) {
-                    if (name !in slotNames) {
+                    if (name !in slotNames && name != item) {
                         problems.add(Problem(Problems.UNDECLARED_SLOT, cardId = card.id, name = name))
                     }
                 }
@@ -146,9 +202,11 @@ internal object ScenarioRules {
      * Which problems stop a run and which are only worth saying out loud.
      *
      * A slot declared and never used is untidy; a slot used and never declared is a card whose prompt
-     * reaches the agent with `[[findings]]` still in it, because nobody was ever asked to fill it.
+     * reaches the agent with `[[findings]]` still in it, because nobody was ever asked to fill it. An item no
+     * prompt writes is the first kind: every pass runs the same words, which may be a mistake and may be what
+     * somebody wants, with the item reaching the cards through the head's slots instead.
      */
-    fun blocking(problem: Problem): Boolean = problem.kind != Problems.UNUSED_SLOT
+    fun blocking(problem: Problem): Boolean = problem.kind != Problems.UNUSED_SLOT && problem.kind != Problems.UNUSED_ITEM
 
     /** Whether the scenario may be started at all. */
     fun runnable(scenario: Scenario): Boolean = problemsOf(scenario).none(::blocking)
@@ -199,13 +257,15 @@ internal object ScenarioRules {
      * Written down rather than worked out as it goes, because it is the picture: the timeline shows six
      * cards for two cards looped three times, and it shows them before any of them has happened. A stage
      * that stops as soon as the head says so simply leaves the tail of its passes unrun (see
-     * [Stage.untilDone]) - the plan is what was intended, not a promise.
+     * [Stage.untilDone]) - the plan is what was intended, not a promise. A stage that runs once per item is
+     * written as one pass, the place its list is asked for, and grows to one pass per item once the head
+     * has given it (see StageList.expand).
      */
     data class Planned(val key: String, val stageId: String, val cardId: String, val pass: Int, val title: String)
 
     fun plan(scenario: Scenario): List<Planned> = buildList {
         for (stage in scenario.stages) {
-            for (pass in 1..passesOf(stage)) {
+            for (pass in 1..plannedPasses(stage)) {
                 for (card in stage.cards) {
                     add(
                         Planned(

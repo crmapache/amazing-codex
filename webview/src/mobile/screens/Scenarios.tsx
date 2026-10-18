@@ -13,7 +13,7 @@ import { clockLabel, defaultHour, nextNote, schedulesOf, weekdayName, whenLabel 
 import { runWorked } from '../../scenarios/timeline'
 import { countdown, timetableOf } from '../../scenarios/timetable'
 import { blankScenario } from '../../scenarios/blank'
-import { cardRuns, passesOf, problemsOf, blocking } from '../../scenarios/rules'
+import { cardRuns, loops, problemsOf, blocking } from '../../scenarios/rules'
 import { pastRuns, runMarks, runningRuns } from '../../scenarios/runs'
 import { namedRun, queueBehind, queueMarks, queueStanding, queuedFor } from '../../scenarios/queue'
 import { endedLabel, momentLabel } from '../../scenarios/moments'
@@ -31,6 +31,7 @@ import { Back } from './Back'
 import { HourSheet, NewScenarioSheet, QueueSheet, ScenarioActionsSheet, StartSheet } from './ScenarioSheets'
 import { PickSheet } from './ScenarioPick'
 import m from '../mobile.module.css'
+import { EmptyPlate } from './EmptyPlate'
 
 interface ScenariosProps {
   /** null until the IDE has said - the shelves arrive by themselves, nobody asks (see RemoteFeed). */
@@ -255,7 +256,7 @@ export const Scenarios = ({
             </p>
 
             {going.length === 0
-              ? shelves !== null && <p className={m.empty}>{t.scenarios.nothingRunning}</p>
+              ? shelves !== null && <EmptyPlate title={t.scenarios.nothingRunning} />
               : going.map((run) => (
                   <LiveRun
                     key={run.id}
@@ -310,7 +311,7 @@ export const Scenarios = ({
           <>
             {/* Said rather than left as silence: the hours hang under the scenarios here, so a file that
                 could not be read draws exactly what an empty one does - see ScenarioShelves. */}
-            {shelves.schedulesUnread && <p className={m.empty}>{t.scenarios.when.unread}</p>}
+            {shelves.schedulesUnread && <p className={m.noteBad}>{t.scenarios.when.unread}</p>}
 
             {/*
               The shelf every project shares comes first: it is the same whichever project this screen was
@@ -321,16 +322,16 @@ export const Scenarios = ({
             */}
             <p className={m.bandTitle}>{t.scenarios.shelves.user}</p>
             {shared.length === 0 ? (
-              <p className={m.empty}>{t.scenarios.shelves.userEmpty}</p>
+              <EmptyPlate title={t.scenarios.shelves.userEmpty} note={t.scenarios.shelves.userEmptyNote} />
             ) : (
               shared.map(card)
             )}
 
             <p className={m.bandTitle}>{t.mobile.scenarios.inRepository(project)}</p>
             {!shelves.canShare ? (
-              <p className={m.empty}>{t.scenarios.shelves.noProject}</p>
+              <EmptyPlate title={t.scenarios.shelves.noProject} note={t.scenarios.shelves.noProjectNote} />
             ) : own.length === 0 ? (
-              <p className={m.empty}>{t.scenarios.shelves.projectEmpty}</p>
+              <EmptyPlate title={t.scenarios.shelves.projectEmpty} note={t.scenarios.shelves.projectEmptyNote} />
             ) : (
               own.map(card)
             )}
@@ -740,7 +741,7 @@ const ScenarioCard = ({
           : [
               t.scenarios.stages(scenario.stages.length),
               t.scenarios.cards(cardRuns(scenario)),
-              scenario.stages.some((stage) => passesOf(stage) > 1) ? t.scenarios.hasLoop : '',
+              scenario.stages.some(loops) ? t.scenarios.hasLoop : '',
               scenario.inputs.length > 0
                 ? t.scenarios.asksFor(scenario.inputs.map((input) => input.name).filter(Boolean).join(', '))
                 : '',
@@ -809,7 +810,7 @@ const QueueList = ({
   const t = useT()
 
   if (queue === null) return <p className={m.empty}>{t.common.loading}</p>
-  if (queue.unread) return <p className={m.empty}>{t.scenarios.queue.unread}</p>
+  if (queue.unread) return <p className={m.noteBad}>{t.scenarios.queue.unread}</p>
 
   const waiting = queue.state.waiting
   const standing = queueStanding(queue.state, live, past)
@@ -869,7 +870,7 @@ const QueueList = ({
       ) : null}
 
       {waiting.length === 0 ? (
-        <p className={m.empty}>{t.scenarios.queue.empty}</p>
+        <EmptyPlate title={t.scenarios.queue.empty} note={t.scenarios.queue.emptyNote} />
       ) : (
         <div className={m.card}>
           {waiting.map((entry, at) => (
@@ -995,10 +996,10 @@ const Timetable = ({
   const t = useT()
   const locale = useLocale()
 
-  if (unread) return <p className={m.empty}>{t.scenarios.when.unread}</p>
+  if (unread) return <p className={m.noteBad}>{t.scenarios.when.unread}</p>
 
   const table = timetableOf(schedules, scenarios, now)
-  if (table.count === 0) return <p className={m.empty}>{t.scenarios.when.nothing}</p>
+  if (table.count === 0) return <EmptyPlate title={t.scenarios.when.nothing} />
 
   const rows = [
     ...(table.missed.length > 0 ? [{ key: 'missed', title: t.scenarios.when.missedShort, rows: table.missed }] : []),

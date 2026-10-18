@@ -159,4 +159,64 @@ class ScenarioRulesTest {
         assertEquals(mapOf("ticket" to "ACC-1"), ScenarioRules.answers(one, mapOf("ticket" to "ACC-1")))
         assertEquals("{{stray}}", ScenarioRules.fillInputs("{{stray}}", ScenarioRules.answers(one, emptyMap())))
     }
+    // A stage over a list: the item is written in the prompts as a slot is, and nobody declares it - the
+    // panel fills it, one value per pass (see Stage.each).
+    @Test
+    fun `the item of a stage over a list is not a slot the head is asked for`() {
+        val one = card(prompt = "/plan [[card]] with [[note]]", slots = listOf(CardSlot("n", "note", "a note")))
+        val stage = Stage(id = "s1", each = StageEach(name = "card", description = "the cards"), cards = listOf(one))
+
+        assertEquals(listOf("note"), ScenarioRules.slotsToFill(stage, one).map { it.name })
+        assertTrue(ScenarioRules.runnable(scenario(stages = listOf(stage))))
+        assertEquals(emptyList(), ScenarioRules.problemsOf(scenario(stages = listOf(stage))))
+    }
+
+    @Test
+    fun `a stage over a list says what the list is and calls its item a name`() {
+        val unnamed = Stage(id = "s1", each = StageEach(name = "the card", description = "x"), cards = listOf(card(prompt = "do it")))
+        val unsaid = Stage(id = "s1", each = StageEach(name = "card", description = " "), cards = listOf(card(prompt = "/plan [[card]]")))
+
+        assertEquals(listOf(ScenarioRules.Problems.BAD_ITEM_NAME), ScenarioRules.problemsOf(scenario(stages = listOf(unnamed))).map { it.kind })
+        assertEquals(listOf(ScenarioRules.Problems.NO_ITEM_LIST), ScenarioRules.problemsOf(scenario(stages = listOf(unsaid))).map { it.kind })
+        assertFalse(ScenarioRules.runnable(scenario(stages = listOf(unnamed))))
+        assertFalse(ScenarioRules.runnable(scenario(stages = listOf(unsaid))))
+    }
+
+    // One name with two fillers - the panel and the head - is a prompt nobody can predict.
+    @Test
+    fun `a slot under the item's own name is refused`() {
+        val one = card(prompt = "/plan [[card]]", slots = listOf(CardSlot("c", "card", "the next card")))
+        val stage = Stage(id = "s1", each = StageEach(name = "card", description = "the cards"), cards = listOf(one))
+
+        assertEquals(listOf(ScenarioRules.Problems.ITEM_SLOT_CLASH), ScenarioRules.problemsOf(scenario(stages = listOf(stage))).map { it.kind })
+        assertFalse(ScenarioRules.runnable(scenario(stages = listOf(stage))))
+    }
+
+    // Every pass then runs the same words. Worth saying, not worth refusing: the item may reach the cards
+    // through the head's slots instead.
+    @Test
+    fun `an item no prompt writes is said but does not stop a run`() {
+        val stage = Stage(id = "s1", each = StageEach(name = "card", description = "the cards"), cards = listOf(card(prompt = "do it")))
+
+        assertEquals(listOf(ScenarioRules.Problems.UNUSED_ITEM), ScenarioRules.problemsOf(scenario(stages = listOf(stage))).map { it.kind })
+        assertTrue(ScenarioRules.runnable(scenario(stages = listOf(stage))))
+    }
+
+    // How many items there are is the head's answer, given as the stage begins: until then the stage is one
+    // pass, the place the list is asked for - whatever count the file carries beside it.
+    @Test
+    fun `a stage over a list is planned as one pass and never loops until done`() {
+        val stage = Stage(
+            id = "s1",
+            repeat = 10,
+            untilDone = true,
+            each = StageEach(name = "card", description = "the cards"),
+            cards = listOf(card(id = "a", prompt = "/plan [[card]]"), card(id = "b", prompt = "/check [[card]]")),
+        )
+
+        assertEquals(listOf("s1:a:1", "s1:b:1"), ScenarioRules.plan(scenario(stages = listOf(stage))).map { it.key })
+        assertEquals(2, ScenarioRules.cardRuns(scenario(stages = listOf(stage))))
+        assertFalse(ScenarioRules.loopsUntilDone(stage))
+        assertTrue(ScenarioRules.loopsUntilDone(stage.copy(each = null)))
+    }
 }

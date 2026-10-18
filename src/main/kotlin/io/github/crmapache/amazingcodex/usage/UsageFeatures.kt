@@ -31,6 +31,8 @@ internal object UsageFeatures {
     /** The features with a name of their own - every id the service words one by one. */
     val NAMED: Set<String> = setOf(
         "new_tab",
+        "reopen_tab",
+        "panel_keys",
         "fork",
         "tab_rename",
         "tab_reorder",
@@ -43,7 +45,11 @@ internal object UsageFeatures {
         "improve_prompt",
         "model_switch",
         "effort_switch",
+        "fast_mode",
         "mode_switch",
+        // `/status`, or the id copied from the right-click menu - that one is counted by the window that
+        // builds the menu rather than arriving as a message: see PanelContextMenu.
+        "session_info",
         "plan_decision",
         "ask_answer",
         "subagent_window",
@@ -51,6 +57,7 @@ internal object UsageFeatures {
         "rewind",
         "pin",
         "open_in_editor",
+        "revert_changes",
         "send_selection",
         "send_path",
         "attach_file",
@@ -106,7 +113,9 @@ internal object UsageFeatures {
         "newChatMode",
         "composerLayout",
         "pasteCollapse",
+        "spellcheck",
         "sendKey",
+        "keys",
         "codexConfig",
         "improvePrompt",
         "voice",
@@ -133,6 +142,7 @@ internal object UsageFeatures {
         "sounds",
         "share_editor",
         "restore_tabs",
+        "spellcheck",
         "improve_prompt",
         "custom_models",
         "new_chat",
@@ -152,6 +162,7 @@ internal object UsageFeatures {
         "prompt",
         "queuePrompt",
         "unqueuePrompt",
+        "cancelCarryOn",
         "reorderQueue",
         "permissionDecision",
         "planDecision",
@@ -170,6 +181,7 @@ internal object UsageFeatures {
         "voiceToken",
         "setModel",
         "setEffort",
+        "setFastMode",
         "mcpReconnect",
         "mcpAuthenticate",
         "mcpAdd",
@@ -270,6 +282,7 @@ internal object UsageFeatures {
 
     private fun featureOf(type: String, payload: JsonObject): String? = when (type) {
         "newSession" -> if (payload.text("kind") == "branch") "fork" else "new_tab"
+        "reopenTab" -> "reopen_tab"
         "nameSession" -> "tab_rename"
         "reorderTabs", "reorderGroups" -> "tab_reorder"
         "queuePrompt" -> "queue"
@@ -285,11 +298,16 @@ internal object UsageFeatures {
         "improvePrompt" -> "improve_prompt"
         "setModel" -> "model_switch"
         "setEffort" -> "effort_switch"
+        // Turning it on is the use; turning it off again is the same person leaving it.
+        "setFastMode" -> if ((payload["on"] as? JsonPrimitive)?.booleanOrNull == true) "fast_mode" else null
         "setMode" -> "mode_switch"
+        "sessionInfo" -> "session_info"
         "planDecision" -> "plan_decision"
         "askAnswer" -> "ask_answer"
         "agentTranscript" -> "subagent_window"
-        "openFile" -> "open_in_editor"
+        // A picture's chip opens by a message of its own (see CodexSessionHub.openPicture) - the same use.
+        "openFile", "openPicture" -> "open_in_editor"
+        "revertChanges" -> "revert_changes"
         "clipboardWrite" -> "copy"
         "pick", "dropped" -> "attach_file"
         "savePastedFile" -> "paste_file"
@@ -329,6 +347,7 @@ internal object UsageFeatures {
         "soundSettings" -> "sounds"
         "setShareEditor" -> "share_editor"
         "setRestoreTabs" -> "restore_tabs"
+        "setSpellcheck" -> "spellcheck"
         "setImproveInstructions" -> "improve_prompt"
         "setCustomModels" -> "custom_models"
         "setDefaultModel", "setDefaultEffort", "setDefaultContextMode", "setDefaultMode" -> "new_chat"

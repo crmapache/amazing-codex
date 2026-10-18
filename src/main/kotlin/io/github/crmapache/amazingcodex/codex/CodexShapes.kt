@@ -6,6 +6,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.addJsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -25,14 +26,13 @@ internal object CodexShapes {
     /**
      * The model list, as `{"models": [...]}` with the fields the menu draws: the name a person picks and
      * Codex is launched with, the label, the description, and - new with Codex - which reasoning efforts
-     * the model takes and which one it starts on.
-     */
-    /**
-     * The model list for the menu. [configuredModel] and [configuredEffort] are what the person's own
-     * config.toml sets (`model`, `model_reasoning_effort`) for the directory the conversation runs in -
-     * what Codex runs on a tab left on "Default" and "auto". `model/list` marks its own default with
-     * `isDefault` and knows nothing of the config, so a menu labelled from it alone named one model over a
-     * tab that ran another; the config's model, when it is on the list, is the default here instead.
+     * the model takes and which one it starts on, and whether it has a fast tier.
+     *
+     * [configuredModel] and [configuredEffort] are what the person's own config.toml sets (`model`,
+     * `model_reasoning_effort`) for the directory the conversation runs in - what Codex runs on a tab left
+     * on "Default" and "auto". `model/list` marks its own default with `isDefault` and knows nothing of the
+     * config, so a menu labelled from it alone named one model over a tab that ran another; the config's
+     * model, when it is on the list, is the default here instead.
      */
     fun models(
         result: JsonElement?,
@@ -70,11 +70,62 @@ internal object CodexShapes {
                             put("standardContext", limits.standardEffective)
                             put("longContext", limits.longEffective)
                         }
+                        // Fast mode in the word the rest of the plugin reads (`supportsFastMode`, see
+                        // ProjectUsage.sendModels), with Codex's own line about the tier ("1.5x speed, increased
+                        // usage") for the menu to quote. A model that says nothing about speeds says nothing here.
+                        fastTierOf(model)?.let { tier ->
+                            put(SUPPORTS_FAST_MODE, tier.has)
+                            tier.description.takeIf { it.isNotEmpty() }?.let { put(FAST_MODE_DESCRIPTION, it) }
+                        }
                     }
                 }
             }
         }
     }
+
+    /**
+     * Which of the [models] the menu's list holds (the `models` array the function above answers with) have fast
+     * mode, as CodexAccounts.noteFastModels takes them - value, full name, whether it has it - and one row more for
+     * "default", which has it exactly when the
+     * model it comes to does (the one marked `isDefault`): a tab that never picked a model is on that value, and a
+     * pick of it must not read as "a model without fast mode" (see CodexSessions.setModel).
+     *
+     * Null when no row says anything either way: a Codex older than the tiers is silence, not "none". Disabled rows
+     * are kept - they are still names a conversation may be running on.
+     */
+    fun fastModels(models: JsonArray): List<Triple<String, String, Boolean>>? {
+        val rows = models.mapNotNull { element ->
+            val model = element as? JsonObject ?: return@mapNotNull null
+            val value = AppServer.text(model["value"]).ifEmpty { return@mapNotNull null }
+            Triple(value, AppServer.text(model["resolvedModel"]), (model[SUPPORTS_FAST_MODE] as? JsonPrimitive)?.booleanOrNull)
+        }
+        if (rows.none { it.third != null }) return null
+
+        val standard = models.firstNotNullOfOrNull { element ->
+            (element as? JsonObject)?.takeIf { it["isDefault"] == JsonPrimitive(true) }
+        }
+        val byDefault = standard?.let { Triple(ModelNames.DEFAULT, "", it[SUPPORTS_FAST_MODE] == JsonPrimitive(true)) }
+        return rows.map { (value, resolved, fast) -> Triple(value, resolved, fast == true) } + listOfNotNull(byDefault)
+    }
+
+    /** What the catalogue says of a model's fast tier - null when it says nothing about speeds at all. */
+    private class FastTier(val has: Boolean, val description: String)
+
+    private fun fastTierOf(model: JsonObject): FastTier? {
+        val tiers = model["serviceTiers"] as? JsonArray
+        if (tiers != null) {
+            val fast = tiers.firstNotNullOfOrNull { (it as? JsonObject)?.takeIf { tier -> AppServer.text(tier["id"]) == ServiceTiers.FAST } }
+            return FastTier(fast != null, AppServer.text(fast?.get("description")).trim())
+        }
+
+        // A Codex from before `serviceTiers` named its speeds in a list of words; it had no line about them.
+        val legacy = model["additionalSpeedTiers"] as? JsonArray ?: return null
+        return FastTier(legacy.any { AppServer.text(it) == ServiceTiers.LEGACY_FAST }, "")
+    }
+
+    /** The fields [models] says fast mode in - the first is Claude Code's word, read as it is by ProjectUsage. */
+    const val SUPPORTS_FAST_MODE = "supportsFastMode"
+    const val FAST_MODE_DESCRIPTION = "fastModeDescription"
 
     /**
      * The account's limits, in the shape of the usage answer the rings read (see CodexUsage.parse).
@@ -85,10 +136,27 @@ internal object CodexShapes {
      *
      * A business seat can have neither, only a spend limit set by the workspace (`individualLimit`). That
      * is drawn on the third ring, the one for usage past the plan, because that is what it is: money,
-     * counted against a cap somebody set.
+     * counted against a cap somebody set. Codex's own word on that cap (`spendControlReached`) rides beside
+     * its share as `reached` (see CodexUsage.Extra.reached).
+     *
+     * [answer] is the whole answer to `account/rateLimits/read` when that is what [snapshot] came out of - see
+     * [usageAnswer]. A rolling update leaves it null, and that difference is the one CodexUsage.Tracker needs.
      */
-    fun usage(snapshot: JsonObject?, contextWindow: Int? = null, buckets: JsonObject? = null): JsonObject = buildJsonObject {
+    fun usage(
+        snapshot: JsonObject?,
+        contextWindow: Int? = null,
+        buckets: JsonObject? = null,
+        answer: JsonObject? = null,
+    ): JsonObject = buildJsonObject {
         putJsonObject("rate_limits") {
+            // A whole answer, marked as one: the backend was asked about now, which a rolling update - the
+            // figures a process last heard in a turn's headers - is not (see CodexUsage.Snapshot.fromServer).
+            // With it goes the one recovery signal Codex documents, said only when the answer had it: absent
+            // is "unavailable", and must not read as "no".
+            if (answer != null) {
+                put(CodexUsage.FULL_ANSWER, true)
+                (answer["ordinaryUsageAllowed"] as? JsonPrimitive)?.booleanOrNull?.let { put(CodexUsage.ORDINARY_USAGE, it) }
+            }
             // The limits Codex keeps beside the plan's own two - `rateLimitsByLimitId`, a bucket per metered
             // limit, the plan's own being `codex`. Each one with a window of its own is a ring of its own,
             // retold as the list a model's own week came in on the Claude side (`model_scoped`), which the
@@ -134,6 +202,8 @@ internal object CodexShapes {
                         put("is_enabled", true)
                         percent?.let { put("utilization", it) }
                         AppServer.longOf(limit["resetsAt"])?.let { put("resets_at", iso(it)) }
+                        // "None is unavailable, not a sparse-update recovery": only a said true or false goes.
+                        (snapshot["spendControlReached"] as? JsonPrimitive)?.booleanOrNull?.let { put(CodexUsage.SPEND_REACHED, it) }
                     }
                 }
             }
@@ -148,9 +218,22 @@ internal object CodexShapes {
         }
     }
 
-    /** The whole answer to `account/rateLimits/read`: the plan's own bucket and the others beside it. */
+    /**
+     * The whole answer to `account/rateLimits/read`: the plan's own bucket and the others beside it, marked as
+     * a whole answer (see [usage]).
+     *
+     * `rateLimitResetCredits` - how many one-off resets of the limit the account has in hand - is left where it
+     * is. It counts what can still be redeemed, not what was: a count going down is a credit spent or a credit
+     * expired, and nothing in it says the windows were reset. The reset itself is told by the shares falling and
+     * by `ordinaryUsageAllowed`, which this answer carries.
+     */
     fun usageAnswer(result: JsonObject?, contextWindow: Int? = null): JsonObject =
-        usage(result?.get("rateLimits") as? JsonObject, contextWindow, result?.get("rateLimitsByLimitId") as? JsonObject)
+        usage(
+            result?.get("rateLimits") as? JsonObject,
+            contextWindow,
+            result?.get("rateLimitsByLimitId") as? JsonObject,
+            answer = result,
+        )
 
     /**
      * Whether a rolling limits update is about the plan's own bucket. One about another bucket carries
@@ -191,14 +274,42 @@ internal object CodexShapes {
         return if ((minutesOf(full) ?: 0) > SHORT_WINDOW_MAX_MINUTES) "seven_day" else "five_hour"
     }
 
-    /** When the window that stopped the work opens again, in seconds - for the panel's countdown. */
+    /**
+     * When the limit that stopped the work opens again, in seconds - for the panel's countdown, and for everything
+     * that decides by it: a tab carrying itself on after the reset only when that is hours away rather than days
+     * (CarryOns.limitWait), and a scenario run filing the refusal against the account until then (see
+     * AccountUsage.SHARED_WINDOWS).
+     *
+     * A full window of the plan when there is one. With none, the spending cap when Codex names it as the reason
+     * (see [SPEND_CAP_REASONS]): a business seat has no window at all, and its cap starts over with its budget.
+     * Without that the reset was unknown, and a run went back to the seat every quarter of an hour, refused each
+     * time, until the end of the month.
+     */
     fun resetOf(snapshot: JsonObject?): Long? {
         if (snapshot == null) return null
-        return listOfNotNull(snapshot["primary"] as? JsonObject, snapshot["secondary"] as? JsonObject)
+        val window = listOfNotNull(snapshot["primary"] as? JsonObject, snapshot["secondary"] as? JsonObject)
             .filter { (AppServer.intOf(it["usedPercent"]) ?: 0) >= 100 }
             .mapNotNull { AppServer.longOf(it["resetsAt"]) }
             .maxOrNull()
+        if (window != null) return window
+
+        if (reachedWindow(snapshot) !in SPEND_CAP_REASONS) return null
+        return AppServer.longOf((snapshot["individualLimit"] as? JsonObject)?.get("resetsAt"))
     }
+
+    /**
+     * Codex's reasons for a spending cap stopping the work - the person's own cap in a workspace: "You hit your
+     * spend cap set in your workspace" (an owner) or "set by the owner of your workspace" (a member). The cap is
+     * `individualLimit`, and it starts over at its `resetsAt`.
+     */
+    val SPEND_CAP_REASONS = setOf("workspace_owner_usage_limit_reached", "workspace_member_usage_limit_reached")
+
+    /**
+     * Codex's reasons for the workspace running out of credits: "Ask your workspace owner to refill". It stops
+     * every model of the account, as the cap does, but nothing ends it on a clock - it is over when somebody adds
+     * credits - so it has no reset to give, and the individual cap's month would be a wrong one.
+     */
+    val CREDITS_REASONS = setOf("workspace_owner_credits_depleted", "workspace_member_credits_depleted")
 
     private fun kotlinx.serialization.json.JsonObjectBuilder.window(window: JsonObject) {
         put("utilization", AppServer.text(window["usedPercent"]).toDoubleOrNull() ?: 0.0)
@@ -301,11 +412,20 @@ internal object CodexShapes {
         }
     }
 
-    /** The context meter's figures out of Codex's token counts: what the window holds, and its size. */
-    fun contextOf(tokenUsage: JsonObject?): Pair<Int, Int>? {
+    /**
+     * The context meter's figures out of Codex's token counts: what the window holds, and its size.
+     *
+     * [windowNow] is the window the conversation has now, when Codex's count was made under another one: a count
+     * read from the thread's file or kept from the process before this one (Std switched to Long, a model with a
+     * bigger window). What the window holds stays Codex's - the conversation is the same - but measured against
+     * the window it was counted in, a switch to Long was undone by the very next figure (see
+     * CodexSession.contextNow). Null keeps Codex's own window.
+     */
+    fun contextOf(tokenUsage: JsonObject?, windowNow: Int? = null): Pair<Int, Int>? {
         val last = tokenUsage?.get("last") as? JsonObject ?: return null
-        val window = AppServer.intOf(tokenUsage["modelContextWindow"]) ?: return null
-        if (window <= 0) return null
+        val counted = AppServer.intOf(tokenUsage["modelContextWindow"]) ?: return null
+        if (counted <= 0) return null
+        val window = windowNow?.takeIf { it > 0 } ?: counted
 
         val total = AppServer.longOf(last["totalTokens"]) ?: return null
         val reasoning = AppServer.longOf(last["reasoningOutputTokens"]) ?: 0

@@ -392,4 +392,29 @@ class RemoteFeedTest {
 
     /** A paragraph pasted into an answer field, which is what these have no ceiling on. */
     private val PASTED = "the whole description of the ticket, pasted into the answer field, ".repeat(4)
+    /** A pass of a list: its item's label stays - it is what the row is called - and its long words are cut. */
+    @Test
+    fun `the item of a pass travels with its label and its words cut`() {
+        val step = stepJson().dropLast(1) +
+            ""","item":{"label":"Titles for the test","value":"${"v".repeat(400)}","index":3,"count":7,"again":"${"a".repeat(600)}"}}"""
+        val out = sent(runMessage(step))
+
+        assertTrue(out.contains(""""label":"Titles for the test""""))
+        assertTrue(out.contains(""""index":3"""))
+        assertFalse(out.contains("v".repeat(200)))
+        assertFalse(out.contains("a".repeat(300)))
+    }
+
+    /** What a list is, is said to the head and read in the editor - prose, gone like a card's prompt. */
+    @Test
+    fun `the list of a stage loses its prose and keeps its name`() {
+        val message = runMessage().replace(
+            """"repeat":3,"untilDone":true,""",
+            """"repeat":1,"untilDone":false,"each":{"name":"card","description":"$LONG"},""",
+        )
+        val out = sent(message)
+
+        assertFalse(out.contains(LONG))
+        assertTrue(out.contains(""""name":"card""""))
+    }
 }

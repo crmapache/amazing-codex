@@ -40,7 +40,9 @@ export const es: Dict = {
       newChatMode: { title: 'MODO POR DEFECTO', hint: 'con qué empiezan las pestañas nuevas' },
       composerLayout: { title: 'DISPOSICIÓN DEL CAMPO', hint: 'dónde se coloca el campo de entrada' },
       pasteCollapse: { title: 'TEXTO PEGADO', hint: 'cuándo un pegado se pliega en una ficha' },
+      spellcheck: { title: 'ORTOGRAFÍA', hint: 'subrayar palabras mal escritas' },
       sendKey: { title: 'ENVIAR UN MENSAJE', hint: 'qué tecla lo envía' },
+      keys: { title: 'ATAJOS DE TECLADO', hint: 'cada tecla a la que responde el panel' },
       codexConfig: { title: 'AJUSTES DE CODEX', hint: 'su config.toml - lo que cambia /config' },
       improvePrompt: { title: 'MEJORAR EL PROMPT', hint: 'qué pide el botón de la estrella' },
       voice: { title: 'ENTRADA POR VOZ', hint: 'dictar en lugar de escribir' },
@@ -86,7 +88,9 @@ export const es: Dict = {
       shareEditor: { label: 'Archivo abierto y selección', sub: 'Lo que va con cada mensaje' },
       composerLayout: { label: 'Disposición del campo', sub: 'Dónde se coloca el campo de entrada' },
       pasteCollapse: { label: 'Texto pegado', sub: 'Cuándo un pegado se pliega en una ficha' },
+      spellcheck: { label: 'Ortografía', sub: 'Subrayar palabras mal escritas' },
       sendKey: { label: 'Enviar un mensaje', sub: 'Qué tecla lo envía' },
+      keys: { label: 'Atajos de teclado', sub: 'Pestañas, cola, búsqueda y lo demás' },
       codexConfig: { label: 'Ajustes de Codex', sub: 'Su propio config.toml y la confianza en este proyecto' },
       improvePrompt: { label: 'Mejorar el prompt', sub: 'Qué pide el botón de la estrella' },
       voice: { label: 'Entrada por voz', sub: 'Dicta con tu propia clave de Deepgram' },
@@ -174,7 +178,15 @@ export const es: Dict = {
   shareEditor: {
     label: 'Enviar el editor con el mensaje',
     hint: 'Cada mensaje lleva el archivo abierto en el editor y las líneas seleccionadas en él, como lo hace /ide de Codex en una terminal',
-    note: 'Solo desde este panel: un mensaje escrito en el teléfono no lleva nada del editor. Un mensaje puede ir sin él: pulsa el chip del archivo en el campo de entrada.',
+    note: 'Solo desde este panel: un mensaje escrito en el teléfono no lleva nada del editor. El chip del archivo en el campo de entrada tiene este mismo interruptor, y allí un solo mensaje puede ir sin él o, al revés, con él.',
+    on: 'Activado',
+    off: 'Desactivado',
+  },
+
+  spellcheck: {
+    label: 'Revisar la ortografía',
+    hint: 'Las palabras que el corrector no conoce se subrayan en rojo, en el campo del mensaje y en los demás campos de texto del panel',
+    note: 'Desactívala si escribes en varios idiomas y se subrayan las palabras de los otros. Un mensaje escrito en el teléfono lo revisa el teclado del propio teléfono, y este interruptor no lo cambia.',
     on: 'Activado',
     off: 'Desactivado',
   },
@@ -253,6 +265,9 @@ export const es: Dict = {
     empty: 'Aquí todavía no hay conversaciones anteriores.',
     today: 'HOY',
     earlier: 'ANTES',
+    closed: 'CERRADAS RECIENTEMENTE',
+    reopen: (key) => (key ? `Volver a abrir en su sitio · ${key}` : 'Volver a abrir en su sitio'),
+    fork: 'bifurcación',
     messages: (n) => (n === 1 ? `${n} mensaje` : `${n} mensajes`),
   },
 
@@ -496,6 +511,7 @@ export const es: Dict = {
       stopped: 'Cortado por ti',
       undone: 'Sin terminar',
       headGaveUp: 'El hilo principal tampoco pudo terminarla',
+      longList: 'La lista era demasiado larga',
     },
     outcomes: {
       scenarioBroken: 'Este escenario no se puede ejecutar tal cual: ábrelo y mira qué falla.',
@@ -546,6 +562,14 @@ export const es: Dict = {
       tokens: 'tokens',
       passOf: (pass, passes) => `pasada ${pass} de ${passes}`,
       passOfUpTo: (pass, passes) => `pasada ${pass} de un máximo de ${passes}`,
+      itemOf: (index, count) => `elemento ${index} de ${count}`,
+      secondGo: 'segundo intento',
+      listPending: 'esperando la lista',
+      listEmpty: 'la lista está vacía',
+      putOff: 'vuelve después del resto',
+      itemsShort: (n) => (n === 1 ? '1 elemento' : `${n} elementos`),
+      listAheadShort: 'aún sin lista',
+      listEmptyShort: 'lista vacía',
       headSaid: 'HILO PRINCIPAL',
       sentBack: (n) => (n === 1 ? 'devuelta una vez' : `devuelta ${n} veces`),
       takenOver: (why) => `El hilo principal la tomó a su cargo: ${why}`,
@@ -648,6 +672,13 @@ export const es: Dict = {
       roundsShort: (n: number): string => `×${n}`,
       roundsUntilShort: (n: number): string => `×${n}, hasta hecho`,
       untilDone: 'o menos, si el hilo principal dice que ya está',
+      perItem: 'una vez por cada elemento de una lista',
+      perItemShort: 'por elemento',
+      listLabel: 'LA LISTA',
+      itemName: 'nombre',
+      listHint:
+        'Qué es la lista y cómo es uno de sus elementos. El hilo principal da la lista entera al empezar la etapa, y la etapa se recorre una vez por cada elemento.',
+      itemNote: (name) => `Cada pasada recibe su propio elemento allí donde el texto dice [[${name}]] - no necesita hueco.`,
       cards: 'TARJETAS',
       addCard: 'Añadir una tarjeta',
       addCardHere: 'Añadir una tarjeta a esta etapa',
@@ -681,6 +712,10 @@ export const es: Dict = {
       duplicateInput: (name) => `Dos preguntas se llaman igual: ${name}.`,
       duplicateSlot: (card, name) => `${card}: dos huecos se llaman igual: ${name}.`,
       badInputName: (name) => `«${name}» no es un nombre: usa letras, dígitos, - y _.`,
+      badItemName: (stage, name) => `${stage}: «${name}» no sirve como nombre del elemento: usa letras, dígitos, - y _.`,
+      noItemList: (stage) => `${stage}: no se dice qué es la lista.`,
+      itemSlotClash: (card, name) => `${card}: el hueco ${name} se llama como el elemento de la etapa, y ese lo pone el panel.`,
+      unusedItem: (stage, name) => `${stage}: ningún texto escribe [[${name}]], así que a cada pasada se le dice lo mismo.`,
       badSlotName: (card, name) => `${card}: «${name}» no es un nombre: usa letras, dígitos, - y _.`,
     },
   },
@@ -708,6 +743,47 @@ export const es: Dict = {
     enterSub: 'Shift+Enter salta de línea',
     modEnter: (mod: string): string => `${mod}+Enter`,
     modEnterSub: 'Enter salta de línea',
+  },
+
+  keys: {
+    note: 'Las teclas funcionan mientras el foco está en el panel. Las de pestañas son las que cambian y cierran pestañas del editor en el mapa de teclas de tu IDE.',
+    notSet: 'Sin asignar',
+    keymapNote: 'Las teclas de pestañas, la cola y abrir el panel son acciones del IDE - reasígnalas en Settings | Keymap.',
+    openKeymap: 'Cambiar en Keymap',
+    groups: { tabs: 'Pestañas', message: 'Campo del mensaje', agent: 'Agente', panel: 'Panel' },
+    rows: {
+      nextTab: 'Pestaña siguiente',
+      previousTab: 'Pestaña anterior',
+      newTab: 'Pestaña nueva',
+      closeTab: 'Cerrar la pestaña',
+      searchTabsWhen: 'en la búsqueda, sus pestañas',
+      closeTabWhen: 'pregunta antes si el agente trabaja',
+      reopenTab: 'Reabrir pestaña cerrada',
+      reopenTabWhen: 'las últimas 20, también en Historial',
+      openPanel: 'Abrir el panel',
+      openPanelWhen: 'desde cualquier lugar del IDE',
+      send: 'Enviar',
+      newLine: 'Línea nueva',
+      queue: 'En cola',
+      queueWhen: 'se envía cuando el agente termine',
+      history: 'Recorrer los enviados',
+      historyWhen: 'con el campo vacío',
+      commands: 'Comandos',
+      files: 'Archivos',
+      shell: 'Comando de terminal',
+      shellWhen: 'al empezar un mensaje',
+      deleteWord: 'Borrar una palabra',
+      undo: 'Deshacer',
+      redo: 'Rehacer',
+      stop: 'Detener',
+      stopWhen: 'mientras el agente trabaja',
+      mode: 'Siguiente modo de permisos',
+      answer: 'Responder con un número',
+      answerWhen: 'a un permiso o una pregunta, con el campo vacío',
+      search: 'Buscar en conversaciones',
+      fork: 'Fork desde la selección',
+      forkWhen: 'con texto seleccionado en el feed',
+    },
   },
 
   improvePrompt: {
@@ -847,6 +923,32 @@ export const es: Dict = {
     addSub: 'Uno que Codex no ofrece',
   },
 
+  fast: {
+    label: 'Modo rápido',
+    offSub: 'Desactivado · respuestas más rápidas que gastan antes tus límites',
+    offSubTier: (tier) => `Desactivado · nivel rápido de Codex: ${tier}`,
+    waitingSub: 'Activo desde el próximo mensaje · gasta antes tus límites',
+    onSub: 'Activo · gasta antes tus límites',
+    fromSettingsSub: 'Activo en tu configuración de Codex · desactívalo para esta conversación',
+    unavailableSub: (reason) => `No disponible. ${reason}`,
+    chipOn: 'El modo rápido está activo',
+    chipFromSettings: 'El modo rápido está activo en tu configuración de Codex',
+    chipWaiting: 'El modo rápido se activa con el próximo mensaje',
+    chipUnavailable: (reason) => `El modo rápido no está disponible. ${reason}`,
+    row: { label: 'RÁPIDO', title: 'El modo rápido no se activó', hint: 'Esta conversación sigue a velocidad normal.' },
+    reasons: {
+      notServed: 'Codex hizo el turno sin el nivel rápido.',
+      modelNotAllowed: 'Este modelo no tiene nivel rápido.',
+      unknown: 'Ahora mismo no está disponible.',
+    },
+    phone: {
+      on: 'Activo',
+      off: 'Desactivado',
+      note: 'Respuestas más rápidas que gastan antes tus límites - solo para esta conversación.',
+      noteTier: (tier) => `Nivel rápido de Codex: ${tier} - solo para esta conversación.`,
+    },
+  },
+
   composer: {
     placeholder: 'Pregunta, o describe un cambio…',
     placeholderPlan: 'Describe qué planificar…',
@@ -871,8 +973,19 @@ export const es: Dict = {
     voice: 'Dictar',
     voiceStop: 'Terminar el dictado',
     editor: {
-      on: (place) => `Codex ve ${place} con este mensaje · haz clic para dejarlo fuera`,
-      off: (place) => `${place} no va con este mensaje · haz clic para enviarlo`,
+      on: (place) => `Codex ve ${place} con este mensaje · haz clic para elegir`,
+      off: (place) => `${place} no va con este mensaje · haz clic para elegir`,
+      muted: (place) => `${place} no se envía: el envío del editor está desactivado · haz clic para elegir`,
+      menu: {
+        always: 'Enviar con cada mensaje',
+        alwaysSub: 'El archivo abierto y las líneas seleccionadas, en todas las pestañas',
+        skip: 'No enviar con este mensaje',
+        skipSub: 'El siguiente mensaje lo vuelve a llevar',
+        only: 'Enviar solo con este mensaje',
+        onlySub: 'El siguiente vuelve a ir sin él',
+        never: 'No enviar nunca',
+        neverSub: 'En todas las pestañas, hasta que lo vuelvas a activar: el mismo interruptor que en la configuración',
+      },
     },
   },
 
@@ -887,6 +1000,7 @@ export const es: Dict = {
     scenarios: 'Escenarios',
     closeScenarios: 'Cerrar los escenarios',
     closeRun: 'Cerrar esta ejecución',
+    closeHint: (close, reopen) => `${close} · ${reopen} la vuelve a abrir`,
     conversations: 'Conversaciones',
     newSession: 'Conversación nueva',
     fork: 'Bifurcar esta conversación: una pestaña nueva que sigue desde aquí, mientras esta queda como está',
@@ -981,6 +1095,19 @@ export const es: Dict = {
   feed: {
     empty: { title: 'Pregúntale a Codex sobre este proyecto', hint: '@ para archivos · / para comandos' },
     you: 'TÚ',
+    auto: {
+      label: 'PANEL',
+      why: {
+        accountSwitch: 'No lo escribiste tú: el cambio de cuenta cortó el turno y el panel lo continuó por su cuenta',
+        limit: 'No lo escribiste tú: el límite de uso detuvo el turno y el panel lo continuó por su cuenta en cuanto pudo',
+        restart: 'No lo escribiste tú: Codex se reinició bajo la conversación, se perdieron sus agentes en segundo plano y el panel le dijo que siguiera',
+      },
+    },
+    carryOn: {
+      planned: (clock: string): string => `Seguirá con esta conversación por su cuenta a las ${clock}, cuando se reinicie el límite`,
+      guessed: (clock: string): string => `Intentará seguir con esta conversación por su cuenta a las ${clock}: el límite no dijo cuándo se reinicia`,
+      cancel: 'No seguir',
+    },
     jumpToLatest: 'Ir a lo más reciente',
     copyBlock: 'Copiar este bloque',
     copyReply: 'Copiar toda la respuesta',
@@ -1016,6 +1143,11 @@ export const es: Dict = {
     copyPaste: 'Copiar el texto pegado',
     pasteShown: (shown, total) => `Primeras ${shown} líneas de ${total} · al copiar se lleva todo`,
     fromOutput: 'de la salida',
+    imagePreview: {
+      missing: 'No se pudo leer la imagen: el archivo ya no existe o el mensaje ya no la guarda',
+      opens: 'clic para abrir',
+      unopened: 'no se pudo abrir: clic para reintentar',
+    },
 
     think: { chip: 'PIENSA', thoughts: (n) => `${n} ${n === 1 ? 'idea' : 'ideas'}` },
 
@@ -1139,6 +1271,19 @@ export const es: Dict = {
       textWithCode: (code) => `Codex se cerró de forma inesperada (código ${code}).`,
     },
 
+    session: {
+      label: 'SESIÓN',
+      id: 'ID de sesión',
+      terminal: 'En una terminal',
+      copyId: 'Copiar ID de sesión',
+      terminalNote: 'Continúa esta conversación en una terminal abierta en la carpeta del proyecto',
+      terminalNoteOn: (account: string): string =>
+        `Continúa esta conversación en la cuenta ${account} en una terminal abierta en la carpeta del proyecto`,
+      terminalNoteDefault: (account: string): string =>
+        `Continúa esta conversación en una terminal abierta en la carpeta del proyecto, con el inicio de sesión predeterminado de Codex y no en la cuenta ${account}`,
+      unnamedAccount: 'de esta pestaña',
+      none: 'Aún no hay ID: la conversación recibe uno con su primer mensaje',
+    },
     outranked: {
       account: {
         label: 'ACCESO',
@@ -1203,7 +1348,23 @@ export const es: Dict = {
       unconfirmed: 'sin confirmar',
     },
 
-    copy: { copied: 'Copiado', click: 'Clic para copiar', openFile: 'Abrir en el editor', openFolder: 'Mostrar la carpeta' },
+    copy: { copied: 'Copiado', click: 'Clic para copiar', openFile: 'Abrir en el editor', openFolder: 'Mostrar la carpeta', missing: 'Ese archivo no está en el disco - pulsa para volver a mirar' },
+    changes: {
+      all: (n) => `Mostrar todos (${n})`,
+      fewer: 'Mostrar menos',
+      revert: 'Revertir este archivo',
+      revertAll: 'Revertir todo',
+      reverting: 'Revirtiendo…',
+      restore: 'Recuperar los cambios',
+      restoreAll: 'Recuperar todo',
+      restoring: 'Recuperando…',
+      reverted: 'Revertido',
+      changed: 'Cambiado después, se deja como está',
+      missing: 'El archivo ya no existe',
+      failed: 'No se pudo escribir el archivo',
+      deleted: 'Eliminado',
+      movedFrom: (from) => `desde ${from}`,
+    },
   },
 
   chrome: {
@@ -1217,6 +1378,7 @@ export const es: Dict = {
     queue: {
       label: 'EN COLA',
       hint: (n) => `${n} saldrán en orden cuando termine la ejecución · arrastra para reordenar`,
+      held: (n) => `${n} saldrán en orden tras tu próximo mensaje - la ejecución que esperaban se detuvo · arrastra para reordenar`,
       edit: 'Editar en el campo',
       editing: (key, button) => `Se está editando en el campo · ${key} o «${button}» lo devuelve aquí`,
     },
@@ -1270,7 +1432,16 @@ export const es: Dict = {
       stopCommand: 'Parar este comando',
       stopCommandTitle: '¿Parar este comando?',
     },
-    confirm: { cancel: 'Cancelar', stop: 'Parar' },
+    confirm: {
+      cancel: 'Cancelar',
+      stop: 'Parar',
+      close: 'Cerrar',
+      closeWorking: '¿Cerrar una pestaña que sigue trabajando?',
+      closeWorkingNote: (key) =>
+        key
+          ? `El agente se detiene. ${key} recupera la pestaña, con su cola esperando tu próximo mensaje.`
+          : 'El agente se detiene. La pestaña se puede volver a abrir desde el Historial, con su cola esperando tu próximo mensaje.',
+    },
     noChats: { title: '¡Con ganas de trabajar juntos!', button: 'Empecemos' },
     crash: {
       title: 'El panel se ha topado con un error',
@@ -1304,6 +1475,7 @@ export const es: Dict = {
     fiveHour: '5 h',
     weekly: 'sem.',
     spending: 'gasto',
+    usableAgainIn: (left) => `Límite alcanzado · disponible de nuevo en ${left}`,
     row: {
       one: 'Una cuenta',
       adding: 'Iniciando sesión…',
@@ -1810,6 +1982,7 @@ export const es: Dict = {
     weeklyApps: 'semanal de apps',
     weeklyFable: 'semanal de Fable',
     extra: 'de uso extra',
+    spending: 'de gasto',
   },
 
   permission: {
@@ -1891,6 +2064,8 @@ export const es: Dict = {
     config: 'ajustes de Codex - los abre en el menú',
     btw: 'una pregunta rápida al margen - el trabajo sigue',
     btwArgument: '<pregunta>',
+    fast: 'activar o desactivar el modo rápido - respuestas más rápidas que gastan antes tus límites',
+    status: 'el ID de esta conversación y el comando para seguirla en una terminal',
     model: 'cambiar el modelo de esta sesión',
     effort: 'ajustar cuánto piensa Codex antes de actuar',
     codeReview: 'revisar los cambios con el revisor propio de Codex',

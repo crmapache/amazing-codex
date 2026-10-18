@@ -1,12 +1,15 @@
 import { useState } from 'react'
 import type { AccountInfo, UsageWindow } from '../../protocol'
 import type { UsageFacts } from '../../feed/usage'
-import { FIVE_HOUR_MS, MONTH_MS, WEEK_MS, paceColor, spendingWindow } from '../../feed/usage'
+import { FIVE_HOUR_MS, MONTH_MS, WEEK_MS, paceColor, spendingWindow, timeLeft, usableAgainIn } from '../../feed/usage'
+import { useTicking } from '../../hooks/useTicking'
 import { Ring } from '../../components/StatusBar'
+import { ResetClock } from '../../components/ResetClock'
 import { Back } from './Back'
 import m from '../mobile.module.css'
 import { useT } from '../../i18n'
 import type { Dict } from '../../i18n/en'
+import { EmptyPlate } from './EmptyPlate'
 
 /** Everything the phone holds about the machine's accounts - the `accounts` message, as it arrives. */
 export interface AccountsState {
@@ -49,26 +52,50 @@ const shortName = (account: AccountInfo, t: Dict): string =>
         ? t.accounts.defaultName
         : t.accounts.unnamed
 
-/** One window's share, small, beside the name it belongs to. A dash where it is not known yet. */
-const Meter = ({ name, window, span }: { name: string; window?: UsageWindow; span: number }) => (
-  <span className={m.accountMeter}>
-    {window ? (
-      <>
-        <Ring
-          percent={window.percent}
-          color={paceColor(window.percent, window.resets, span)}
-          size={16}
-        />
-        <span style={{ color: paceColor(window.percent, window.resets, span) }}>
-          {Math.round(window.percent)}%
+/**
+ * One window's share, small, beside the name it belongs to, and the time left until it resets. A dash where it
+ * is not known yet. The time is what a phone looking at an account at its limit came for (see usableAgainIn).
+ */
+const Meter = ({ name, window, span, now }: { name: string; window?: UsageWindow; span: number; now: number }) => {
+  const left = window ? timeLeft(window.resets, now) : null
+
+  // Two lines, as on the desk: the window and its share, and under them the clock - in one run the time ran
+  // into the next window's name.
+  return (
+    <span className={m.accountMeter}>
+      <span className={m.accountMeterShare}>
+        {window ? (
+          <>
+            <Ring
+              percent={window.percent}
+              color={paceColor(window.percent, window.resets, span)}
+              size={16}
+            />
+            <span style={{ color: paceColor(window.percent, window.resets, span) }}>
+              {Math.round(window.percent)}%
+            </span>
+          </>
+        ) : (
+          <span className={m.accountMeterEmpty}>—</span>
+        )}
+        <span className={m.accountMeterName}>{name}</span>
+      </span>
+      {left !== null && (
+        <span className={m.accountMeterReset}>
+          <ResetClock size={10} />
+          {left}
         </span>
-      </>
-    ) : (
-      <span className={m.accountMeterEmpty}>—</span>
-    )}
-    <span className={m.accountMeterName}>{name}</span>
-  </span>
-)
+      )}
+    </span>
+  )
+}
+
+/** When an account at its limit can be used again - nothing for one that has room (see usableAgainIn). */
+const UsableAgain = ({ facts, now }: { facts: UsageFacts; now: number }) => {
+  const t = useT()
+  const left = usableAgainIn(facts, now)
+  return left === null ? null : <p className={m.accountWaits}>{t.accounts.usableAgainIn(left)}</p>
+}
 
 /**
  * Which Claude account pays for the work, from a phone.
@@ -97,6 +124,8 @@ export const Accounts = ({
   onBack,
 }: AccountsProps) => {
   const t = useT()
+  // Minutes on screen, so twice a minute is enough - and the IDE's clock, as everything here (see useNow).
+  const now = useTicking(true, 30_000)
 
   /** Which account's name is being edited, and the text so far. One at a time. */
   const [renaming, setRenaming] = useState<string | null>(null)
@@ -131,7 +160,7 @@ export const Accounts = ({
         )}
 
         {state && state.accounts.length === 0 && (
-          <p className={m.empty}>{t.mobile.accounts.none}</p>
+          <EmptyPlate title={t.mobile.accounts.none} />
         )}
 
         {state && state.accounts.length > 0 && (
@@ -164,19 +193,28 @@ export const Accounts = ({
                     {/* A business seat has neither window, only the workspace's spending cap - the same
                         rule as the panel's accounts screen, or two dashes would stand there for ever. */}
                     {!facts.session && !facts.week && spendingWindow(facts.extra) ? (
-                      <Meter name={t.accounts.spending} window={spendingWindow(facts.extra) ?? undefined} span={MONTH_MS} />
+                      <Meter
+                        name={t.accounts.spending}
+                        window={spendingWindow(facts.extra) ?? undefined}
+                        span={MONTH_MS}
+                        now={now}
+                      />
                     ) : (
                       <>
-                        <Meter name={t.accounts.fiveHour} window={facts.session} span={FIVE_HOUR_MS} />
-                        <Meter name={t.accounts.weekly} window={facts.week} span={WEEK_MS} />
+                        <Meter name={t.accounts.fiveHour} window={facts.session} span={FIVE_HOUR_MS} now={now} />
+                        <Meter name={t.accounts.weekly} window={facts.week} span={WEEK_MS} now={now} />
                         {/* A limit of its own beside the plan's, where the plan keeps one - the same rule
                             as the panel's accounts screen. */}
                         {(facts.models ?? []).map((model) => (
-                          <Meter key={model.label} name={model.label} window={model} span={WEEK_MS} />
+                          <Meter key={model.label} name={model.label} window={model} span={WEEK_MS} now={now} />
                         ))}
                       </>
                     )}
                   </div>
+
+                  {/* An account at its limit, and when it takes work again - the question this screen gets
+                      asked about the account that is not in use (see usableAgainIn). */}
+                  <UsableAgain facts={facts} now={now} />
 
                   {account.health === 'absent' && <p className={m.noteBad}>{t.accounts.absent}</p>}
 

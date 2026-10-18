@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { copyToClipboard } from '../../clipboard'
 
 interface CopyButtonProps {
@@ -6,6 +6,12 @@ interface CopyButtonProps {
   text: string
   className: string
   title: string
+  /**
+   * What stands before the icon, for a button that is the whole value rather than a square beside it (see
+   * SessionInfoRow) - the icon then goes into a box of its own, styled by [iconClassName].
+   */
+  children?: ReactNode
+  iconClassName?: string
 }
 
 /** How long the tick is held after a copy before the icon returns. */
@@ -16,7 +22,7 @@ const COPIED_FLASH_MS = 1500
  * block inside it. A tick instead of the icon is the only answer to a press possible here: one cannot
  * look into the clipboard.
  */
-export const CopyButton = ({ text, className, title }: CopyButtonProps) => {
+export const CopyButton = ({ text, className, title, children, iconClassName }: CopyButtonProps) => {
   const [copied, setCopied] = useState(false)
 
   useEffect(() => {
@@ -39,7 +45,16 @@ export const CopyButton = ({ text, className, title }: CopyButtonProps) => {
         })
       }}
     >
-      {copied ? '✓' : '⧉'}
+      {children}
+      {children ? (
+        <span className={iconClassName} aria-hidden="true">
+          {copied ? '✓' : '⧉'}
+        </span>
+      ) : copied ? (
+        '✓'
+      ) : (
+        '⧉'
+      )}
     </button>
   )
 }

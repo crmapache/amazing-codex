@@ -14,6 +14,7 @@ import {
   type StageStanding,
 } from '../../scenarios/timeline'
 import { limitText, moveText } from '../../scenarios/moves'
+import { itemLabel, stageSize, stepPlace, type StepPlace } from '../../scenarios/places'
 import { roadOf, roadWidth } from '../../scenarios/roadmap'
 import { useTicking } from '../../hooks/useTicking'
 import { useT } from '../../i18n'
@@ -467,16 +468,15 @@ export const ScenarioRunTab = ({
                   <span className={s.stageLine} />
                   <span className={s.stageVerdict}>
                     {[
-                      row.passes > 1
-                        ? row.untilDone
-                          ? t.scenarios.editor.roundsUntilShort(row.passes)
-                          : t.scenarios.editor.roundsShort(row.passes)
-                        : '',
-                      row.standing === 'done'
-                        ? t.scenarios.run.stageDone(formatDuration(row.took))
-                        : row.standing === 'here'
-                          ? t.scenarios.run.stageHere
-                          : t.scenarios.run.stageNotReached,
+                      stageSize(t, row),
+                      // "Empty list" already says how it ended, and it took no time to say it.
+                      row.items === 0
+                        ? ''
+                        : row.standing === 'done'
+                          ? t.scenarios.run.stageDone(formatDuration(row.took))
+                          : row.standing === 'here'
+                            ? t.scenarios.run.stageHere
+                            : t.scenarios.run.stageNotReached,
                     ]
                       .filter(Boolean)
                       .join(' · ')}
@@ -544,8 +544,7 @@ export const ScenarioRunTab = ({
                 key={row.key}
                 anchor={row.key}
                 step={row.step}
-                passes={row.passes}
-                untilDone={row.untilDone}
+                place={row}
                 worked={stepWorked(row.step, now, run)}
                 onOpen={() => openStep(row.step)}
               />
@@ -598,17 +597,15 @@ const standingClass = (standing: StageStanding): string =>
 const StepRow = ({
   anchor,
   step,
-  passes,
-  untilDone,
+  place,
   worked,
   onOpen,
 }: {
   /** Its key in the timeline, for holding the reading place by (see useRunPlace). */
   anchor: string
   step: ScenarioRunStep
-  /** How many passes its stage was given. One means the row has no loop to place itself in. */
-  passes: number
-  untilDone: boolean
+  /** How its stage goes round - a number of times, or once per item of a list - which places the row in it. */
+  place: StepPlace
   /** How long it has genuinely worked so far (see stepWorked) - it stands still while the run does. */
   worked: number
   onOpen: () => void
@@ -629,6 +626,8 @@ const StepRow = ({
 
   const slots = Object.entries(step.slots).filter(([, value]) => value.length > 0)
   const ahead = step.state === 'waiting' || step.state === 'skipped'
+  const where = stepPlace(t, step, place)
+  const item = itemLabel(step)
 
   return (
     <div className={s.stepRow} data-row={anchor} data-ahead={ahead || undefined}>
@@ -664,16 +663,16 @@ const StepRow = ({
             them: six rows of a stage that goes round three times are six goes at two cards, and the one
             thing that tells them apart belongs on the row it tells apart.
           */}
-          {passes > 1 ? (
-            <span className={s.stagePass}>
-              {untilDone ? t.scenarios.run.passOfUpTo(step.pass, passes) : t.scenarios.run.passOf(step.pass, passes)}
-            </span>
-          ) : null}
+          {where ? <span className={s.stagePass}>{where}</span> : null}
           <span className={s.stepSpace} />
           <span className={`${s.stepTime} ${going ? s.stepTimeGoing : ''}`}>
-            {elapsed || (ahead ? t.scenarios.run.notYet : '')}
+            {elapsed || (ahead && step.item?.count !== 0 ? t.scenarios.run.notYet : '')}
           </span>
         </span>
+
+        {/* The item of a pass of a list, by name: one card seven times is seven items, and this is the one
+            thing that tells the rows apart (see itemLabel). */}
+        {item ? <span className={s.stepItem}>{item}</span> : null}
 
         {slots.length > 0 ? (
           <span className={s.stepSlots}>
@@ -695,7 +694,15 @@ const StepRow = ({
         {/* The head's reason is its own words and is markdown like everything it writes; an error is the
             engine's, and is shown exactly as it was put. */}
         {step.verdictReason || step.error ? (
-          <span className={`${s.stepVerdict} ${step.verdict === 'undone' || step.error ? s.stepVerdictBad : ''}`}>
+          <span
+            className={[
+              s.stepVerdict,
+              step.verdict === 'undone' || step.error ? s.stepVerdictBad : '',
+              step.verdict === 'later' ? s.stepVerdictLater : '',
+            ]
+              .filter(Boolean)
+              .join(' ')}
+          >
             {step.verdictReason ? <Glance text={step.verdictReason} /> : step.error}
           </span>
         ) : null}
@@ -703,6 +710,8 @@ const StepRow = ({
         {step.nudges.length > 0 && step.state === 'done' ? (
           <span className={s.stepNudge}>{t.scenarios.run.sentBack(step.nudges.length)}</span>
         ) : null}
+
+        {step.verdict === 'later' ? <span className={s.stepNudge}>{t.scenarios.run.putOff}</span> : null}
 
         {step.takeOver ? <span className={s.stepNudge}>{t.scenarios.run.takenOver(step.takeOver)}</span> : null}
       </button>

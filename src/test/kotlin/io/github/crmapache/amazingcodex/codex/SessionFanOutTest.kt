@@ -2,6 +2,7 @@ package io.github.crmapache.amazingcodex.codex
 
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import io.github.crmapache.amazingcodex.remote.RemoteLimits
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -21,7 +22,10 @@ import kotlinx.serialization.json.put
 class SessionFanOutTest : BasePlatformTestCase() {
 
     private class Recorder(override val id: String, override val isLocal: Boolean = false) : SessionClient {
-        val received = mutableListOf<String>()
+        // Written from whatever thread the hub delivers on while the test reads it on its own: a plain list
+        // failed `any { }` with ConcurrentModificationException now and then (caught in a release run). This
+        // one is read as a snapshot.
+        val received = CopyOnWriteArrayList<String>()
 
         override fun deliver(messages: List<String>) {
             received += messages
@@ -239,6 +243,30 @@ class SessionFanOutTest : BasePlatformTestCase() {
         assertTrue("init at $init, sessions at $sessions", init >= 0 && init < sessions)
     }
 
+    /**
+     * The settings as they stand when the client joins, not as they stood when the project opened. A page
+     * reloaded after a switch was flipped used to be handed the warm-up's copy of `init` and showed the old
+     * answer until the IDE restarted.
+     */
+    fun testAJoiningClientIsHandedTheSettingsAsTheyStandNow() {
+        val hub = hub()
+        val kept = CodexPreferences.spellcheck
+        try {
+            CodexPreferences.spellcheck = true
+            hub.catalog.sendInit()
+            CodexPreferences.spellcheck = false
+
+            val reloaded = Recorder("reloaded")
+            hub.register(reloaded)
+            hub.attach(reloaded.id)
+
+            val init = reloaded.received.single { it.contains("\"type\":\"init\"") }
+            assertTrue(init, init.contains("\"spellcheck\":false"))
+        } finally {
+            CodexPreferences.spellcheck = kept
+        }
+    }
+
     /** Only the latest of each kind is kept - a joining client wants the present state, not a history of it. */
     fun testOnlyTheFreshestProjectFactIsKept() {
         val hub = hub()
@@ -277,6 +305,100 @@ class SessionFanOutTest : BasePlatformTestCase() {
         assertFalse(phone.received.any { it.contains("\"sessionId\":\"elsewhere\"") })
         // And what was left out is said out loud rather than shown as a stump.
         assertTrue(watched.any { it.contains("\"type\":\"restoreStarted\"") && it.contains("\"truncated\":true") })
+    }
+
+    private fun context(sessionId: String, used: Int, max: Int) = buildJsonObject {
+        put("type", "context")
+        put("sessionId", sessionId)
+        put("used", used)
+        put("max", max)
+    }.toString()
+
+    /**
+     * The exact figure of the window comes at a turn's end, and the end of a long turn handed to a phone held
+     * none: its meter divided the agent's latest answer by a window guessed from the model's name and stood at
+     * a red 100% over a conversation at 29%. A feed built from nothing gets the last figure first, ahead of
+     * the tail, so that what the tail says still lands over it.
+     */
+    fun testAFeedBuiltFromNothingIsHandedTheWindowsLastFigureFirst() {
+        val hub = hub()
+        hub.broadcast("long", context("long", 21_000, 1_000_000))
+        repeat(10) { status(hub, "long", SessionSnapshot.STATUS_RUNNING) }
+
+        val phone = Recorder("phone-mid-turn")
+        hub.register(phone)
+        hub.attach(phone.id, catchUp = CodexSessionHub.CatchUp(sessions = setOf("long"), maxEntries = 3))
+
+        val feed = phone.received.filter { it.contains("\"sessionId\":\"long\"") }
+        val started = feed.indexOfFirst { it.contains("\"type\":\"restoreStarted\"") }
+        val figure = feed.indexOfFirst { it.contains("\"type\":\"context\"") }
+        val firstEntry = feed.indexOfFirst { it.contains("\"type\":\"status\"") }
+
+        assertTrue(feed.toString(), started in 0 until figure && figure < firstEntry)
+        assertTrue(feed[figure], feed[figure].contains("\"used\":21000") && feed[figure].contains("\"max\":1000000"))
+    }
+
+    /**
+     * The window a conversation is in is told to a joining client after the figure (see attach), and told as a fact
+     * about the tab rather than as a change of it. Read as a change, it threw away the figure the client had just been
+     * handed: a panel reloaded in the middle of a conversation measured against a guess until the next step.
+     */
+    fun testTheWindowAJoiningClientIsToldIsNoChangeOfIt() {
+        val hub = hub()
+        hub.broadcast("reloaded-long", context("reloaded-long", 300_000, 828_400))
+        hub.conversations.setContextMode("reloaded-long", ModelContexts.LONG, remember = false)
+
+        val panel = Recorder("panel-reloaded", isLocal = true)
+        hub.register(panel)
+        hub.attach(panel.id)
+
+        val feed = panel.received.filter { it.contains("\"sessionId\":\"reloaded-long\"") }
+        val figure = feed.indexOfFirst { it.contains("\"type\":\"context\"") }
+        val window = feed.indexOfFirst { it.contains("\"type\":\"contextMode\"") }
+        assertTrue(feed.toString(), figure in 0 until window)
+        assertTrue(feed[window], feed[window].contains("\"mode\":\"long\"") && feed[window].contains("\"born\":true"))
+    }
+
+    /** A window picked IS a change, and it says so - by saying nothing of a birth. */
+    fun testAWindowPickedIsSaidAsAChange() {
+        val hub = hub()
+        val watching = Recorder("watching-window", isLocal = true)
+        hub.register(watching)
+        hub.attach(watching.id)
+
+        hub.changeContextMode("picked-long", ModelContexts.LONG, remember = false)
+
+        val said = watching.received.lastOrNull { it.contains("\"sessionId\":\"picked-long\"") && it.contains("\"type\":\"contextMode\"") }
+        assertNotNull(said)
+        assertFalse(said!!, said.contains("\"born\""))
+    }
+
+    /** One holding the conversation holds the figure too, and a stale one after its estimate would set it back. */
+    fun testAClientCatchingUpIsNotHandedTheFigureAgain() {
+        val hub = hub()
+        hub.broadcast("held", context("held", 21_000, 1_000_000))
+        val seen = hub.lastSeq("held")
+        status(hub, "held", SessionSnapshot.STATUS_RUNNING)
+
+        val returning = Recorder("returning-held")
+        hub.register(returning)
+        hub.attach(returning.id, since = mapOf("held" to seen))
+
+        assertFalse(returning.received.any { it.contains("\"sessionId\":\"held\"") && it.contains("\"type\":\"context\"") })
+    }
+
+    /** `/clear` starts the conversation over, and the figure about the one that went must not come back. */
+    fun testACleanSlateHandsNoFigureOfTheConversationThatWent() {
+        val hub = hub()
+        hub.broadcast("cleared", context("cleared", 400_000, 1_000_000))
+        hub.resetJournal("cleared")
+        status(hub, "cleared", SessionSnapshot.STATUS_IDLE)
+
+        val joining = Recorder("joining-cleared")
+        hub.register(joining)
+        hub.attach(joining.id)
+
+        assertFalse(joining.received.any { it.contains("\"sessionId\":\"cleared\"") && it.contains("\"type\":\"context\"") })
     }
 
     /** The number to come back with is the journal's last, not the last one handed over. */
@@ -354,6 +476,43 @@ class SessionFanOutTest : BasePlatformTestCase() {
         assertFalse(hub.tabs.contains("first-$allowance"))
         // ...and the other phone is untouched by it.
         assertTrue(hub.tabs.contains("second-phone"))
+    }
+
+    /**
+     * A tab closed and opened again comes back under its own identifier, with a journal of its own. A phone that
+     * was away across both returns with a number from the old journal - and is handed the new one afresh, not
+     * "nothing after your number" from a journal that counts from one again. So too while the journal of the tab
+     * that came back is still empty: kept, the phone's screen would go on showing the tab that was closed.
+     */
+    fun testAPhoneAwayWhileATabWasClosedAndOpenedAgainIsHandedItAfresh() {
+        val hub = hub()
+        hub.openSession("again", parentId = null, title = "", quote = "")
+        repeat(4) { status(hub, "again", SessionSnapshot.STATUS_RUNNING) }
+        val away = hub.lastSeq("again")
+        hub.saveDraft(
+            "again",
+            buildJsonObject {
+                put("tokens", kotlinx.serialization.json.buildJsonArray { add(buildJsonObject { put("kind", "text"); put("value", "words") }) })
+            },
+        )
+
+        hub.closeSession("again", byPerson = true)
+        assertEquals("again", (hub.reopenTab(emptySet()) as CodexSessionHub.Reopened.Chat).sessionId)
+
+        fun restoreFor(name: String): List<String> {
+            val phone = Recorder(name)
+            hub.register(phone)
+            hub.attach(phone.id, since = mapOf("again" to away))
+            return phone.received.filter { it.contains("\"sessionId\":\"again\"") }
+        }
+
+        assertTrue(restoreFor("away-early").first { it.contains("\"type\":\"restoreStarted\"") }.contains("\"from\":0"))
+
+        status(hub, "again", SessionSnapshot.STATUS_IDLE)
+        assertTrue(hub.lastSeq("again") > away)
+        val later = restoreFor("away-later")
+        assertTrue(later.first { it.contains("\"type\":\"restoreStarted\"") }.contains("\"from\":0"))
+        assertTrue(later.any { it.contains("\"type\":\"status\"") && it.contains("\"state\":\"idle\"") })
     }
 
     /**

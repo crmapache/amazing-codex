@@ -184,6 +184,12 @@ describe('phoneCommands', () => {
     expect(ids).not.toContain('rename')
   })
 
+  // And /status, which the IDE answers with the desk's row when a phone sends it (see SessionCommands.statusAsked)
+  // rather than letting the model spend a turn on it.
+  it('keeps /status, which the IDE answers', () => {
+    expect(phoneCommands(en, emptyFacts().commands, emptyFacts().hints).map((command) => command.id)).toContain('status')
+  })
+
   /**
    * A phone never sees a conversation start, so the agent's own list reaches it only as a project fact.
    * Without it the MCP servers' commands - which have no file and therefore no hint - could not be

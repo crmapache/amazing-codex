@@ -97,6 +97,7 @@ const SHARED_WITH_ENGLISH: Record<string, Locale[]> = {
   'menu.titles.plugins.title': ['es', 'pt-BR', 'de', 'fr'],
   'menu.titles.feedback.title': ['pt-BR', 'de'],
   'menu.rows.plugins.label': ['es', 'pt-BR', 'de', 'fr'],
+  'feed.session.label': ['fr'],
   // A duration on a gauge, not a word: "5h" is how Portuguese writes it too.
   'accounts.fiveHour': ['pt-BR'],
   'improvePrompt.label': ['fr'],
@@ -114,11 +115,17 @@ const SHARED_WITH_ENGLISH: Record<string, Locale[]> = {
   'feed.limit.label': ['de'],
   'scenarios.run.limitLabel': ['de'],
   'scenarios.run.panelSaid': ['es', 'de'],
+  // The same word over a message the panel said itself in a chat (see UserItem.auto).
+  'feed.auto.label': ['es', 'de'],
   'feed.findings.label': ['de'],
   'feed.crash.label': ['fr'],
   // "Mods" is the word the Latin languages use for them as well.
   'feed.mods.label': ['es', 'pt-BR', 'de', 'fr'],
   'mobile.sessions.agent.offline': ['pt-BR', 'de'],
+  // The cheat sheet's group titles: German says Tabs and Panel, German and French say Agent.
+  'keys.groups.tabs': ['de'],
+  'keys.groups.agent': ['de', 'fr'],
+  'keys.groups.panel': ['de', 'es'],
   // The phone's own screens, where the Latin languages happen to spell a word exactly as English does.
   'mobile.sessions.kind.permission': ['fr'],
   'mobile.sessions.kind.question': ['fr'],

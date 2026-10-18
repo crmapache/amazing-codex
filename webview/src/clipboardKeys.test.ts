@@ -1,54 +1,26 @@
 import { describe, expect, it } from 'vitest'
-import { TYPING_WINDOW_MS, isPasteShortcut, isTyping, servesPaste, typedNothing } from './clipboardKeys'
-
-const key = (over: Partial<Parameters<typeof isPasteShortcut>[0]> = {}) => ({
-  code: 'KeyV',
-  ctrlKey: false,
-  metaKey: false,
-  shiftKey: false,
-  altKey: false,
-  ...over,
-})
-
-describe('isPasteShortcut', () => {
-  it('takes Ctrl+V and Cmd+V', () => {
-    expect(isPasteShortcut(key({ ctrlKey: true }))).toBe(true)
-    expect(isPasteShortcut(key({ metaKey: true }))).toBe(true)
-  })
-
-  it('takes Shift+Insert, the other habit on Linux', () => {
-    expect(isPasteShortcut(key({ code: 'Insert', shiftKey: true }))).toBe(true)
-  })
-
-  it('leaves a plain letter alone', () => {
-    expect(isPasteShortcut(key())).toBe(false)
-    expect(isPasteShortcut(key({ shiftKey: true }))).toBe(false)
-  })
-
-  it('leaves the shortcuts that mean something else alone', () => {
-    expect(isPasteShortcut(key({ ctrlKey: true, shiftKey: true }))).toBe(false)
-    expect(isPasteShortcut(key({ ctrlKey: true, altKey: true }))).toBe(false)
-    expect(isPasteShortcut(key({ code: 'Insert', shiftKey: true, ctrlKey: true }))).toBe(false)
-  })
-})
+import { TYPING_WINDOW_MS, isLeak, isTyping, servesPaste, typedNothing } from './clipboardKeys'
 
 describe('servesPaste', () => {
   it('serves a paste nobody pressed a key for - that is the context menu', () => {
     expect(servesPaste(null, 1_000)).toBe(true)
   })
 
-  it('serves a paste that follows its shortcut', () => {
-    expect(servesPaste({ at: 1_000, shortcut: true, text: '' }, 1_010)).toBe(true)
+  it('refuses a paste that follows a key press', () => {
+    // Shift+V on Linux: the press crosses into the browser carrying a Ctrl nobody held, and comes back as
+    // a paste. Filling that in is how the clipboard landed in a message by itself.
+    expect(servesPaste({ at: 1_000, text: 'V' }, 1_010)).toBe(false)
   })
 
-  it('refuses a paste that follows an ordinary key press', () => {
-    // Shift+V on Linux: the press crosses into the browser carrying modifiers nobody held, and comes
-    // back as an empty paste. Filling that in is how the clipboard landed in a message by itself.
-    expect(servesPaste({ at: 1_000, shortcut: false, text: 'V' }, 1_010)).toBe(false)
+  it('refuses it whatever the press was: a real paste shortcut is taken by the IDE before the browser', () => {
+    // 0.13.29 served pastes after a press that looked like Ctrl+Shift+V, and a phantom Ctrl on a Shift+V
+    // looks exactly like that.
+    expect(servesPaste({ at: 1_000, text: 'v' }, 1_010)).toBe(false)
+    expect(servesPaste({ at: 1_000, text: '' }, 1_010)).toBe(false)
   })
 
   it('stops blaming a press once it is long past', () => {
-    expect(servesPaste({ at: 1_000, shortcut: false, text: 'V' }, 1_000 + TYPING_WINDOW_MS + 1)).toBe(true)
+    expect(servesPaste({ at: 1_000, text: 'V' }, 1_000 + TYPING_WINDOW_MS + 1)).toBe(true)
   })
 })
 
@@ -64,6 +36,32 @@ describe('typedNothing', () => {
 
   it('ignores typing that comes long after the press', () => {
     expect(typedNothing(1_000, 1_000 + TYPING_WINDOW_MS + 1)).toBe(true)
+  })
+})
+
+describe('isLeak', () => {
+  const owned = { at: 1_000, text: 'v' }
+
+  it("swallows the paste shortcut's own letter right after the press", () => {
+    // Ubuntu, Wayland, German layout: Ctrl+V also typed a "v", and the "v" cost the paste.
+    expect(isLeak(owned, 'v', 1_005)).toBe(true)
+    expect(isLeak({ at: 1_000, text: 'V' }, 'V', 1_005)).toBe(true)
+    expect(isLeak(owned, 'V', 1_005)).toBe(true)
+  })
+
+  it('lets any other text through', () => {
+    expect(isLeak(owned, 'x', 1_005)).toBe(false)
+    expect(isLeak(owned, 'vv', 1_005)).toBe(false)
+    expect(isLeak(owned, null, 1_005)).toBe(false)
+  })
+
+  it('lets the letter through once the press is long past', () => {
+    expect(isLeak(owned, 'v', 1_000 + TYPING_WINDOW_MS + 1)).toBe(false)
+  })
+
+  it('has nothing to swallow without a press, or for a key that writes nothing', () => {
+    expect(isLeak(null, 'v', 1_005)).toBe(false)
+    expect(isLeak({ at: 1_000, text: '' }, 'v', 1_005)).toBe(false)
   })
 })
 

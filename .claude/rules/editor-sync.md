@@ -1,10 +1,10 @@
 ---
 paths:
-  - "src/main/kotlin/io/github/crmapache/amazingclaudecode/editor/UnsavedEdits.kt"
-  - "src/main/kotlin/io/github/crmapache/amazingclaudecode/editor/AgentEdits.kt"
-  - "src/main/kotlin/io/github/crmapache/amazingclaudecode/editor/DiskRefresh.kt"
-  - "src/test/kotlin/io/github/crmapache/amazingclaudecode/editor/UnsavedEditsTest.kt"
-  - "src/test/kotlin/io/github/crmapache/amazingclaudecode/editor/AgentEditsTest.kt"
+  - "src/main/kotlin/io/github/crmapache/amazingcodex/editor/UnsavedEdits.kt"
+  - "src/main/kotlin/io/github/crmapache/amazingcodex/editor/AgentEdits.kt"
+  - "src/main/kotlin/io/github/crmapache/amazingcodex/editor/DiskRefresh.kt"
+  - "src/test/kotlin/io/github/crmapache/amazingcodex/editor/UnsavedEditsTest.kt"
+  - "src/test/kotlin/io/github/crmapache/amazingcodex/editor/AgentEditsTest.kt"
 ---
 
 ## Правки ходят в обе стороны: буферы на диск, диск в IDE
@@ -15,7 +15,7 @@ paths:
 правка выглядела как откат чужой работы. Теперь перед ходом панель сохраняет сама
 (`editor/UnsavedEdits.kt`).
 
-- **Место одно - `ClaudeSessionHub.prompt`.** Через него идут и панель, и телефон, и отложенная очередь,
+- **Место одно - `CodexSessionHub.prompt`.** Через него идут и панель, и телефон, и отложенная очередь,
   и ответ на вопрос агента, так что отдельных веток не нужно. Второй вызов - перед командой через «!»
   (`ProjectCatalog.runShellCommand`): она читает тот же диск, и `git diff` сразу после правки должен
   показать эту правку.

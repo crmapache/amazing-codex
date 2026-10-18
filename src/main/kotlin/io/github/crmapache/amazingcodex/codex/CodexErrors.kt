@@ -23,7 +23,16 @@ internal object CodexErrors {
     fun isAuth(info: JsonElement?): Boolean = codeOf(info) == "unauthorized"
 
     fun isUsageLimit(info: JsonElement?): Boolean =
-        codeOf(info) in setOf("usageLimitExceeded", "sessionBudgetExceeded")
+        codeOf(info) in setOf("usageLimitExceeded", SESSION_BUDGET)
+
+    /**
+     * Codex's code for a session's own budget running out - a refusal like the limit's, but of this conversation
+     * rather than of the account, and with no reset: it is over when somebody gives the session more (see
+     * CodexStream.turnCompleted, CarryOns.endsOnAClock).
+     */
+    const val SESSION_BUDGET = "sessionBudgetExceeded"
+
+    fun isSessionBudget(info: JsonElement?): Boolean = codeOf(info) == SESSION_BUDGET
 
     /**
      * The HTTP status behind a failure, for the retry card: the panel words a 429 and a 529 differently

@@ -21,16 +21,20 @@ import { useNow } from './useNow'
  * The time comes from [useNow], so the phone measures against the clock of the machine that reported the
  * moment rather than against its own (see mobile/clock.ts).
  */
-export const useTicking = (going: boolean): number => {
+export const useTicking = (
+  going: boolean,
+  /** How often - a second for a running count; a countdown in minutes needs far less (see the accounts screen). */
+  everyMs = 1000,
+): number => {
   const clock = useNow()
   const [now, setNow] = useState(() => clock())
 
   useEffect(() => {
     if (!going) return
     setNow(clock())
-    const timer = setInterval(() => setNow(clock()), 1000)
+    const timer = setInterval(() => setNow(clock()), everyMs)
     return () => clearInterval(timer)
-  }, [going, clock])
+  }, [going, clock, everyMs])
 
   return now
 }

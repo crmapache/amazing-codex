@@ -212,6 +212,8 @@ export interface HoursSeries {
   hours: number[]
   /** The longest day in the range, if there was one. */
   longest: { date: string; minutes: number } | null
+  /** Minutes a day over every calendar day of the range, quiet ones included - the time tile's "a day". */
+  average: number
 }
 
 export const hoursSeries = (data: StatisticsData, range: Range): HoursSeries => {
@@ -224,7 +226,99 @@ export const hoursSeries = (data: StatisticsData, range: Range): HoursSeries => 
     if (minutes > 0 && (longest === null || minutes > longest.minutes)) longest = { date, minutes }
   }
 
-  return { dates, hours: dates.map((date) => (byDate.get(date)?.minutes ?? 0) / 60), longest }
+  const minutes = dates.reduce((total, date) => total + (byDate.get(date)?.minutes ?? 0), 0)
+
+  return {
+    dates,
+    hours: dates.map((date) => (byDate.get(date)?.minutes ?? 0) / 60),
+    longest,
+    average: minutes / Math.max(1, dates.length),
+  }
+}
+
+// --- Tokens a day -----------------------------------------------------------------------
+
+/**
+ * The tokens of one day, every hour of it added up.
+ *
+ * Out of `tokens` rather than the turns of `days`: the turns know only the main thread of a panel's own
+ * conversations, and a busy day spends most of its tokens in subagents and scenario runs (see
+ * StatisticsData.tokens).
+ */
+const tokensOn = (data: StatisticsData, date: string): number =>
+  (data.tokens?.[date] ?? []).reduce((total, value) => total + value, 0)
+
+export interface TokenSeries {
+  dates: string[]
+  /** Tokens spent, one point a day. */
+  tokens: number[]
+  /** All of them, over the range. */
+  total: number
+  /** The busiest day in the range, if there was one. */
+  busiest: { date: string; tokens: number } | null
+  /**
+   * Tokens a day, and over which days: from the first day the transcripts know of, or the range's own
+   * first day if that is later. Null when the range lies wholly before them.
+   *
+   * Not over the whole range, because a day before the transcripts is not a day without tokens: the
+   * CLI deletes its transcripts after a month, and the work of those days is simply not on the disk any
+   * more. Counted as zeros, they would put "all time" at a fraction of what a day really costs. Within
+   * the known stretch a zero is a real day off and counts like any other.
+   */
+  average: { tokens: number; from: string; days: number } | null
+}
+
+export const tokenSeries = (data: StatisticsData, range: Range): TokenSeries => {
+  const dates = daysBetween(range.from, range.to)
+  const tokens = dates.map((date) => tokensOn(data, date))
+
+  let busiest: { date: string; tokens: number } | null = null
+  for (const [index, date] of dates.entries()) {
+    const spent = tokens[index] ?? 0
+    if (spent > 0 && (busiest === null || spent > busiest.tokens)) busiest = { date, tokens: spent }
+  }
+
+  const total = tokens.reduce((sum, value) => sum + value, 0)
+
+  const firstKnown = Object.keys(data.tokens ?? {})
+    .filter((date) => tokensOn(data, date) > 0)
+    .sort()[0]
+  const known = firstKnown === undefined ? [] : dates.filter((date) => date >= firstKnown)
+  const average =
+    known.length === 0
+      ? null
+      : {
+          tokens: known.reduce((sum, date) => sum + tokensOn(data, date), 0) / known.length,
+          from: known[0]!,
+          days: known.length,
+        }
+
+  return { dates, tokens, total, busiest, average }
+}
+
+export interface DayTokens {
+  /** All 24 hours, midnight first. */
+  hours: number[]
+  total: number
+  /** The busiest hour and what it held - absent on a quiet day. */
+  peak: { hour: number; tokens: number } | null
+}
+
+/** Tokens by hour of the day, added up over the days of the range - the one-day view of the card above. */
+export const dayTokens = (data: StatisticsData, range: Range): DayTokens => {
+  const hours = Array.from({ length: 24 }, () => 0)
+  for (const date of daysBetween(range.from, range.to)) {
+    ;(data.tokens?.[date] ?? []).forEach((value, hour) => {
+      if (hour < 24) hours[hour] = (hours[hour] ?? 0) + value
+    })
+  }
+
+  let peak: { hour: number; tokens: number } | null = null
+  for (const [hour, tokens] of hours.entries()) {
+    if (tokens > 0 && (peak === null || tokens > peak.tokens)) peak = { hour, tokens }
+  }
+
+  return { hours, total: hours.reduce((total, value) => total + value, 0), peak }
 }
 
 // --- The hours of one day ---------------------------------------------------------------
@@ -517,7 +611,6 @@ export interface FactsTile {
   deepestChain: number
   /** Turns by model family, the busiest first, as shares of all turns. */
   models: { name: string; turns: number; share: number }[]
-  tokens: number
   cost: number
 }
 
@@ -543,11 +636,6 @@ export const factsTile = (data: StatisticsData, range: Range): FactsTile => {
     forks: sum(days, (day) => day.forks),
     deepestChain: max(days, (day) => day.maxDepth),
     models,
-    tokens:
-      sum(days, (day) => day.tokensIn) +
-      sum(days, (day) => day.tokensOut) +
-      sum(days, (day) => day.tokensCacheRead) +
-      sum(days, (day) => day.tokensCacheWrite),
     cost: sum(days, (day) => day.cost),
   }
 }

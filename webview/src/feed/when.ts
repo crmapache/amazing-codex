@@ -14,3 +14,18 @@ export const describeWhen = (at: number): string => {
     ? `today ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
     : date.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
 }
+
+const DAY_MS = 24 * 60 * 60 * 1000
+
+/**
+ * A moment a limit is about - when it resets, when a run waiting it out goes on - as the reader's clock shows it,
+ * and with its date once it is a day or more away from [now].
+ *
+ * The clock alone is enough for a five-hour window: its reset is always within the day. A weekly one is days off,
+ * and a business seat's spending cap starts over with its month, and there "at 0:00" names no day at all - read
+ * as tonight, it promised the work back weeks too early.
+ */
+export const clockOrDate = (at: number, now: number = Date.now()): string =>
+  Math.abs(at - now) < DAY_MS
+    ? new Date(at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+    : new Date(at).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })

@@ -9,6 +9,8 @@ import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.editor.colors.EditorColorsListener
 import com.intellij.openapi.editor.colors.EditorColorsManager
+import com.intellij.openapi.keymap.Keymap
+import com.intellij.openapi.keymap.KeymapManagerListener
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.vfs.VirtualFile
@@ -42,6 +44,7 @@ import io.github.crmapache.amazingcodex.webview.IdeTypography
 import io.github.crmapache.amazingcodex.webview.ImageDownloads
 import io.github.crmapache.amazingcodex.webview.PanelTheme
 import io.github.crmapache.amazingcodex.webview.PastedFiles
+import io.github.crmapache.amazingcodex.webview.SessionMenu
 import io.github.crmapache.amazingcodex.webview.WebviewClipboard
 import io.github.crmapache.amazingcodex.webview.WebviewFileDrop
 import io.github.crmapache.amazingcodex.webview.WebviewHost
@@ -113,6 +116,16 @@ internal class CodexPanel(
             buildJsonObject {
                 put("type", "shareEditor")
                 put("on", CodexPreferences.shareEditor)
+            }.toString(),
+        )
+    }
+
+    /** The same, for whether the text fields check spelling (see CodexPreferences.spellcheck). */
+    fun spellcheckChanged() {
+        webview?.send(
+            buildJsonObject {
+                put("type", "spellcheck")
+                put("on", CodexPreferences.spellcheck)
             }.toString(),
         )
     }
@@ -213,6 +226,45 @@ internal class CodexPanel(
         watchTypography()
         watchIdeActivation()
         watchEditor()
+        watchKeymap()
+    }
+
+    /**
+     * One of the panel's keys was pressed with the focus in it (see PanelKeys). What it does to the tabs
+     * and the field is the page's business: only the page knows the strip's order, which tab is working,
+     * and what stands in the field.
+     */
+    private fun pressPanelKey(command: PanelKeys.Command) {
+        hub.stats.noteFeature("panel_keys")
+        webview?.send(
+            buildJsonObject {
+                put("type", "panelKey")
+                put("command", command.wire)
+            }.toString(),
+        )
+    }
+
+    /** The keys the panel's actions answer to, for the page to draw them (see PanelKeys.message). */
+    private fun sendPanelKeys() {
+        webview?.send(PanelKeys.message())
+    }
+
+    /**
+     * A key rebound in Settings | Keymap, or another keymap chosen: the hints and the cheat sheet must name
+     * the key that works now. Any change at all is answered - the three tab keys follow the IDE's own tab
+     * actions, so a change to Close Tab is a change to ours without our id being named in it.
+     */
+    private fun watchKeymap() {
+        if (webview == null) return
+        ApplicationManager.getApplication().messageBus.connect(parentDisposable).subscribe(
+            KeymapManagerListener.TOPIC,
+            object : KeymapManagerListener {
+                override fun activeKeymapChanged(keymap: Keymap?) = sendPanelKeys()
+
+                override fun shortcutsChanged(keymap: Keymap, actionIds: Collection<String>, fromSettings: Boolean) =
+                    sendPanelKeys()
+            },
+        )
     }
 
     /**
@@ -249,7 +301,11 @@ internal class CodexPanel(
     private var frame: JBPanel<JBPanel<*>>? = null
 
     private fun buildWebview(parentDisposable: Disposable): JComponent {
-        val host = WebviewHost(parentDisposable, PanelTheme.current()) { message -> handleWebviewMessage(message) }
+        val host = WebviewHost(
+            parentDisposable,
+            PanelTheme.current(),
+            onSessionIdCopied = { hub.stats.noteFeature("session_info") },
+        ) { message -> handleWebviewMessage(message) }
         webview = host
 
         // Dragging files into the panel: inside the IDE that goes past the embedded browser, so we take
@@ -260,6 +316,10 @@ internal class CodexPanel(
             onDragging = ::sendFileDrag,
             onDropped = ::attachDropped,
         )
+
+        // The tab keys and Queue: the IDE has the keyboard before the browser does, so they are its
+        // actions, held by the browser while the focus is in it (see PanelKeys).
+        PanelKeys.install(host.component, parentDisposable, ::pressPanelKey)
 
         val frame = JBPanel<JBPanel<*>>(BorderLayout()).apply { add(host.component, BorderLayout.CENTER) }
         this.frame = frame
@@ -378,6 +438,7 @@ internal class CodexPanel(
                 sendTypography()
                 sendTheme()
                 sendEditorContext()
+                sendPanelKeys()
                 // The menu's row carries the account in force, so the list has to be there before anybody
                 // opens the screen behind it - otherwise that row sits blank next to a full one for
                 // remote access, and the screen it opens jumps from a skeleton to its content mid-slide.
@@ -527,11 +588,25 @@ internal class CodexPanel(
 
             "tabShown" -> hub.showTab(field("sessionId"))
 
+            // A closed tab opened again, and one of the panel's own tabs closed so that it can be (see
+            // ClosedTabs). At this door for the reason the two above are: which tab a person closed by
+            // mistake at the desk is the desk's business, and a phone cannot close a tab at all.
+            "reopenTab" -> reopenTab(payload, field("key"))
+
+            "panelTabClosed" -> hub.notePanelTabClosed(field("id"), field("title"), payload["place"] as? JsonObject)
+
             // Whether a message carries what the editor shows (see EditorContext). Machine-wide, like the
             // one below: every window's chip and screen follow it.
             "setShareEditor" -> {
                 CodexPreferences.shareEditor = payload["on"]?.jsonPrimitive?.booleanOrNull != false
                 CodexPanels.everyPanel { it.shareEditorChanged() }
+            }
+
+            // Whether the text fields underline misspelled words. Machine-wide like the switch above: every
+            // window's fields follow it at once.
+            "setSpellcheck" -> {
+                CodexPreferences.spellcheck = payload["on"]?.jsonPrimitive?.booleanOrNull != false
+                CodexPanels.everyPanel { it.spellcheckChanged() }
             }
 
             // Whether the tabs come back at all. Machine-wide: every project's memory is told, a switch
@@ -573,6 +648,11 @@ internal class CodexPanel(
 
             "openDevTools" -> webview?.openDevTools()
 
+            // The cheat sheet's "change them": Settings | Keymap, filtered to the plugin's own actions.
+            "openKeymap" -> ApplicationManager.getApplication().invokeLater {
+                if (!project.isDisposed) PanelKeys.openKeymap(project)
+            }
+
             // The cursor is set by the shell: an offscreen browser does not carry its own as far as the
             // IDE's window.
             "cursor" -> webview?.setCursor(field("cursor"))
@@ -595,6 +675,14 @@ internal class CodexPanel(
                     endColumn = whole("endColumn"),
                     find = field("find"),
                 ),
+                missing = {
+                    webview?.send(
+                        buildJsonObject {
+                            put("type", "fileMissing")
+                            put("path", field("path"))
+                        }.toString(),
+                    )
+                },
             )
 
             // The embedded browser's clipboard is its own and does not reach the IDE's (see
@@ -709,6 +797,14 @@ internal class CodexPanel(
              * exactly how "opening a chat from the history shows an empty feed" arrived as a bug report
              * with nothing to go on.
              */
+            // The conversation on screen, for the right-click menu to offer its id (see PanelContextMenu). The
+            // words come along: the menu is drawn by the browser, and the IDE has no dictionary of the panel's.
+            "sessionMenu" -> webview?.sessionMenu = field("conversationId").takeIf { it.isNotEmpty() }?.let {
+                SessionMenu(field("label").ifEmpty { "Copy Session ID" }, it)
+            }
+
+            "sessionInfo" -> sendSessionInfo(field("sessionId"))
+
             "channelLoss" -> {
                 val reason = field("reason")
                 val expected = payload["expected"]?.jsonPrimitive?.intOrNull ?: -1
@@ -867,6 +963,17 @@ internal class CodexPanel(
      * and notifies those subscribed to content changes - and such notifications expect exactly this
      * thread.
      */
+    /**
+     * The tab's conversation id, for `/status` (see SessionInfoRow) - built by the hub, which answers a phone's
+     * `/status` the same way (see CodexSessionHub.sessionInfo). This window is the IDE's own panel, so its line may
+     * name the account's drawer.
+     */
+    private fun sendSessionInfo(sessionId: String) {
+        if (sessionId.isEmpty()) return
+
+        webview?.send(hub.sessionInfo(sessionId, local = true))
+    }
+
     private fun writeClipboard(text: String, html: String) {
         if (text.isEmpty() && html.isEmpty()) return
 
@@ -1068,6 +1175,46 @@ internal class CodexPanel(
     }
 
     /**
+     * A closed tab opened again - the latest one, or the row of "Recently closed" named by [key] (see
+     * CodexSessionHub.reopenTab). Off the interface thread: whether the conversation is still on disk is asked
+     * first, and a pasted picture in the draft comes back with its bytes read off disk (see DraftImages).
+     *
+     * A conversation's tab is on the strip by the time this answers - the hub has sent the list - so the page is
+     * told which one to put on screen, and before that what was in its field. One of the panel's own tabs only
+     * the page can open, so it is told which and where.
+     */
+    private fun reopenTab(payload: JsonObject, key: String) {
+        val open = (payload["open"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.toSet()
+
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val back = runCatching { hub.reopenTab(open, key.ifEmpty { null }) }
+                .onFailure { thisLogger().warn("A closed tab could not be opened again", it) }
+                .getOrNull()
+                ?: return@executeOnPooledThread
+
+            when (back) {
+                is CodexSessionHub.Reopened.Chat -> {
+                    back.draft?.let { draft -> webview?.send(draftsMessage(mapOf(back.sessionId to draft))) }
+                    webview?.send(
+                        buildJsonObject {
+                            put("type", "tabReopened")
+                            put("sessionId", back.sessionId)
+                        }.toString(),
+                    )
+                }
+
+                is CodexSessionHub.Reopened.Panel -> webview?.send(
+                    buildJsonObject {
+                        put("type", "tabReopened")
+                        put("panel", back.id)
+                        back.place?.let { put("place", it) }
+                    }.toString(),
+                )
+            }
+        }
+    }
+
+    /**
      * The drafts the IDE holds for this project's tabs, handed to a page that has just loaded - after a
      * restart they come off disk, after a reload of the page alone they never left (see
      * CodexSessionHub.saveDraft).
@@ -1080,17 +1227,20 @@ internal class CodexPanel(
     private fun sendDrafts() {
         val held = hub.heldDrafts()
 
-        ApplicationManager.getApplication().executeOnPooledThread {
-            val message = buildJsonObject {
-                put("type", "drafts")
-                putJsonObject("drafts") {
-                    held.forEach { (sessionId, draft) -> put(sessionId, DraftImages.rehydrate(draft)) }
-                }
-            }.toString()
-
-            webview?.send(message)
-        }
+        ApplicationManager.getApplication().executeOnPooledThread { webview?.send(draftsMessage(held)) }
     }
+
+    /**
+     * The drafts of these tabs as the page takes them back into their fields - one road for all the tabs a panel is
+     * handed as it loads and for the one tab opened again after a close, so that the two cannot come to differ. The
+     * images go back in by bytes (see DraftImages), and that reads files: not for the event thread.
+     */
+    private fun draftsMessage(drafts: Map<String, JsonObject>): String = buildJsonObject {
+        put("type", "drafts")
+        putJsonObject("drafts") {
+            drafts.forEach { (sessionId, draft) -> put(sessionId, DraftImages.rehydrate(draft)) }
+        }
+    }.toString()
 
     /**
      * The theme as the page needs it: the choice itself and the IDE's brightness, rather than the theme

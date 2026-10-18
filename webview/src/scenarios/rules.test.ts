@@ -9,10 +9,12 @@ import {
   mentionedInputs,
   mentionedSlots,
   missingInputs,
+  loops,
   passesOf,
   plan,
   problemsOf,
   runnable,
+  slotsToFill,
 } from './rules'
 
 /**
@@ -151,5 +153,61 @@ describe('the walk written out before it starts', () => {
     expect(passesOf(stage({ repeat: 0 }))).toBe(1)
     expect(passesOf(stage({ repeat: -4 }))).toBe(1)
     expect(passesOf(stage({ repeat: 99 }))).toBe(MAX_STAGE_REPEAT)
+  })
+})
+
+describe('a stage that runs once per item of a list', () => {
+  const each = { name: 'card', description: 'the cards' }
+
+  // The item is written in the prompts as a slot is, and nobody declares it - the panel fills it, one value
+  // per pass.
+  it('does not ask the main thread for the item', () => {
+    const one = card({ prompt: '/plan [[card]] with [[note]]', slots: [slot('note', 'a note')] })
+    const listed = stage({ each, cards: [one] })
+
+    expect(slotsToFill(listed, one).map((it) => it.name)).toEqual(['note'])
+    expect(problemsOf(scenario({ stages: [listed] }))).toEqual([])
+    expect(runnable(scenario({ stages: [listed] }))).toBe(true)
+  })
+
+  it('says what the list is and calls its item a name', () => {
+    const unnamed = stage({ each: { name: 'the card', description: 'x' } })
+    const unsaid = stage({ each: { name: 'card', description: ' ' }, cards: [card({ prompt: '/plan [[card]]' })] })
+
+    expect(problemsOf(scenario({ stages: [unnamed] })).map((it) => it.kind)).toEqual(['badItemName'])
+    expect(problemsOf(scenario({ stages: [unsaid] })).map((it) => it.kind)).toEqual(['noItemList'])
+    expect(runnable(scenario({ stages: [unnamed] }))).toBe(false)
+    expect(runnable(scenario({ stages: [unsaid] }))).toBe(false)
+  })
+
+  // One name with two fillers - the panel and the main thread - is a prompt nobody can predict.
+  it('refuses a slot under the item\'s own name', () => {
+    const listed = stage({ each, cards: [card({ prompt: '/plan [[card]]', slots: [slot('card', 'the next card')] })] })
+
+    expect(problemsOf(scenario({ stages: [listed] })).map((it) => it.kind)).toEqual(['itemSlotClash'])
+    expect(runnable(scenario({ stages: [listed] }))).toBe(false)
+  })
+
+  it('says an item no prompt writes, and runs all the same', () => {
+    const listed = stage({ each })
+
+    expect(problemsOf(scenario({ stages: [listed] })).map((it) => it.kind)).toEqual(['unusedItem'])
+    expect(runnable(scenario({ stages: [listed] }))).toBe(true)
+  })
+
+  // How many items there are is the main thread's answer: until then the stage is one pass, the place the
+  // list is asked for - whatever count the file carries beside it.
+  it('is planned as one pass and counts as a loop', () => {
+    const listed = stage({
+      repeat: 10,
+      untilDone: true,
+      each,
+      cards: [card({ id: 'a', prompt: '/plan [[card]]' }), card({ id: 'b', prompt: '/check [[card]]' })],
+    })
+
+    expect(plan(scenario({ stages: [listed] })).map((it) => it.key)).toEqual(['s1:a:1', 's1:b:1'])
+    expect(cardRuns(scenario({ stages: [listed] }))).toBe(2)
+    expect(loops(listed)).toBe(true)
+    expect(loops(stage())).toBe(false)
   })
 })

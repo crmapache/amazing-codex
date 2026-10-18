@@ -3,6 +3,7 @@ package io.github.crmapache.amazingcodex.codex
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.thisLogger
 import io.github.crmapache.amazingcodex.codex.CodexSessions.Companion.MAIN_SESSION
+import io.github.crmapache.amazingcodex.editor.ChangeRevert
 import io.github.crmapache.amazingcodex.feedback.DiagnosticsLog
 import io.github.crmapache.amazingcodex.remote.RemoteAgent
 import io.github.crmapache.amazingcodex.remote.RemoteCommands
@@ -97,8 +98,10 @@ internal class SessionCommands(private val hub: CodexSessionHub) {
 
             // `editor` asks for what the editor beside the panel shows (see EditorContext) - honoured for this
             // IDE's own panel only: a phone has no editor beside it, and what the desk's editor happens to show
-            // is not something to hand to whoever is on the other end of the relay.
+            // is not something to hand to whoever is on the other end of the relay. `editorOnce` the same: this one
+            // message carries it although the setting is off (see CodexSessionHub.editorSeen).
             "prompt" -> takeOnce(clientId, asker, sessionId, payload, local) {
+                if (statusAsked(clientId, asker, sessionId, field("text"), local)) return@takeOnce
                 hub.prompt(
                     sessionId,
                     field("text"),
@@ -106,6 +109,7 @@ internal class SessionCommands(private val hub: CodexSessionHub) {
                     echo = echo(payload),
                     remote = !local,
                     withEditor = local && flag(payload, "editor"),
+                    editorOnce = local && flag(payload, "editorOnce"),
                 )
             }
 
@@ -115,23 +119,34 @@ internal class SessionCommands(private val hub: CodexSessionHub) {
              * SessionQueue).
              */
             "queuePrompt" -> takeOnce(clientId, asker, sessionId, payload, local) {
+                // Queued, it would wait for the turn only to reach Codex as words: answered now, as when sent.
+                if (statusAsked(clientId, asker, sessionId, field("text"), local)) return@takeOnce
                 hub.queuePrompt(
                     sessionId,
                     id = field("id"),
                     text = field("text"),
-                    attach = field("attach"),
                     images = images(payload),
                     echo = echo(payload),
                     remote = !local,
                     before = field("before").ifEmpty { null },
                     withEditor = local && flag(payload, "editor"),
+                    editorOnce = local && flag(payload, "editorOnce"),
                 )
             }
 
             "unqueuePrompt" -> hub.unqueuePrompt(sessionId, field("id"))
 
+            // "Don't carry on" under a limit's wait - see CodexSessionHub.cancelCarryOn.
+            "cancelCarryOn" -> hub.cancelCarryOn(sessionId)
+
             // The pencil on a queued message - the whole message back to the asker, to be edited in the field.
             "takeQueued" -> hub.takeQueued(clientId, sessionId, field("id"), asker)
+
+            // The picture behind a chip under the pointer - answered to the asker alone (see ImagePreviews).
+            "previewImage" -> hub.previewImage(clientId, field("id"), payload["place"] as? JsonObject, asker)
+
+            // A click on a picture's chip - opened in the editor, and a picture that did not open answered (see openPicture).
+            "openPicture" -> hub.openPicture(clientId, field("id"), payload["place"] as? JsonObject, asker)
 
             "reorderQueue" -> hub.reorderQueue(
                 sessionId,
@@ -144,6 +159,9 @@ internal class SessionCommands(private val hub: CodexSessionHub) {
              * them. Built off the interface thread: a year of days is a fair amount of JSON.
              */
             "statistics" -> ApplicationManager.getApplication().executeOnPooledThread {
+                // Before the payload, so a tab opened ahead of the first reading says it is counting.
+                runCatching { hub.stats.readTokensIfNever() }
+                    .onFailure { thisLogger().warn("Could not start reading the tokens", it) }
                 runCatching { hub.emitTo(clientId, hub.stats.payload()) }
                     .onFailure { thisLogger().warn("Could not build the statistics", it) }
             }
@@ -206,6 +224,15 @@ internal class SessionCommands(private val hub: CodexSessionHub) {
                 asker = asker,
             )
 
+            // The buttons on the list of files a turn changed: one file or all of them, put back - or brought back
+            // after that (see ChangeRevert).
+            "revertChanges" -> hub.revertChanges(
+                sessionId,
+                field("id"),
+                ChangeRevert.requestsOf(payload["files"]),
+                restore = flag(payload, "restore"),
+            )
+
             "stop" -> hub.interrupt(sessionId)
 
             "kill" -> hub.kill(sessionId)
@@ -252,7 +279,8 @@ internal class SessionCommands(private val hub: CodexSessionHub) {
                 }
             }
 
-            "closeSession" -> hub.closeSession(sessionId)
+            // A close somebody made, kept to be undone (see CodexSessionHub.reopenTab).
+            "closeSession" -> hub.closeSession(sessionId, byPerson = true)
 
             /**
              * The name the interface guessed from the first message. It is worked out there rather than
@@ -348,6 +376,9 @@ internal class SessionCommands(private val hub: CodexSessionHub) {
             "setEffort" -> hub.changeEffort(sessionId, field("effort"), remember = local)
 
             "setContextMode" -> hub.changeContextMode(sessionId, field("mode"), remember = local)
+
+            // This conversation alone, from either door - fast mode writes no setting (see SessionLaunch.fast).
+            "setFastMode" -> hub.changeFastMode(sessionId, flag(payload, "on"))
 
             "refreshModels" -> hub.usage.refreshModels(sessionId)
 
@@ -713,6 +744,25 @@ internal class SessionCommands(private val hub: CodexSessionHub) {
      * the IDE itself and has nothing in between to lose a message on; an older phone sends no identifier
      * and has nothing to wait for.
      */
+    /**
+     * `/status` arrived as a message, and it is answered here rather than said to the model.
+     *
+     * At the desk it never arrives so: the panel runs it before anything is sent (see panelCommands in catalog.ts).
+     * A phone types it into a message, and the app-server knows no slash commands (see CodexCommands) - the word
+     * went to the model as a turn of its own, spent on "I don't have a /status command". Claude Code's CLI refused
+     * it under a stream instead, so the original never had this to answer. The answer is the desk's row (see
+     * SessionInfoRow), to whoever asked - and to a phone without the machine's paths (see
+     * CodexSessionHub.sessionInfo).
+     */
+    private fun statusAsked(clientId: String, asker: String, sessionId: String, text: String, local: Boolean): Boolean {
+        if (!CodexCommands.isStatus(text)) return false
+
+        // Counted as the use it stands for: at either door a message is no feature of its own (see UsageFeatures).
+        hub.stats.noteFeature("session_info")
+        hub.emitTo(clientId, hub.sessionInfo(sessionId, local), asker)
+        return true
+    }
+
     private fun takeOnce(clientId: String, asker: String, sessionId: String, payload: JsonObject, local: Boolean, say: () -> Unit) {
         val id = payload["id"]?.jsonPrimitive?.contentOrNull.orEmpty()
         if (local || id.isEmpty()) {

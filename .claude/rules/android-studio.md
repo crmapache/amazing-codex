@@ -3,9 +3,9 @@ paths:
   - "build.gradle.kts"
   - "gradle.properties"
   - "src/main/resources/META-INF/plugin.xml"
-  - "src/main/kotlin/io/github/crmapache/amazingclaudecode/webview/WebviewResources.kt"
-  - "src/test/kotlin/io/github/crmapache/amazingclaudecode/webview/WebviewResourcesTest.kt"
-  - "src/main/kotlin/io/github/crmapache/amazingclaudecode/editor/UnsavedEdits.kt"
+  - "src/main/kotlin/io/github/crmapache/amazingcodex/webview/WebviewResources.kt"
+  - "src/test/kotlin/io/github/crmapache/amazingcodex/webview/WebviewResourcesTest.kt"
+  - "src/main/kotlin/io/github/crmapache/amazingcodex/editor/UnsavedEdits.kt"
 ---
 
 ## Android Studio: на версию позади и без встроенного браузера

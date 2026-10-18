@@ -1,16 +1,19 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { send, subscribe } from './bridge'
-import { copyToClipboard, installClipboardBridge, resolveClipboard } from './clipboard'
+import { copyToClipboard, installClipboardBridge, pasteFromKeys, resolveClipboard } from './clipboard'
 import { resolvePastedFile } from './pasted'
+import { openPicture, resolveImagePreview, resolvePictureUnopened } from './imagePreviewLoad'
 import {
   ADD_MODEL,
   LAST_USED,
   effortFits,
   effortOptions,
   contextLimits,
+  contextWindowOf,
   contextOptions,
   type ContextMode,
+  expandModel,
   levelsOf,
   modeMenuOptions,
   modelMenu,
@@ -38,6 +41,7 @@ import {
 import { CALM_VIVID_FULL, calmColorsSummary, calmVividOf } from './calmColors'
 import { pasteCollapseSummary } from './pasteCollapse'
 import { Confirm } from './components/Confirm'
+import type { RevertChanges } from './components/items/ChangesRow'
 import { RewindDialog } from './components/RewindDialog'
 import { Feed } from './components/Feed'
 import type { FeedMemory, FeedPlace } from './feed/place'
@@ -65,6 +69,7 @@ import {
   type MenuScreen,
   type MenuSummary,
 } from './components/SideMenu'
+import { KeysScreen } from './components/KeysScreen'
 import { Language } from './components/Language'
 import { LocaleProvider, activeLocale, nativeName, useDict } from './i18n'
 import type { Dict } from './i18n/en'
@@ -75,6 +80,7 @@ import { Appearance, appearanceSummary } from './components/Appearance'
 import { CalmColors } from './components/CalmColors'
 import { RestoreTabs } from './components/RestoreTabs'
 import { ShareEditor } from './components/ShareEditor'
+import { Spellcheck } from './components/Spellcheck'
 import { UsageConsentCard, UsageReportScreen, UsageScreen } from './components/UsageStats'
 import { Indicators } from './components/Indicators'
 import {
@@ -93,15 +99,18 @@ import { CodexConfig, EMPTY_CODEX_CONFIG, TRUST_KEY, type CodexConfigState } fro
 import { PermissionPanel } from './components/PermissionPanel'
 import { Plugins } from './components/Plugins'
 import { Queue } from './components/Queue'
-import { editorKey } from './feed/editorContext'
+import { editorChoice, editorGoes, editorKey, type EditorOnce } from './feed/editorContext'
+import { sessionInfoAction } from './feed/sessionInfo'
 import { Quotes, type Quote } from './components/Quotes'
 import { SelectionMenu } from './components/SelectionMenu'
 import { Tooltips } from './components/Tooltips'
+import { ImagePreview } from './components/ImagePreview'
 import { Remote, RemoteAbout, remoteState, type RemoteStatus } from './components/Remote'
 import { Accounts, accountState, currentAccountName, type AccountsState } from './components/Accounts'
 import { Sounds } from './components/Sounds'
 import { anchorFrom, metersShown, StatusBar, UsageMeters, type Anchor, type SelectorKind } from './components/StatusBar'
 import { countsAsThanks, SHARE, shareText, thanksMenu, thanksUrl } from './components/Thanks'
+import { EDITOR_ALWAYS, EDITOR_ONCE, editorMenu } from './components/EditorChip'
 import { SideQuestionCard } from './components/SideQuestion'
 import { ASIDE_COMMAND, NO_THREAD, sideHistory, sideThread, type SideAction, type SideThread } from './feed/side'
 import { markPanelReady } from './components/Splash'
@@ -120,6 +129,7 @@ import { bashCommand, shellText, type ShellRun } from './feed/bash'
 import { withBranch, type BranchFacts } from './feed/branch'
 import { contextOf, initialPanelState, reducePanel, type PanelState } from './feed/build'
 import { deferFollowUpForCompact } from './feed/compact'
+import { FAST_MARK, FAST_MODE, fastAsked, fastModeShown, fastModeSub, fastTierNote, modelHasFastMode, type FastModeShown } from './feed/fastMode'
 import { waitsForTheTurn } from './feed/delivery'
 import { PASTE_COLLAPSE_DEFAULT, PASTE_COLLAPSE_NEVER, pasteCollapseLines, referenceChip } from './feed/reference'
 import { normalizeSendKey, sendKeyOptions, sendKeySummary, type SendKey } from './sendKey'
@@ -129,7 +139,7 @@ import { reusableMessage } from './feed/reuse'
 import { forkPointAfter, forkTakesCode, lastSeenUuid, newMessageUuid, type RewindChoice } from './feed/rewind'
 import { draftKey, restoredDraft, savableDraft, type SavedDraft } from './feed/draftMemory'
 import { isUntouchedTab, tabHolding, tabTakesConversation } from './feed/resume'
-import { chatHits, rowOf } from './feed/search'
+import { chatHits, rowOf, searchTabBeside } from './feed/search'
 import { openedAgentOf } from './feed/workflow'
 import { deriveSessionTitle, resumedTitle, searchHitTitleSource } from './feed/title'
 import {
@@ -167,10 +177,11 @@ import {
 } from './feed/improve'
 import { voiceAppend, voiceGhost, voiceMessage } from './feed/voice'
 import { composePrompt, countSessionImages, imageAttachments, tokensText, trimTrailingSpace } from './feed/tokens'
-import type { DraftEdit, FeedItem, TaskItem, TodoItem, UserItem, UserToken } from './feed/types'
+import type { DraftEdit, FeedItem, FileChange, TaskItem, TodoItem, UserItem, UserToken } from './feed/types'
 import { emptyUsageBook, mergeUsageBook, usageOf, type UsageBook } from './feed/usage'
 import type {
   AvailablePluginInfo,
+  ClosedTab,
   HistoryEntry,
   InstalledPluginInfo,
   PaintedTerm,
@@ -195,7 +206,9 @@ import type {
   RewindRefusal,
   ShellMessage,
   UsageStatsConsent,
+  PanelKeyCommand,
 } from './protocol'
+import { keyText, reachesPastMenu, type PanelKeys } from './panelKeys'
 import {
   NO_SOUND_PREFS,
   SOUND_IDS,
@@ -223,21 +236,33 @@ import { planDecisionOf, useCardState, type CardState } from './hooks/useCardSta
 import { useEarlierPages } from './hooks/useEarlierPages'
 import { Search, type SearchTab } from './components/Search'
 import { SearchCapsule, type CapsuleNote } from './components/SearchCapsule'
-import { KnownFilesContext, OpenFileContext, type OpenFileRequest } from './hooks/useOpenFile'
+import {
+  KnownFilesContext,
+  MissingFilesContext,
+  OpenFileContext,
+  OpenPictureContext,
+  type OpenFileRequest,
+} from './hooks/useOpenFile'
+import { SaidImagesContext } from './hooks/useSaidImages'
 import { knownFiles } from './feed/paths'
 import {
   groupOrder,
   moveTab,
   moveWithinGroup,
   placeAtEnd,
+  placeFromWire,
   placeIn,
   runOfTab,
   runTabId,
   SCENARIOS_GROUP,
   STATISTICS_GROUP,
+  isPanelTab,
+  stripTabs,
   tabAfterClosing,
   tabAfterElsewhere,
+  tabBeside,
   type PanelTabPlace,
+  type TabPlace,
 } from './tabs'
 import {
   ScenariosTab,
@@ -346,6 +371,9 @@ const LIST_STALE_MS = 60_000
 /** How often the figures are asked for again while the statistics tab is being looked at. */
 const STATISTICS_REFRESH_MS = 30_000
 
+/** The same while the transcripts are being read for the tokens (see StatisticsData.tokensReading). */
+const STATISTICS_READING_MS = 2_000
+
 /**
  * How often the accounts screen asks for the list again while it is open.
  *
@@ -373,14 +401,16 @@ const achievementsCount = (data: StatisticsData): string => {
  * travels with the message as bytes, so the IDE sees it and counts it there. Counted here as well, one
  * screenshot went into the book as two - the achievement for attachments came at half its price and the
  * figure on the tab was simply wrong. A file or a folder reaches the agent as text in the message and
- * the IDE cannot tell it from any other word, which is why those two stay here.
+ * the IDE cannot tell it from any other word, which is why those two stay here - and so does a picture with
+ * no bytes (picked in the dialog, or come back from the history as `@design/sheet.png`): it travels as its
+ * path, the way a file does.
  */
 const reportChips = (tokens: UserToken[], quotesBeside: number): void => {
   let attachments = 0
   let quotes = quotesBeside
   for (const token of tokens) {
     if (token.kind !== 'chip') continue
-    if (token.chip.kind === 'file' || token.chip.kind === 'dir') attachments++
+    if (token.chip.kind === 'file' || token.chip.kind === 'dir' || (token.chip.kind === 'img' && !token.chip.data)) attachments++
     if (token.chip.kind === 'quote' || token.chip.kind === 'ref') quotes++
   }
   if (attachments > 0 || quotes > 0) send({ type: 'stat', kind: 'prompt', attachments, quotes })
@@ -599,7 +629,7 @@ export const App = () => {
   const [panelNode, setPanelNode] = useState<HTMLElement | null>(null)
   useHoverTarget(panelNode)
 
-  const [menu, setMenu] = useState<{ kind: SelectorKind | 'thanks'; anchor: Anchor } | null>(null)
+  const [menu, setMenu] = useState<{ kind: SelectorKind | 'thanks' | 'editor'; anchor: Anchor } | null>(null)
   /** Whether the line about the plugin is in the clipboard - the thanks menu's only way of saying so. */
   const [shared, setShared] = useState(false)
   /**
@@ -732,16 +762,21 @@ export const App = () => {
    */
   const [shareEditor, setShareEditorState] = useState(true)
   /**
+   * Whether the text fields underline misspelled words (see CodexPreferences.spellcheck). On until the IDE
+   * says otherwise: it is what the browser does by itself, and the harness has no IDE to say it.
+   */
+  const [spellcheck, setSpellcheckState] = useState(true)
+  /**
    * What the editor beside the panel shows right now - the file in front of the person and the lines
    * selected in it. Null with no text editor open, and always in the harness until a scenario says otherwise.
    */
   const [editorContext, setEditorContext] = useState<EditorRef | null>(null)
   /**
-   * What each tab's next message goes without: the file and lines on screen when its chip was pressed off
-   * (see editorKey). Keyed by what was on screen rather than a plain flag, so selecting other lines - a new
-   * thing to show - puts the chip back on by itself; and forgotten when the message goes.
+   * Each tab's next message going the other way from the setting, chosen in the chip's menu (see
+   * EditorOnce). Keyed by what was on screen rather than a plain flag, so selecting other lines - a new
+   * thing to show - puts the chip back to the setting by itself; and forgotten when the message goes.
    */
-  const [editorSkips, setEditorSkips] = useState<Record<string, string>>({})
+  const [editorOnce, setEditorOnce] = useState<Record<string, EditorOnce>>({})
   /**
    * The indicators around the input field switched off by hand - see indicators.ts. None until the IDE
    * says otherwise, for the same reason as the settings above: the harness has no IDE behind it, and
@@ -794,6 +829,27 @@ export const App = () => {
   const [loginProblem, setLoginProblem] = useState<'no-drawer' | 'no-terminal' | ''>('')
   /** Grows whenever the input field has to be given the focus back: after a link from the editor, say. */
   const [focusToken, setFocusToken] = useState(0)
+  /** Grows with every press of the panel's queue key - the field presses Queue on it (see Composer). */
+  const [queueToken, setQueueToken] = useState(0)
+  /**
+   * The panel's own keys as Settings | Keymap binds them now (see PanelKeys.kt) - for the hover hints and
+   * the cheat sheet. Empty until the IDE says: the harness never does, and nothing is guessed meanwhile.
+   */
+  const [panelKeys, setPanelKeys] = useState<PanelKeys>({})
+  /**
+   * What a press of one of those keys does, as of the last render (see pressPanelKey). A ref because the
+   * message handler is built once, and the strip, the open tab and the field all change under it.
+   */
+  const pressPanelKeyRef = useRef<(command: PanelKeyCommand) => void>(() => {})
+  /**
+   * The tabs closed by hand that can be opened again, the latest first, as the IDE keeps them (see
+   * ClosedTabs.kt) - the rows of "Recently closed" on the history screen.
+   */
+  const [closedTabs, setClosedTabs] = useState<ClosedTab[]>([])
+  /** What a closed tab coming back does, as of the last render (see takeReopened) - for the same handler. */
+  const takeReopenedRef = useRef<(sessionId: string | undefined, panel: string | undefined, place: TabPlace | undefined) => void>(
+    () => {},
+  )
   /**
    * The usage figures of every account, not just one set.
    *
@@ -932,14 +988,65 @@ export const App = () => {
   }
 
   const closePanelTab = (id: string) => {
+    // Written down in the IDE before it goes, so the key that opens closed tabs again reaches it in its turn
+    // among the conversations (see ClosedTabs.kt) - with its name and place, which only this page knows.
+    const closing = panelTabsRef.current.find((tab) => tab.id === id)
+    if (closing) send({ type: 'panelTabClosed', id, title: panelTabTitle(id), place: closing.place })
+
     applyPanelTabs(panelTabsRef.current.filter((tab) => tab.id !== id))
     if (id === STATISTICS_GROUP) setStatsTab({ open: false, view: 'overview' })
     // The record of a run is kept only while something shows it: it is the heaviest thing this page
     // holds, and a run watched for an hour and closed would otherwise sit here till the panel reloads.
     const watched = runOfTab(id)
     if (watched) setRunRecords(({ [watched]: gone, ...rest }) => rest)
-    // The neighbour in the strip, whatever kind of tab it is - see tabAfterClosing.
-    if (active === id) setActive(tabAfterClosing(sessions, panelTabs, id) || MAIN_SESSION)
+    // The neighbour in the strip, whatever kind of tab it is - see tabAfterClosing - with the keyboard, as
+    // after closing a conversation (see closeSession).
+    if (active === id) pickTab(tabAfterClosing(sessions, panelTabs, id) || MAIN_SESSION)
+  }
+
+  /**
+   * The name one of the panel's own tabs wears - on the strip, and in "Recently closed" once it is closed (a run
+   * by its scenario and its mark, as the strip tells two runs of one scenario apart).
+   *
+   * The strip passes the runs and their marks the run's screen is drawn with (see runLabels): worked out apart,
+   * the two could name one run differently, and it is the heaviest sum of a render while a run beats. A close
+   * works them out for itself, once.
+   */
+  const panelTabTitle = (id: string, watching = watchedRuns(panelTabsRef.current, liveRuns, scenarioRuns), marks = runMarks(watching)): string => {
+    if (id === STATISTICS_GROUP) return t.header.statistics
+    if (id === SCENARIOS_GROUP) return t.header.scenarios
+
+    const run = watching.find((one) => one.id === runOfTab(id))
+    return run ? [run.scenarioName, marks[run.id]].filter(Boolean).join(' · ') : t.scenarios.run.title
+  }
+
+  /**
+   * One of the panel's own tabs, closed and opened again (see reopenTab): put back where it stood rather than at
+   * the end, and asked for what it shows the way it is on its first opening - the hub's list, a run's record.
+   * The statistics open on the overview, as they do after any close; the hub keeps whatever it was showing,
+   * since that is kept up here (see scenariosView); a run comes back to where it was being read.
+   */
+  const reopenPanelTab = (id: string, place: TabPlace | undefined) => {
+    const current = panelTabsRef.current
+    if (!current.some((tab) => tab.id === id)) {
+      applyPanelTabs([...current, { id, place: place ?? placeAtEnd(groupOrder(sessionsRef.current)) }])
+    }
+
+    if (id === STATISTICS_GROUP) setStatsTab((stats) => (stats.open ? stats : { ...stats, open: true }))
+    else if (id === SCENARIOS_GROUP) send({ type: 'scenarios' })
+    else if (runOfTab(id)) send({ type: 'scenarioOpen', runId: runOfTab(id) })
+
+    setActive(id)
+    setFocusToken((token) => token + 1)
+  }
+
+  /**
+   * Open a closed tab again - the one closed last, or the row of "Recently closed" named by `key`. The IDE keeps
+   * the list (see ClosedTabs.kt) and answers with the tab (see `tabReopened`); the panel's own tabs on the strip
+   * travel with the ask, since the IDE cannot know them and one of them is not to be opened twice.
+   */
+  const reopenTab = (key?: string) => {
+    send({ type: 'reopenTab', open: panelTabsRef.current.map((tab) => tab.id), ...(key ? { key } : {}) })
   }
 
   /**
@@ -1056,6 +1163,12 @@ export const App = () => {
    * background command a live process such as a server.
    */
   const [stopping, setStopping] = useState<{ id: string; title: string; subject: string } | null>(null)
+  /**
+   * A tab the close key was pressed on while its agent was at work - asked about before it goes (see
+   * pressPanelKey). The cross on the tab does not ask: a click is aimed at that tab, while the key is
+   * pressed by a hand that may well believe it is closing a file in the editor.
+   */
+  const [closingWorking, setClosingWorking] = useState<string | null>(null)
 
   /**
    * The rewind dialog over one of the person's messages, while it is open (see RewindDialog). `code` is the
@@ -1387,11 +1500,6 @@ export const App = () => {
   const models = modelBook[activeAccount] ?? null
   const sessionQueue = panel.queue
   const running = panel.status === 'running'
-  /**
-   * The context gauge: the number comes from the CLI itself, and the calculation from usage stays as a
-   * fallback for when it is not there yet (see contextOf).
-   */
-  const context = contextOf(panel, usage.contextWindow)
   const imageBaseCount = useMemo(
     () => countSessionImages(panel.items, sessionQueue.reduce((sum, item) => sum + item.images, 0)),
     [panel, sessionQueue],
@@ -1427,6 +1535,14 @@ export const App = () => {
   const effort = panel.pendingEffort ?? panel.effort ?? startingEffort
   const contextMode = panel.pendingContextMode ?? panel.contextMode ?? prefs.startingContextMode
 
+  /**
+   * The context gauge: the number comes from Codex itself, and the calculation from usage stays as a
+   * fallback for when it is not there yet (see contextOf). Until Codex has counted, the window is the one the
+   * tab's catalogue names for its model in its mode - the same number the CTX chip shows (see contextWindowOf),
+   * so that the chip and the gauge never name two windows for one conversation.
+   */
+  const context = contextOf(panel, usage.contextWindow, contextWindowOf(models, model, contextMode))
+
   // Which of the optional things the Shift+Tab cycle may reach: the permission for bypass arrives from
   // the shell, auto through a refusal of its own on the current model (see autoRefusedModels).
   const availableModes = useMemo(
@@ -1443,6 +1559,14 @@ export const App = () => {
    * conversation and a model of its own.
    */
   const tickedModel = modelInForce(models, panel.ownModel ?? startingModel, panel.model)
+
+  /**
+   * Fast mode for this tab: what is asked and what Codex said of it, read together (see feed/fastMode.ts).
+   * Offered in the model menu on a model that has it - and wherever it is not off, on from Codex's config
+   * included, so that it can always be turned off again.
+   */
+  const fastShown = fastModeShown(panel.fastMode, panel.fastReport)
+  const fastOffered = fastShown.kind !== 'off' || modelHasFastMode(models, panel.ownModel ?? startingModel)
 
   /**
    * The drafts as they stand right now, for the shell's messages: that subscription is set up once for the
@@ -1684,14 +1808,19 @@ export const App = () => {
    * The statistics tab is looked at and the figures grow under it: a turn ends, a minute passes. Asked
    * for again every half-minute while it is the active tab - the ticker on the IDE's side marks minutes
    * at the same pace, so asking more often would show nothing new.
+   *
+   * Except while the IDE is reading the transcripts for the tokens: the first reading takes a while, and
+   * the chart should fill the moment it is done rather than up to half a minute later.
    */
+  const statisticsReading = statistics?.tokensReading === true
   useEffect(() => {
     if (active !== STATISTICS_GROUP) return
 
     send({ type: 'statistics' })
-    const timer = setInterval(() => send({ type: 'statistics' }), STATISTICS_REFRESH_MS)
+    const every = statisticsReading ? STATISTICS_READING_MS : STATISTICS_REFRESH_MS
+    const timer = setInterval(() => send({ type: 'statistics' }), every)
     return () => clearInterval(timer)
-  }, [active])
+  }, [active, statisticsReading])
 
   /**
    * A hand on the keyboard or the wheel counts as time in the panel - the IDE cannot see that by itself,
@@ -1857,6 +1986,9 @@ export const App = () => {
   modelBookRef.current = modelBook
   const tabAccountsRef = useRef(tabAccounts)
   tabAccountsRef.current = tabAccounts
+  /** The catalogue of the account a given tab runs on, as it is now - for the subscription (see above). */
+  const catalogueOfTab = (sessionId: string): ModelInfo[] | null =>
+    modelBookRef.current[tabAccountsRef.current[sessionId] ?? ''] ?? null
   const prefsRef = useRef(prefs)
   prefsRef.current = prefs
 
@@ -2210,6 +2342,7 @@ export const App = () => {
               })
               setRestoreTabsState(message.preferences.restoreTabs !== false)
               setShareEditorState(message.preferences.shareEditor !== false)
+              setSpellcheckState(message.preferences.spellcheck !== false)
             }
             if (message.improve) setImproveInstructions(message.improve)
             // Only until the fact itself has said: `project` is sent again whenever the branch changes, and
@@ -2222,6 +2355,7 @@ export const App = () => {
                 project: { name: message.projectName, workingDirectory: message.workingDirectory },
               },
             })
+            if (message.workingDirectory) setProjectRoot(message.workingDirectory)
             break
 
           /**
@@ -2401,6 +2535,11 @@ export const App = () => {
             setShareEditorState(message.on)
             break
 
+          // Whether the text fields check spelling - flipped here or in another window.
+          case 'spellcheck':
+            setSpellcheckState(message.on)
+            break
+
           // The usage statistics' question, answered here or in any other IDE on the machine.
           case 'usageStats':
             setUsageStatsState({ consent: message.consent, lastSent: message.lastSent })
@@ -2492,6 +2631,11 @@ export const App = () => {
             dispatchPanel({ session: message.sessionId, action: { kind: 'resumed', conversationId: message.conversationId } })
             break
 
+          // The answer to `/status` - a row in the feed of the tab it was asked in.
+          case 'sessionInfo':
+            dispatchPanel({ session: message.sessionId, action: sessionInfoAction(message) })
+            break
+
           /**
            * The card has been answered - possibly on another device, possibly on this one a moment ago.
            * Applying it twice changes nothing (the decision is already there), and that is what makes the
@@ -2534,6 +2678,7 @@ export const App = () => {
                 steering: message.steering,
                 ...(message.editor ? { editor: message.editor } : {}),
                 ...(message.uuid ? { uuid: message.uuid } : {}),
+                ...(message.auto ? { auto: message.auto } : {}),
               },
             })
             break
@@ -2541,7 +2686,7 @@ export const App = () => {
 
           // What this conversation is waiting to say, as the IDE holds it - see SessionQueue.kt.
           case 'queue':
-            feed({ session: message.sessionId, action: { kind: 'queue', items: message.items } })
+            feed({ session: message.sessionId, action: { kind: 'queue', items: message.items, held: message.held } })
             break
 
           // The pencil on a queued message was pressed here - the message, whole, for the field.
@@ -3068,6 +3213,17 @@ export const App = () => {
             break
           }
 
+          case 'fileMissing':
+            setMissingFiles((current) => (current.has(message.path) ? current : new Set([...current, message.path])))
+            break
+
+          case 'changesReverted':
+            feed({
+              session: message.sessionId,
+              action: { kind: 'changesReverted', id: message.id, files: message.files, restore: message.restore },
+            })
+            break
+
           case 'sideAnswer':
             sideStep(message.sessionId, {
               kind: 'end',
@@ -3181,6 +3337,11 @@ export const App = () => {
           /** Which account a tab runs on - live state, like the effort beside it. */
           case 'turnStopped':
             feed({ session: message.sessionId, action: { kind: 'stoppedForAccount' } })
+            break
+
+          // When the IDE carries this tab on by itself after a limit, or that it no longer will (see CarryOnRow).
+          case 'carryOnWait':
+            feed({ session: message.sessionId, action: { kind: 'carryOnWait', at: message.until, guess: message.guess } })
             break
 
           case 'account':
@@ -3327,7 +3488,16 @@ export const App = () => {
               // well as at a birth, and read as a choice that announcement accused a conversation of
               // running on a model nobody picked (see the modelApplied action).
               session: message.sessionId,
-              action: { kind: 'modelApplied', model: message.model, error: message.error, born: message.born },
+              action: {
+                kind: 'modelApplied',
+                model: message.model,
+                error: message.error,
+                born: message.born,
+                // The pick as the CLI means it: "opus" names no generation, and judged by its name alone a
+                // pick of the latest Opus made from Opus 4.8 arrived looking like the agent's swap (see
+                // carriesPick).
+                resolved: expandModel(catalogueOfTab(message.sessionId), message.model),
+              },
             })
             break
 
@@ -3340,11 +3510,17 @@ export const App = () => {
             })
             break
 
+          // `born` travels on, as with the model: the shell names the window to a client that has just joined, right
+          // after the last exact figure, and read as a change it threw that figure away (see contextModeApplied).
           case 'contextMode':
             feed({
               session: message.sessionId,
-              action: { kind: 'contextModeApplied', mode: message.mode },
+              action: { kind: 'contextModeApplied', mode: message.mode, born: message.born },
             })
+            break
+
+          case 'fastMode':
+            feed({ session: message.sessionId, action: { kind: 'fastModeApplied', on: message.on } })
             break
 
           case 'mode': {
@@ -3364,7 +3540,7 @@ export const App = () => {
                 // Resolved by the same formula as in the render (see resolvePanelModel), otherwise
                 // "did the agent name a model" would be decided differently in two places.
                 const sessionPanel = panelsRef.current[message.sessionId]
-                const sessionModels = modelBookRef.current[tabAccountsRef.current[message.sessionId] ?? ''] ?? null
+                const sessionModels = catalogueOfTab(message.sessionId)
                 const refusedModel = resolvePanelModel(sessionPanel ?? {}, sessionModels, sessionPanel?.ownModel ?? prefsRef.current.model)
                 setAutoRefusedModels((current) => (current.includes(refusedModel) ? current : [...current, refusedModel]))
               } else {
@@ -3387,10 +3563,42 @@ export const App = () => {
             resolveClipboard(message)
             break
 
+          case 'pasteKeys':
+            pasteFromKeys(message.letter)
+            break
+
+          // The panel's own keys: the IDE caught the press (see PanelKeys.kt), the page decides what it
+          // does - through a ref, because this handler is built once and the strip changes under it.
+          case 'panelKey':
+            pressPanelKeyRef.current(message.command)
+            break
+
+          case 'closedTabs':
+            setClosedTabs(message.tabs)
+            break
+
+          case 'tabReopened':
+            takeReopenedRef.current(message.sessionId, message.panel, message.place)
+            break
+
+          case 'panelKeys':
+            setPanelKeys(message.keys)
+            break
+
           // Where the shell put something pasted into the panel - whoever pasted it is waiting for the
           // path (see savePastedFile).
           case 'pastedFile':
             resolvePastedFile(message)
+            break
+
+          // A picture behind a chip, read by the shell for the preview under the pointer (see imagePreview.ts).
+          case 'imagePreview':
+            resolveImagePreview(message)
+            break
+
+          // A click on a picture opened nothing - the preview over the chip says so (see openPicture).
+          case 'pictureUnopened':
+            resolvePictureUnopened(message)
             break
 
           case 'selection':
@@ -3572,6 +3780,29 @@ export const App = () => {
     setSideMenu({ open: true, screen: 'codexConfig' })
   }, [])
 
+  /**
+   * The files a turn changed, put back by the IDE (see ChangesRow and ChangeRevert) - or brought back after that.
+   * Nothing asks first, the whole list included: every revert has its way back on the same row. What came of it
+   * arrives as changesReverted, to every window.
+   */
+
+  /**
+   * The project's folder as the IDE names it - the list of changed files shows a file inside it from there,
+   * and any other in full. The IDE's word rather than the agent's working directory: a tab learns that only
+   * when its process says it, and until then every path on its list stood in full.
+   */
+  const [projectRoot, setProjectRoot] = useState<string | undefined>(undefined)
+
+  const sendRevert = useCallback((session: string, id: string, files: FileChange[], restore = false) => {
+    const asked = files.flatMap((file) => (file.edits ? [{ path: file.path, edits: file.edits }] : []))
+    if (asked.length > 0) send({ type: 'revertChanges', sessionId: session, id, files: asked, ...(restore ? { restore } : {}) })
+  }, [])
+
+  const revertChanges = useCallback<RevertChanges>(
+    (id, files, restore) => sendRevert(active, id, files, restore),
+    [active, sendRevert],
+  )
+
   /** The lists sent and not yet heard back - see the 'indicators' case above. */
   const indicatorsSent = useRef<HiddenIndicators[]>([])
 
@@ -3652,6 +3883,45 @@ export const App = () => {
     send({ type: 'setShareEditor', on })
     setShareEditorState(on)
   }, [])
+
+  // Every tab's one-message exception was to the setting as it stood (see EditorOnce). Changed - from the
+  // chip's menu, the settings, another window - it leaves them meaning the opposite of what was asked: "not
+  // with this one" under a setting that now sends nothing would be the one message that goes with it.
+  useEffect(() => {
+    setEditorOnce({})
+  }, [shareEditor])
+
+  /**
+   * The conversation on screen, told to the IDE for the right-click menu to offer its id (see
+   * PanelContextMenu.kt) - on every change of tab or of its conversation, since the menu is built by the
+   * browser on a thread of its own and cannot wait to ask. With the words for the entry: the browser draws it.
+   */
+  const menuConversation = isPanelTab(active) ? undefined : panel.sessionId
+  const copySessionWords = t.feed.session.copyId
+  useEffect(() => {
+    send({ type: 'sessionMenu', conversationId: menuConversation ?? null, label: copySessionWords })
+  }, [menuConversation, copySessionWords])
+
+  /** Whether the text fields check spelling - applied here at once, and every window is told. */
+  const setSpellcheck = useCallback((on: boolean) => {
+    send({ type: 'setSpellcheck', on })
+    setSpellcheckState(on)
+  }, [])
+
+  /**
+   * The spell check, for every text field of the panel at once: the attribute on the document's root is
+   * inherited by each field that does not say otherwise, and the ones that do say "false" are the fields for
+   * names, paths and keys, where an underline is never wanted. Removed rather than set to "true" when on, so
+   * the browser's own default holds, and on the root rather than on the input field alone because the
+   * same person writes the answer to a question, the feedback and the improve-prompt text too.
+   *
+   * The browser drops the underlines already drawn when the attribute changes, so switching it off clears
+   * a field mid-sentence rather than at the next word.
+   */
+  useEffect(() => {
+    if (spellcheck) document.documentElement.removeAttribute('spellcheck')
+    else document.documentElement.setAttribute('spellcheck', 'false')
+  }, [spellcheck])
 
   /** The deferred write of the gauges' colour, and the last figure sent - see setCalmColors. */
   const calmSaveTimer = useRef<number | undefined>(undefined)
@@ -3758,10 +4028,19 @@ export const App = () => {
    */
   const known = useMemo(() => knownFiles(files), [files])
 
-  const openFile = useCallback(
-    (request: OpenFileRequest) => send({ type: 'openFile', ...request }),
-    [],
-  )
+  /** Paths a press found no file at - see MissingFilesContext. */
+  const [missingFiles, setMissingFiles] = useState<ReadonlySet<string>>(new Set())
+
+  const openFile = useCallback((request: OpenFileRequest) => {
+    // Pressed again, the disk answers again: the file may be back.
+    setMissingFiles((current) => {
+      if (!current.has(request.path)) return current
+      const next = new Set(current)
+      next.delete(request.path)
+      return next
+    })
+    send({ type: 'openFile', ...request })
+  }, [])
 
   /**
    * What the fleet's agents said, for the lines that show them (see useAgentTranscript).
@@ -4289,6 +4568,10 @@ export const App = () => {
       // nothing is replayed. In the tab on screen that is simply closing the menu.
       const open = tabHolding(entry.id, sessions, (tab) => panelsRef.current[tab]?.sessionId)
 
+      // Either way the keyboard goes with it, as with a tab picked on the strip (see pickTab): every road
+      // here is a press - the history, a hit of the search, the name in a fork's seam, a run's chat.
+      setFocusToken((current) => current + 1)
+
       if (open) {
         setActive(open)
         setSideMenu({ open: false, screen: 'menu' })
@@ -4607,6 +4890,18 @@ export const App = () => {
   )
 
   /**
+   * Fast mode for THIS conversation - and, unlike the effort, for no tab after it: the fast tier spends the plan's
+   * limits faster (see SessionLaunch.fast in the IDE). Drawn at once: the IDE answers with the same word.
+   */
+  const pickFastMode = useCallback(
+    (on: boolean) => {
+      send({ type: 'setFastMode', sessionId: active, on })
+      dispatchPanel({ session: active, action: { kind: 'fastModeApplied', on } })
+    },
+    [active],
+  )
+
+  /**
    * A side question - `/btw` (see feed/side). It stands in the tab's thread at once as "thinking" and goes
    * to the IDE with the thread's earlier answers, so a follow-up has them; [replaces] asks one that ended
    * without an answer again, in its own place.
@@ -4640,6 +4935,14 @@ export const App = () => {
 
       if (name === 'effort') {
         pickEffort(argument)
+        return
+      }
+
+      // The same switch as the model menu's, read off what is shown - on from Codex's config included: the
+      // app-server knows no slash commands (see panelCommands).
+      if (name === 'fast') {
+        const tab = panelsRef.current[active]
+        pickFastMode(fastAsked(argument, fastModeShown(tab?.fastMode, tab?.fastReport)))
         return
       }
 
@@ -4678,9 +4981,16 @@ export const App = () => {
         return
       }
 
+      // The panel's own: the app-server knows no slash commands, and what is asked for here is the conversation's
+      // id and the line that continues it in a terminal (see SessionInfoRow).
+      if (name === 'status') {
+        send({ type: 'sessionInfo', sessionId: active })
+        return
+      }
+
       if (name === 'fork') fork()
     },
-    [fork, pickModel, pickEffort, nameSession, active, openCodexConfig, askAside, sideStep],
+    [fork, pickModel, pickEffort, pickFastMode, nameSession, active, openCodexConfig, askAside, sideStep],
   )
 
   /** The Alt+B from the selection menu. The key is drawn in the menu, so it has to work. */
@@ -5078,23 +5388,24 @@ export const App = () => {
     if (runs.length > 0) setShellRuns((current) => ({ ...current, [active]: [] }))
 
     const images = isOverride ? [] : imageAttachments(draft.tokens)
-    const attachCount = isOverride ? 0 : draft.tokens.filter((token) => token.kind === 'chip').length
 
-    // What the editor shows goes along - unless it is switched off, for good or for this one message (see
-    // editorSkips). The IDE reads it itself the moment the message arrives; the flag only asks for it. A
-    // text the panel puts in on the person's behalf (isOverride) is not something they wrote while looking
-    // at the editor, and a slash command is an order to the conversation rather than a question about code
-    // - the IDE leaves it out of one anyway (see ClaudeSessionHub.editorSeen), and the card must not claim
-    // otherwise.
+    // What the editor shows goes along - as the setting says, unless the chip's menu said otherwise for this
+    // one message (see editorOnce). The IDE reads it itself the moment the message arrives; the flag only
+    // asks for it. A text the panel puts in on the person's behalf (isOverride) is not something they wrote
+    // while looking at the editor, and a slash command is an order to the conversation rather than a
+    // question about code - the IDE leaves it out of one anyway (see CodexSessionHub.editorSeen), and the
+    // card must not claim otherwise.
     const withEditor =
       !isOverride &&
       !written.trimStart().startsWith('/') &&
-      shareEditor &&
       editorContext !== null &&
-      editorSkips[active] !== editorKey(editorContext)
-    // The chip's "not this one" was about this message, and this message is on its way.
-    if (editorSkips[active] !== undefined) {
-      setEditorSkips((current) => {
+      editorGoes(shareEditor, editorOnce[active], editorContext)
+    // Going although the setting is off - the menu's "only with this message" - is said in a word of its own: the
+    // IDE holds the bare flag to the setting, and would leave the file out while the card says it went.
+    const editorFlags = withEditor ? { editor: true, ...(shareEditor ? {} : { editorOnce: true }) } : {}
+    // The menu's "this one" was about this message, and this message is on its way.
+    if (editorOnce[active] !== undefined) {
+      setEditorOnce((current) => {
         const { [active]: _gone, ...rest } = current
         return rest
       })
@@ -5112,9 +5423,8 @@ export const App = () => {
         sessionId: active,
         id: `q-${Date.now()}-${promptCounter.current++}`,
         ...(place ? { before: place } : {}),
-        ...(withEditor ? { editor: true } : {}),
+        ...editorFlags,
         text,
-        attach: attachCount ? `${attachCount} refs` : '',
         // The pieces the card will be drawn from travel with it, exactly as they do with a message sent
         // outright: what fires out of the queue arrives back here as an ordinary echo (see promptEcho).
         tokens,
@@ -5226,7 +5536,7 @@ export const App = () => {
       sessionId: active,
       id: promptId,
       uuid,
-      ...(withEditor ? { editor: true } : {}),
+      ...editorFlags,
       // The pieces the card is drawn from travel with it: the shell keeps them for whoever was not here
       // (a second client, or this same page after a reload) - see promptEcho.
       tokens,
@@ -5256,7 +5566,7 @@ export const App = () => {
     queueEdits,
     shareEditor,
     editorContext,
-    editorSkips,
+    editorOnce,
   ])
 
   /**
@@ -5493,6 +5803,9 @@ export const App = () => {
   // Without a login the input field is meaningless: the agent answers any question with a line about
   // /login, and that command itself is out of reach in streaming mode.
   if (!auth || !auth.loggedIn) {
+    // No tabs and no field behind the sign-in, so the panel's keys do nothing here - rather than whatever
+    // the last signed-in draw left in the ref (see pressPanelKey, which is set further down).
+    pressPanelKeyRef.current = () => {}
     return (
       <LocaleProvider locale={locale}>
         <div className={s.panel} data-anchor={dockAnchor}>
@@ -5760,6 +6073,7 @@ export const App = () => {
     },
     restoreTabs: restoreTabs ? t.restoreTabs.on : t.restoreTabs.off,
     shareEditor: shareEditor ? t.shareEditor.on : t.shareEditor.off,
+    spellcheck: spellcheck ? t.spellcheck.on : t.spellcheck.off,
     composerLayout: composerLayoutOptions(t).find((option) => option.id === chosenLayout)?.label ?? '',
     pasteCollapse: pasteCollapseSummary(t, pasteCollapse),
     sendKey: sendKeySummary(sendKey),
@@ -5811,6 +6125,73 @@ export const App = () => {
     if (kind === 'model') send({ type: 'refreshModels', sessionId: active })
     setMenu({ kind, anchor })
   }
+
+  /**
+   * What the editor's chip in the field shows (see EditorChip): there whenever the editor has something to
+   * show, the setting off included - then muted, unless this tab's next message goes with it all the same.
+   */
+  const editorShown = editorContext
+    ? (() => {
+        const on = editorGoes(shareEditor, editorOnce[active], editorContext)
+        return { ref: editorContext, on, muted: !shareEditor && !on, open: menu?.kind === 'editor' }
+      })()
+    : null
+
+  /** The same toggle for the editor's chip in the field, and for the same reason (see [openSelector]). */
+  const openEditorMenu = (anchor: Anchor) => {
+    if (menu?.kind === 'editor') {
+      setMenu(null)
+      return
+    }
+    setSideMenu((current) => ({ ...current, open: false }))
+    setMenu({ kind: 'editor', anchor })
+  }
+
+  /**
+   * An entry of the chip's menu (see editorMenu). The setting either way is the setting itself, the same
+   * switch as in the settings, and it takes this tab's exception away with it; the middle entry is this one
+   * message the other way, for the file and lines on screen now.
+   */
+  const pickEditor = (id: string) => {
+    if (!editorContext) return
+    if (id === EDITOR_ONCE) {
+      const once = { key: editorKey(editorContext), on: !shareEditor }
+      setEditorOnce((current) => ({ ...current, [active]: once }))
+      return
+    }
+    setEditorOnce((current) => {
+      const { [active]: _gone, ...rest } = current
+      return rest
+    })
+    const on = id === EDITOR_ALWAYS
+    if (on !== shareEditor) setShareEditor(on)
+  }
+
+  /**
+   * What the open menu holds. The editor's has nothing to say once the editor has nothing to show - the
+   * file closed while it was open - and then it is not drawn at all.
+   */
+  const menuWords = !menu
+    ? null
+    : menu.kind === 'thanks'
+      ? thanksMenu(t, shared)
+      : menu.kind === 'editor'
+        ? editorContext
+          ? editorMenu(t, shareEditor, editorChoice(shareEditor, editorOnce[active], editorContext), editorContext)
+          : null
+        : menuProps(
+            t,
+            menu.kind,
+            models,
+            customModels,
+            panel.ownModel ?? startingModel,
+            tickedModel,
+            effort,
+            contextMode,
+            mode,
+            availableModes,
+            fastOffered ? fastShown : null,
+          )
 
   /** The same toggle for the heart at the row's far end, and for the same reason (see [openSelector]). */
   const openThanks = (anchor: Anchor) => {
@@ -5876,14 +6257,7 @@ export const App = () => {
         id: tab.id,
         at: placeIn(tab.place, groups),
         active: active === tab.id,
-        title:
-          tab.id === STATISTICS_GROUP
-            ? t.header.statistics
-            : tab.id === SCENARIOS_GROUP
-              ? t.header.scenarios
-              : run
-                ? [run.scenarioName, runLabels[run.id]].filter(Boolean).join(' · ')
-                : t.scenarios.run.title,
+        title: panelTabTitle(tab.id, watched, runLabels),
         color: tab.id === STATISTICS_GROUP ? STATISTICS_COLOR : SCENARIO_COLOR,
         closeLabel:
           tab.id === STATISTICS_GROUP
@@ -5928,49 +6302,203 @@ export const App = () => {
       .map((session) => session.id),
   )
 
+  /**
+   * The closed tabs "Recently closed" offers - those not open again by some other road: a conversation picked
+   * in the history since, the statistics opened from the menu. The IDE skips them the same way when the key is
+   * pressed (see ClosedTabs.take), so the list and the key agree on what comes back next. The panel's own tabs
+   * wear their names in today's language, as on the strip; a run keeps the name it had.
+   */
+  const reopenable = ((): (ClosedTab & { name: string })[] => {
+    const held = new Set(sessions.map((session) => panels[session.id]?.sessionId).filter(Boolean))
+
+    return closedTabs
+      .filter((tab) =>
+        tab.kind === 'panel'
+          ? !panelTabs.some((open) => open.id === tab.id)
+          : !(tab.conversationId && held.has(tab.conversationId)),
+      )
+      .map((tab) => ({
+        ...tab,
+        name:
+          tab.id === STATISTICS_GROUP
+            ? t.header.statistics
+            : tab.id === SCENARIOS_GROUP
+              ? t.header.scenarios
+              : tab.title,
+      }))
+  })()
+
+  /**
+   * Closing a conversation's tab - the cross on the tab and the panel's close key both come here.
+   *
+   * Any tab closes like an ordinary one, the last one included - then there is nothing to show, but the
+   * header and its buttons (history, MCP, plugins) stay: they are not tied to whether a conversation is
+   * open.
+   */
+  const closeSession = (id: string) => {
+    // The last words typed into its field go before the close does, rather than dying with the pause that was
+    // waiting to save them: the IDE keeps the closed tab to be opened again, field and all (see ClosedTabs.kt).
+    const pending = draftSaves.current[id]
+    if (pending) {
+      window.clearTimeout(pending.timer)
+      delete draftSaves.current[id]
+      send({ type: 'saveDraft', sessionId: id, draft: pending.draft })
+    }
+    // What the IDE was last told about this field is about a tab that is going; the field it may come back
+    // with is told afresh (see `drafts`).
+    delete draftsSent.current[id]
+    send({ type: 'closeSession', sessionId: id })
+    delete soundMemory.current[id]
+    // Both the collected output and what is still running: without the second, a later answer from
+    // the shell would start the record up again - for a conversation that no longer exists.
+    forgetShellCommands(id)
+    forgetSide(id)
+    setShellRuns((current) => {
+      if (!(id in current)) return current
+      const next = { ...current }
+      delete next[id]
+      return next
+    })
+    // The draft of a conversation that no longer exists, and what its rewrites were about: both are
+    // about a field nobody can open again, and both hold on to whatever was attached to that draft.
+    setDrafts((current) => {
+      if (!(id in current)) return current
+
+      const next = { ...current }
+      delete next[id]
+      return next
+    })
+    forgetImproveSource(id)
+    // And what was being answered to a question of that conversation - see askDrafts.
+    forgetAskDrafts(id)
+    // Where a feed nobody can open again was left standing.
+    feedPlaces.current.delete(id)
+    dispatchPanel({ session: id, closed: true })
+    const next = sessions.filter((session) => session.id !== id)
+    setSessions(next)
+    // The neighbour in the strip, and one of this panel's own tabs just as readily as a chat: the
+    // empty screen is for an empty strip (see tabAfterClosing). It takes the keyboard as a picked tab does
+    // (see pickTab): the field that had it is gone with its tab.
+    if (active === id) pickTab(tabAfterClosing(sessions, panelTabs, id) || MAIN_SESSION)
+  }
+
+  /**
+   * A tab the person chose - a click on the strip, Enter on a tab, the panel's keys, the neighbour of the
+   * open tab they closed - and the keyboard goes with it into the tab's field, the way it does after "+" and
+   * a fork (see startSession) and after a conversation picked in the history or the search (see resume).
+   *
+   * Reported (0.13.25): switching to another conversation left the keys with nobody, and every switch cost
+   * a click into the field before the next prompt could be typed. The press on the strip keeps the focus
+   * where it was (see startDrag in Header), which is the field only if the person had been typing - not
+   * after reading the feed or coming back from the editor. A tab with no field - the statistics, the hub -
+   * has nothing to take it; a run being watched has the main thread's field, and that one does.
+   *
+   * Only on a real change, so the second press of a double click - the tab's rename - finds nothing to
+   * take the keyboard away from the name. The IDE switching tabs on its own (a restore, a tab closed from
+   * the phone) does not come here: nobody in this panel asked for the field.
+   */
+  const pickTab = (id: string) => {
+    if (id === active) return
+    setActive(id)
+    setFocusToken((current) => current + 1)
+  }
+
+  /**
+   * One of the panel's own keys (see PanelKeys.kt). They are the IDE's actions, so they never arrive here
+   * as key presses - the IDE caught the press with the focus in the panel and says which command it was.
+   *
+   * A key does what the mouse could do from where it is: with a question or the menu open over the strip,
+   * the tabs are out of the mouse's reach, and they are out of the keys' too.
+   */
+  const pressPanelKey = (command: PanelKeyCommand) => {
+    if (sideMenu.open) {
+      // As a press of the row it names would: the menu over the strip the tab comes back to goes away first.
+      if (reachesPastMenu(command, sideMenu.screen, reopenable.length) && !document.querySelector('[aria-modal="true"]')) {
+        setSideMenu({ open: false, screen: 'menu' })
+        reopenTab()
+      }
+      return
+    }
+
+    // Over the search window the tab keys walk its own tabs - the ones the mouse reaches there. Only when it is
+    // the one window up: a question standing over it keeps every key off what lies under it.
+    const windows = document.querySelectorAll('[aria-modal="true"]')
+    if (windows.length === 1 && windows[0]?.hasAttribute('data-acc-search')) {
+      if (command === 'nextTab' || command === 'previousTab') {
+        setSearch((current) => ({ ...current, tab: searchTabBeside(current.tab, command === 'nextTab' ? 1 : -1) }))
+      }
+      return
+    }
+    if (windows.length > 0) return
+
+    switch (command) {
+      case 'nextTab':
+      case 'previousTab': {
+        const target = tabBeside(stripTabs(sessions, panelTabs), active, command === 'nextTab' ? 1 : -1)
+        // Straight into the field (see pickTab): the hand that switched tabs with a key is on the keyboard,
+        // and the next thing it does is type.
+        if (target) pickTab(target)
+        return
+      }
+
+      case 'newTab':
+        startSession(`session-${Date.now()}`)
+        return
+
+      // The one closed last, whatever kind - the IDE knows which (see ClosedTabs.kt).
+      case 'reopenTab':
+        reopenTab()
+        return
+
+      case 'closeTab':
+        if (isPanelTab(active)) {
+          closePanelTab(active)
+          return
+        }
+        if (!sessions.some((session) => session.id === active)) return
+        if (stillWorking(panels[active])) setClosingWorking(active)
+        else closeSession(active)
+        return
+
+      case 'queue':
+        setQueueToken((current) => current + 1)
+        return
+    }
+  }
+  pressPanelKeyRef.current = pressPanelKey
+
+  /**
+   * A closed tab is back (see reopenTab). A conversation's tab is on the strip by now - the IDE sent the list
+   * first, and its field before this - so it only has to be put on screen, with the keyboard in its field as
+   * after any tab picked by hand (see pickTab). One of the panel's own tabs the page opens itself.
+   */
+  const takeReopened = (sessionId: string | undefined, panel: string | undefined, place: TabPlace | undefined) => {
+    if (sessionId) {
+      setActive(sessionId)
+      setFocusToken((current) => current + 1)
+      return
+    }
+    if (panel && isPanelTab(panel)) reopenPanelTab(panel, placeFromWire(place))
+  }
+  takeReopenedRef.current = takeReopened
+
+  /**
+   * The hint on the open tab's cross: its key, and the one that brings it back - said where a close is made,
+   * which is where somebody who closed the wrong tab looks first.
+   */
+  const closeTabHint = ((): string => {
+    const close = keyText(panelKeys.closeTab)
+    const reopen = keyText(panelKeys.reopenTab)
+    return close && reopen ? t.header.closeHint(close, reopen) : close
+  })()
+
   const header = (
     <Header
         sessions={tabs}
         layout={composerLayout}
         activeSession={active}
-        onPickSession={setActive}
-        onCloseSession={(id) => {
-          // Any tab closes like an ordinary one, the last one included - then there is nothing to show,
-          // but the header and its buttons (history, MCP, plugins) stay: they are not tied to whether a
-          // conversation is open.
-          send({ type: 'closeSession', sessionId: id })
-          delete soundMemory.current[id]
-          // Both the collected output and what is still running: without the second, a later answer from
-          // the shell would start the record up again - for a conversation that no longer exists.
-          forgetShellCommands(id)
-          forgetSide(id)
-          setShellRuns((current) => {
-            if (!(id in current)) return current
-            const next = { ...current }
-            delete next[id]
-            return next
-          })
-          // The draft of a conversation that no longer exists, and what its rewrites were about: both are
-          // about a field nobody can open again, and both hold on to whatever was attached to that draft.
-          setDrafts((current) => {
-            if (!(id in current)) return current
-
-            const next = { ...current }
-            delete next[id]
-            return next
-          })
-          forgetImproveSource(id)
-          // And what was being answered to a question of that conversation - see askDrafts.
-          forgetAskDrafts(id)
-          // Where a feed nobody can open again was left standing.
-          feedPlaces.current.delete(id)
-          dispatchPanel({ session: id, closed: true })
-          const next = sessions.filter((session) => session.id !== id)
-          setSessions(next)
-          // The neighbour in the strip, and one of this panel's own tabs just as readily as a chat: the
-          // empty screen is for an empty strip (see tabAfterClosing).
-          if (active === id) setActive(tabAfterClosing(sessions, panelTabs, id) || MAIN_SESSION)
-        }}
+        onPickSession={pickTab}
+        onCloseSession={closeSession}
         onNewSession={() => startSession(`session-${Date.now()}`)}
         onFork={forkWhole}
         forkable={forkable}
@@ -5982,8 +6510,10 @@ export const App = () => {
         onReturnToInput={() => setFocusToken((current) => current + 1)}
         onOpenMenu={openMenu}
         panelTabs={headerPanelTabs}
-        onPickPanelTab={setActive}
+        onPickPanelTab={pickTab}
         onClosePanelTab={closePanelTab}
+        newTabKey={keyText(panelKeys.newTab)}
+        closeTabKey={closeTabHint}
         calls={calls}
         watchers={watchers}
         gitBranch={branch.gitBranch}
@@ -6070,6 +6600,7 @@ export const App = () => {
 
       <Queue
         items={sessionQueue}
+        sessionId={active}
         onReorder={(from, to) => {
           const next = [...sessionQueue]
           const [moved] = next.splice(from, 1)
@@ -6082,6 +6613,7 @@ export const App = () => {
         // and a place in a queue that has nothing to wait for would promise an order that does not exist.
         editing={running ? (queueEdits[active] ?? null) : null}
         sendKey={sendKey}
+        held={panel.queueHeld}
       />
 
       <Quotes
@@ -6094,7 +6626,9 @@ export const App = () => {
   return (
     <LocaleProvider locale={locale}>
     <OpenFileContext.Provider value={openFile}>
+    <OpenPictureContext.Provider value={openPicture}>
     <KnownFilesContext.Provider value={known}>
+    <MissingFilesContext.Provider value={missingFiles}>
     <AgentTranscriptContext.Provider value={transcripts}>
     <OpenAgentContext.Provider value={openAgent}>
     <div
@@ -6110,6 +6644,8 @@ export const App = () => {
       {/* The hover hints of every marked control at once - drawn into the body, so its place in this
           tree carries no meaning beyond being mounted with the panel. */}
       <Tooltips />
+      {/* The picture behind an image chip, under the pointer - the same kind of layer as the hints. */}
+      <ImagePreview />
 
       {header}
 
@@ -6125,6 +6661,26 @@ export const App = () => {
           onConfirm={() => {
             send({ type: 'stopTask', sessionId: active, taskId: stopping.id })
             setStopping(null)
+          }}
+        />
+      ) : null}
+
+      {/* The close key over a tab whose agent is working: closing stops the work and drops the tab's queue,
+          and the key may have been meant for the editor. Enter closes, as asked; Escape keeps the tab. */}
+      {closingWorking && sessions.some((session) => session.id === closingWorking) ? (
+        <Confirm
+          title={t.chrome.confirm.closeWorking}
+          subject={sessions.find((session) => session.id === closingWorking)?.title ?? ''}
+          note={t.chrome.confirm.closeWorkingNote(keyText(panelKeys.reopenTab))}
+          confirmLabel={t.chrome.confirm.close}
+          onCancel={() => {
+            setClosingWorking(null)
+            setFocusToken((current) => current + 1)
+          }}
+          onConfirm={() => {
+            const id = closingWorking
+            setClosingWorking(null)
+            closeSession(id)
           }}
         />
       ) : null}
@@ -6341,6 +6897,8 @@ export const App = () => {
               files={files}
               imageBaseCount={tellImageBase}
               focusToken={focusToken}
+              // No queue here: the queue key is this field's Send (see Composer.pressQueueKey).
+              queueToken={queueToken}
               // Its own place at the foot of the run, whatever the chat's layout: the side rail of left/right
               // belongs to a conversation's screen.
               layout={composerLayout === 'compact' ? 'compact' : 'bottom'}
@@ -6423,6 +6981,9 @@ export const App = () => {
              * one thing worth carrying across a switch - the line being read - travels outside the feed,
              * by the tab it belongs to (see [feedPlace] and feed/place.ts).
              */
+            /* The tab's own feed is the one whose messages can be read back out of its transcript - a
+               picture the feed no longer holds is previewed from there (see useSaidImages). */
+            <SaidImagesContext.Provider value={active}>
             <Feed
               key={active}
               items={panel.items}
@@ -6440,6 +7001,8 @@ export const App = () => {
               onChooseModel={chooseAnotherModel}
               signIn={signInOffer}
               onCodexConfig={openCodexConfig}
+              onRevertChanges={revertChanges}
+              projectRoot={projectRoot}
               onReuse={reuseMessage}
               onRewind={openRewind}
               onLoadEarlier={loadEarlier}
@@ -6451,7 +7014,10 @@ export const App = () => {
               place={feedPlace}
               pins={panel.pins}
               onPin={togglePinned}
+              carryOn={panel.carryOn}
+              onCancelCarryOn={() => send({ type: 'cancelCarryOn', sessionId: active })}
             />
+            </SaidImagesContext.Provider>
           ) : (
             <AgentStreamView item={activeTask} />
           )}
@@ -6515,10 +7081,13 @@ export const App = () => {
             files={files}
             imageBaseCount={imageBaseCount}
             focusToken={focusToken}
+            queueToken={queueToken}
+            queueKey={keyText(panelKeys.queue)}
             layout={composerLayout}
             model={model}
             switchedFrom={panel.switchedFrom}
             stuckPick={panel.stuckPick}
+            fast={fastShown}
             effort={effort}
             contextMode={contextMode}
             contextMax={panel.context?.max}
@@ -6559,20 +7128,8 @@ export const App = () => {
             onSubmit={sendNow}
             onQueue={queueNext}
             keyQueues={queueEdits[active] !== undefined}
-            editor={
-              shareEditor && editorContext
-                ? { ref: editorContext, on: editorSkips[active] !== editorKey(editorContext) }
-                : null
-            }
-            onToggleEditor={() => {
-              if (!editorContext) return
-              const key = editorKey(editorContext)
-              setEditorSkips((current) => {
-                if (current[active] !== key) return { ...current, [active]: key }
-                const { [active]: _back, ...rest } = current
-                return rest
-              })
-            }}
+            editor={editorShown}
+            onEditorMenu={openEditorMenu}
             canSubmit={draftReady}
             stopStalled={stopStalled}
             onStop={() => {
@@ -6597,6 +7154,7 @@ export const App = () => {
               model={model}
               switchedFrom={panel.switchedFrom}
               stuckPick={panel.stuckPick}
+              fast={fastShown}
               effort={effort}
               contextMode={contextMode}
               contextMax={panel.context?.max}
@@ -6626,7 +7184,17 @@ export const App = () => {
         {/* Only what is being looked at is built: the MCP and plugin screens are whole lists, and the
             menu is shut far more of the time than it is open. */}
         {sideMenu.open && sideMenu.screen === 'history' ? (
-          <History conversations={history} onOpen={resume} />
+          <History
+            conversations={history}
+            onOpen={resume}
+            closed={reopenable}
+            onReopen={(key) => {
+              // The tab comes back on the strip, and the menu over it would hide exactly that.
+              setSideMenu({ open: false, screen: 'menu' })
+              reopenTab(key)
+            }}
+            reopenKey={keyText(panelKeys.reopenTab)}
+          />
         ) : null}
 
         {sideMenu.open && sideMenu.screen === 'mcp' ? (
@@ -6898,6 +7466,10 @@ export const App = () => {
           <ShareEditor t={t} on={shareEditor} onToggle={setShareEditor} />
         ) : null}
 
+        {sideMenu.open && sideMenu.screen === 'spellcheck' ? (
+          <Spellcheck t={t} on={spellcheck} onToggle={setSpellcheck} />
+        ) : null}
+
         {sideMenu.open && sideMenu.screen === 'calmColors' ? (
           <CalmColors vivid={calmVivid} onChange={setCalmColors} />
         ) : null}
@@ -6920,6 +7492,15 @@ export const App = () => {
             selected={sendKey}
             note={t.sendKey.note}
             onPick={(id) => setSendKey(normalizeSendKey(id))}
+          />
+        ) : null}
+
+        {sideMenu.open && sideMenu.screen === 'keys' ? (
+          <KeysScreen
+            keys={panelKeys}
+            sendKey={sendKey}
+            voice={voice.enabled ? { push: voice.hotkeys.push.caps, hold: voice.hotkeys.hold.caps } : null}
+            onOpenKeymap={() => send({ type: 'openKeymap' })}
           />
         ) : null}
 
@@ -6998,22 +7579,9 @@ export const App = () => {
         ) : null}
       </SideMenu>
 
-      {menu ? (
+      {menu && menuWords ? (
         <Menu
-          {...(menu.kind === 'thanks'
-            ? thanksMenu(t, shared)
-            : menuProps(
-                t,
-                menu.kind,
-                models,
-                customModels,
-                panel.ownModel ?? startingModel,
-                tickedModel,
-                effort,
-                contextMode,
-                mode,
-                availableModes,
-              ))}
+          {...menuWords}
           anchor={menu.anchor}
           onClose={() => setMenu(null)}
           onPick={(id) => {
@@ -7026,10 +7594,12 @@ export const App = () => {
             // where one is added (see ADD_MODEL), and choosing it as a model would launch the CLI with
             // the sentinel's own name.
             if (kind === 'model' && id === ADD_MODEL) setSideMenu({ open: true, screen: 'customModels' })
+            else if (kind === 'model' && id === FAST_MODE) pickFastMode(fastShown.kind === 'off')
             else if (kind === 'model') pickModel(id)
             if (kind === 'effort') pickEffort(id)
             if (kind === 'context') pickContextMode(id as ContextMode)
             if (kind === 'mode') setMode(id)
+            if (kind === 'editor') pickEditor(id)
             // The page has no browser of its own to open anything with: the address goes out to the shell,
             // and the IDE opens it in the system browser - the same route the PR link takes.
             if (kind === 'thanks') {
@@ -7046,7 +7616,9 @@ export const App = () => {
     </div>
     </OpenAgentContext.Provider>
     </AgentTranscriptContext.Provider>
+    </MissingFilesContext.Provider>
     </KnownFilesContext.Provider>
+    </OpenPictureContext.Provider>
     </OpenFileContext.Provider>
     </LocaleProvider>
   )
@@ -7117,6 +7689,18 @@ const panelsReducer = (state: PanelsState, event: PanelsAction): PanelsState => 
 }
 
 /**
+ * Whether the agent is still at work in this conversation - what the tab's dot calls "running", and what
+ * the panel's close key asks about before it closes the tab (see pressPanelKey in App).
+ *
+ * The main turn can end while a skill's background subagent (launched outside the ordinary turn cycle,
+ * e.g. by /code-review) keeps going - streamStatus already knows to say "Waiting for N subagents" for the
+ * same reason. The dot has to agree, or it calls a conversation done while work is still visibly running.
+ */
+const stillWorking = (panel: PanelState | undefined): boolean =>
+  panel !== undefined &&
+  (panel.status === 'running' || panel.items.some((item) => item.kind === 'task' && item.pending))
+
+/**
  * What a tab's dot shows. A crashed process matters most: the turn was cut short against its will, and even
  * a tab nobody is looking at has to say so. Next comes waiting for the person, and only then ordinary work.
  */
@@ -7143,12 +7727,7 @@ const sessionState = (panel: PanelState | undefined, active: boolean, cards: Car
   const last = [...panel.items].reverse().find((item) => item.kind !== 'meta')
   if (!active && last?.kind === 'error') return 'attention'
 
-  if (panel.status === 'running') return 'running'
-
-  // The main turn can end while a skill's background subagent (launched outside the ordinary turn cycle,
-  // e.g. by /code-review) keeps going - streamStatus already knows to say "Waiting for N subagents" for the
-  // same reason. The dot has to agree, or it calls a conversation done while work is still visibly running.
-  if (panel.items.some((item) => item.kind === 'task' && item.pending)) return 'running'
+  if (stillWorking(panel)) return 'running'
 
   // We count as finished a conversation in which the agent brought a turn to its end at least once: a fork
   // marker by itself is not work yet.
@@ -7198,13 +7777,25 @@ const menuProps = (
   contextMode: ContextMode,
   mode: string,
   availableModes: ModeAvailability,
+  /** Fast mode, when the menu offers its switch at all - see fastOffered. */
+  fast: FastModeShown | null,
 ): { title: string; hint?: string; width: number; options: MenuOption[]; selected: string; tick?: boolean } => {
   if (kind === 'model') {
-    return {
-      title: t.selectors.model,
-      width: 344,
-      ...modelMenu(t, models, customModels, selectedModel, switched),
+    const menu = modelMenu(t, models, customModels, selectedModel, switched)
+    if (!fast) return { title: t.selectors.model, width: 344, ...menu }
+
+    // A switch rather than a model, so it wears its own mark where the tick would stand: lit while it serves,
+    // the warning colour when it was asked for and cannot, dim while off - with Codex's own line about the tier
+    // under it then. Before the last entry, which is the way out of the menu to adding a model.
+    const entry: MenuOption = {
+      id: FAST_MODE,
+      label: t.fast.label,
+      icon: FAST_MARK,
+      iconTone: fast.kind === 'unavailable' ? 'warn' : fast.kind === 'off' ? 'dim' : 'accent',
+      sub: fastModeSub(t, fast, fastTierNote(models, selectedModel)),
     }
+    const options = [...menu.options.slice(0, -1), entry, ...menu.options.slice(-1)]
+    return { title: t.selectors.model, width: 344, options, selected: menu.selected }
   }
 
   if (kind === 'effort') {

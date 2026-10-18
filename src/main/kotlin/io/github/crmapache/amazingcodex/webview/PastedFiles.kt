@@ -4,6 +4,7 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.PathManager
 import com.intellij.openapi.diagnostic.thisLogger
 import java.io.File
+import java.security.MessageDigest
 import java.util.Base64
 
 /**
@@ -29,16 +30,12 @@ internal object PastedFiles {
 
     private const val MAX_NAME = 80
 
-    /** The picture formats a clipboard hands over, and what each is called on disk. */
-    private val EXTENSIONS = mapOf(
-        "image/png" to "png",
-        "image/jpeg" to "jpg",
-        "image/gif" to "gif",
-        "image/webp" to "webp",
-        "image/bmp" to "bmp",
-        "image/tiff" to "tif",
-        "image/svg+xml" to "svg",
-    )
+    /**
+     * What a picture a clipboard hands over is called on disk: the plugin's pictures (see PictureFormats), and a
+     * TIFF - which a clipboard may hold and the panel's browser does not show, so it is written under its own name
+     * and is a file rather than a picture everywhere else.
+     */
+    private val EXTENSIONS = PictureFormats.EXTENSIONS + ("image/tiff" to "tif")
 
     /**
      * Decode the bytes and write them out, then hand the path back to whoever asked.
@@ -64,6 +61,28 @@ internal object PastedFiles {
             }.onFailure { thisLogger().warn("Could not save a pasted file", it) }
         }
     }
+
+    /**
+     * A picture the IDE has the bytes of and no file for - one read back out of a conversation's thread (see
+     * ThreadPictures), or out of the queue - kept as a file here so the editor can open it (see
+     * CodexSessionHub.openPicture).
+     *
+     * Named by what is in it rather than by the moment: the same picture clicked twice is one file, not two.
+     * Touched when it is already there, so the sweep counts its fourteen days from the last time it was
+     * opened rather than from the first.
+     */
+    fun keep(bytes: ByteArray, mediaType: String, folder: File = folder()): File? = runCatching {
+        val now = System.currentTimeMillis()
+        sweep(folder, now)
+
+        val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
+        val name = digest.take(8).joinToString("") { "%02x".format(it) }
+        val extension = EXTENSIONS[mediaType.lowercase().substringBefore(';').trim()] ?: "png"
+        val file = File(folder, "picture-$name.$extension")
+
+        if (file.isFile && file.length() == bytes.size.toLong()) file.setLastModified(now) else file.writeBytes(bytes)
+        file
+    }.onFailure { thisLogger().warn("Could not keep a picture to open", it) }.getOrNull()
 
     private fun folder(): File =
         File(PathManager.getSystemPath(), "amazing-codex/pasted").also { it.mkdirs() }

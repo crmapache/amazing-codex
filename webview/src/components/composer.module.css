@@ -906,13 +906,16 @@
   text-overflow: ellipsis;
 }
 
-.queueAttach {
-  flex: none;
-  padding: 1px 6px;
-  border-radius: var(--acc-r-xs);
-  background: var(--acc-bg-control);
-  font: 10px var(--acc-mono);
-  color: var(--acc-fg-dim);
+/* A row drawn from the message's pieces (see QueueLine): words and chips together, up to two lines. A row
+   of one line had room for a path and nothing else; with chips the names are short, and the second line
+   is what keeps a picture at the end of the message from being cut off behind the ellipsis. */
+.queueLine {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 18px;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .iconButton {
@@ -1735,6 +1738,8 @@
  * The gap to the name is the name's own margin rather than the row's gap: without the name the chip is its
  * padding and the drawing exactly, a square among squares.
  */
+/* The margin, the padding and the 12px drawing add up to EDITOR_CHIP_MUTED in composerFit.ts: a muted chip
+   that has left the row is counted back in by that number. */
 .editorChip {
   display: inline-flex;
   align-items: center;
@@ -1747,6 +1752,10 @@
   color: var(--acc-fg-dim);
   font: 11px var(--acc-mono);
   overflow: hidden;
+  /* Above the menu's scrim, as the selectors are (see .compactSelectors): the chip opens a menu, and a
+     second press on it has to reach it rather than the scrim, to close what it opened (App.openEditorMenu). */
+  position: relative;
+  z-index: 41;
   transition:
     background-color 80ms linear,
     color 80ms linear;
@@ -1779,7 +1788,8 @@
   margin-left: 0;
 }
 
-/* Left out of this one message: still there to be pressed back, but plainly not going. */
+/* Not going with this message - left out of it, or sending the editor is off: still there to be pressed, but
+   plainly not going. With no name beside it (bare, muted, the name stepped out) the drawing is struck. */
 .editorChipOff {
   background: none;
   box-shadow: inset 0 0 0 1px var(--acc-line);
