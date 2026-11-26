@@ -6,45 +6,27 @@ import type { StatisticsData } from '../../protocol'
 import { closest, dressAll, recentlyEarned, summarize, type DressedGroup } from '../../stats/achievements'
 import { ROMAN } from '../../stats/catalogue'
 import {
-  dayHours,
   daysTile,
-  dayTokens,
   factsTile,
   filesTile,
-  hoursSeries,
   outputTile,
-  projectCount,
   projectRows,
+  projectsSpending,
   rangeOf,
-  timeTile,
-  tokenSeries,
+  tokenSummary,
+  tokenTile,
   toolRows,
-  type DayHours,
-  type DayTokens,
-  type HourBar,
   type RangeKey,
-  type TimeTile,
-  type TokenSeries,
+  type TokenSummary,
+  type TokenTile,
   type ToolRow,
 } from '../../stats/compute'
-import {
-  clock,
-  duration,
-  durationDelta,
-  groupThousands,
-  longDate,
-  money,
-  shortDate,
-  tokenMillions,
-  tokenScale,
-  turnLength,
-} from '../../stats/format'
+import { clock, groupThousands, longDate, money, shortDate, tokenDelta, tokenAmount } from '../../stats/format'
 import { drawPoster, posterName, SKIP } from '../../stats/poster'
 import { AchievementChip, tierStyle } from './AchievementChip'
 import { AchievementFilterSwitch, Achievements, achievementsHint, useAchievementFilter } from './Achievements'
 import { Heatmap } from './Heatmap'
-import { HourBars } from './HourBars'
-import { LineChart, scaleTop } from './LineChart'
+import { COUNTING_TOKENS, TokenCard } from './TokenCard'
 import s from './stats.module.css'
 
 /**
@@ -224,10 +206,11 @@ export const StatisticsTab = ({ data, view, onView, version }: StatisticsTabProp
   )
 }
 
+/** "all 12 projects together · last 7 days" - the projects that spent tokens in the range. */
 const overviewHint = (data: StatisticsData, key: RangeKey): string => {
   const range = rangeOf(data, key)
-  const projects = projectCount(data)
-  const scope = projects <= 1 ? 'one project' : `all ${projects} projects together`
+  const projects = projectsSpending(data, range)
+  const scope = projects === 1 ? 'one project' : projects === 0 ? 'every project together' : `all ${projects} projects together`
   return `${scope} · ${range.label}`
 }
 
@@ -242,13 +225,10 @@ interface OverviewProps {
 
 const Overview = ({ data, range: key, groups, onAchievements }: OverviewProps) => {
   const range = useMemo(() => rangeOf(data, key), [data, key])
-  const time = useMemo(() => timeTile(data, range), [data, range])
+  const tokens = useMemo(() => tokenTile(data, range), [data, range])
+  const spent = useMemo(() => tokenSummary(data, range), [data, range])
   const days = useMemo(() => daysTile(data, range), [data, range])
   const output = useMemo(() => outputTile(data, range), [data, range])
-  const series = useMemo(() => hoursSeries(data, range), [data, range])
-  const hours = useMemo(() => dayHours(data, range), [data, range])
-  const tokens = useMemo(() => tokenSeries(data, range), [data, range])
-  const hourTokens = useMemo(() => dayTokens(data, range), [data, range])
   const tools = useMemo(() => toolRows(data, range), [data, range])
   const projects = useMemo(() => projectRows(data, range), [data, range])
   const files = useMemo(() => filesTile(data, range), [data, range])
@@ -258,27 +238,23 @@ const Overview = ({ data, range: key, groups, onAchievements }: OverviewProps) =
   const recent = useMemo(() => recentlyEarned(groups), [groups])
 
   const activeDots = days.dots.filter((dot) => dot.active).length
-  // A single day is read differently: "a day" says nothing about one day, "1/1" says nothing about the
-  // days at work, and a line chart one point wide draws nothing at all. The delta keeps the same short
-  // "vs prev" as every other range - the previous stretch of one day is yesterday, and a longer word is
-  // cut off by the tile anyway (see .figureNote).
+  // A single day is read differently: "a day" says nothing about one day, and "1/1" says nothing about
+  // the days at work. The delta keeps the same short "vs prev" as every other range - the previous
+  // stretch of one day is yesterday, and a longer word is cut off by the tile anyway (see .figureNote).
   const oneDay = key === '1d'
   const scope = oneDay ? 'today' : 'in this range'
+  const reading = data.tokensReading === true
 
   return (
     <>
       <div className={s.tiles}>
         <div className={s.tile}>
-          <span className={`${s.label} ${s.labelAccent}`}>TIME IN THE PANEL · {range.tag}</span>
+          <span className={`${s.label} ${s.labelAccent}`}>TOKENS · {range.tag}</span>
           <span className={s.figureRow}>
-            <span className={s.figure}>{duration(time.minutes)}</span>
-            {time.delta === null ? null : (
-              <span className={`${s.figureNote} ${time.delta >= 0 ? s.figureNoteOk : s.figureNoteBad}`}>
-                {durationDelta(time.delta)} vs prev
-              </span>
-            )}
+            <span className={s.figure}>{tokenAmount(tokens.tokens)}</span>
+            {tokens.delta === null ? null : <span className={s.figureNote}>{tokenDelta(tokens.delta)} vs prev</span>}
           </span>
-          <span className={s.foot}>{timeFoot(time, hours, oneDay)}</span>
+          <span className={s.foot}>{tokenFoot(tokens, spent, oneDay, reading)}</span>
         </div>
 
         <div className={s.tile}>
@@ -343,92 +319,12 @@ const Overview = ({ data, range: key, groups, onAchievements }: OverviewProps) =
         </div>
       </div>
 
-      {oneDay ? (
-        <div className={s.chartCard}>
-          <div className={s.labelRow}>
-            <span className={s.label}>THE HOURS OF TODAY</span>
-            <span className={s.labelNote}>{dayNote(hours)}</span>
-          </div>
-          <HourBars
-            values={hours.bars.map((bar) => bar.minutes)}
-            top={Math.max(HOUR, hours.peak?.minutes ?? 0)}
-            peaks={hours.peaks}
-            scale={(minutes) => `${Math.round(minutes)}m`}
-            tip={(hour, minutes) => hourTip({ hour, minutes }, hours.peaks)}
-          />
-        </div>
-      ) : (
-        <div className={s.chartCard}>
-          <div className={s.labelRow}>
-            <span className={s.label}>HOURS A DAY IN THE PANEL</span>
-            <span className={`${s.labelNote} ${s.labelNoteFills}`}>
-              {series.longest
-                ? `longest day ${duration(series.longest.minutes)} on ${shortDate(series.longest.date)}`
-                : 'no day at work in this range yet'}
-            </span>
-            <span className={s.labelAside}>
-              average <span className={s.labelAsideFigure}>{duration(series.average)}</span> a day
-            </span>
-          </div>
-          <LineChart
-            dates={series.dates}
-            values={series.hours}
-            label="Hours a day in the panel"
-            floor={1}
-            tick={(hours) => `${hours}h`}
-            tip={(hours) => duration(hours * 60)}
-          />
-        </div>
-      )}
-
-      {oneDay ? (
-        <div className={s.chartCard}>
-          <div className={s.labelRow}>
-            <span className={s.label} data-tooltip={TOKENS_SOURCE}>
-              THE TOKENS OF TODAY
-            </span>
-            <span className={s.labelNote}>{dayTokensNote(hourTokens, data.tokensReading === true)}</span>
-          </div>
-          <HourBars
-            values={hourTokens.hours}
-            top={scaleTop([hourTokens.peak?.tokens ?? 0], MILLION)}
-            peaks={hourTokens.peak ? [hourTokens.peak.hour] : []}
-            scale={tokenScale}
-            tip={(hour, spent) => tokenHourTip(hour, spent, hourTokens)}
-            tone="iris"
-          />
-        </div>
-      ) : (
-        <div className={s.chartCard}>
-          <div className={s.labelRow}>
-            <span className={s.label} data-tooltip={TOKENS_SOURCE}>
-              TOKENS A DAY
-            </span>
-            <span className={`${s.labelNote} ${s.labelNoteFills}`}>
-              {tokensNote(tokens, data.tokensReading === true)}
-            </span>
-            {tokens.average ? (
-              <span className={s.labelAside} data-tooltip={averageBasis(tokens.average, range.from)}>
-                average <span className={s.labelAsideFigure}>{tokenMillions(tokens.average.tokens)}</span> a day
-              </span>
-            ) : null}
-          </div>
-          <LineChart
-            dates={tokens.dates}
-            values={tokens.tokens}
-            label="Tokens a day"
-            floor={MILLION}
-            tick={tokenScale}
-            tip={(spent) => `${tokenMillions(spent)} tokens`}
-            tone="iris"
-          />
-        </div>
-      )}
+      <TokenCard data={data} range={range} />
 
       <div className={s.card}>
         <div className={s.labelRow}>
           <span className={s.label}>WHEN YOU WORK</span>
-          <span className={`${s.labelNote} ${s.labelNoteFills}`}>minutes a day · as far back as the panel is wide</span>
+          <span className={`${s.labelNote} ${s.labelNoteFills}`}>tokens a day · as far back as the panel is wide</span>
           <span className={s.heatLegend}>
             <span>quiet</span>
             <span className={s.heatSwatch} style={{ background: 'rgb(var(--acc-ch-mist) / 10%)' }} />
@@ -460,8 +356,10 @@ const Overview = ({ data, range: key, groups, onAchievements }: OverviewProps) =
         </div>
 
         <div className={s.tile} style={{ gap: 9 }}>
-          <span className={s.label}>WHERE THE HOURS WENT</span>
-          {projects.length === 0 ? <span className={s.foot}>No hours {scope} yet.</span> : null}
+          <span className={s.label}>WHERE THE TOKENS WENT</span>
+          {projects.length === 0 ? (
+            <span className={s.foot}>{reading ? COUNTING_TOKENS : `No tokens ${scope} yet.`}</span>
+          ) : null}
           {projects.map((project, index) => (
             <span key={project.key} className={s.stack}>
               <span className={s.stackTop}>
@@ -471,7 +369,7 @@ const Overview = ({ data, range: key, groups, onAchievements }: OverviewProps) =
                 >
                   {project.name}
                 </span>
-                <span className={s.stackValue}>{duration(project.minutes)}</span>
+                <span className={s.stackValue}>{tokenAmount(project.tokens)}</span>
               </span>
               <span
                 className={s.stackBar}
@@ -505,8 +403,6 @@ const Overview = ({ data, range: key, groups, onAchievements }: OverviewProps) =
           <div className={s.facts}>
             <Fact label="Sessions" value={groupThousands(facts.sessions)} />
             <Fact label="Replies" value={groupThousands(facts.turns)} />
-            <Fact label="Average reply" value={facts.averageTurnMs === null ? '–' : turnLength(facts.averageTurnMs)} />
-            <Fact label="Longest session" value={duration(facts.longestSessionMinutes)} />
             <Fact label="Forks" value={groupThousands(facts.forks)} />
             <Fact label="Deepest chain" value={String(facts.deepestChain)} />
           </div>
@@ -566,116 +462,29 @@ const Overview = ({ data, range: key, groups, onAchievements }: OverviewProps) =
 }
 
 /**
- * "busiest hour 08:00 · across 4 projects", "2h 41m a day · in one project" - what stands under the
- * figure of time in the panel.
+ * "busiest hour 08:00 · across 4 projects", "2.48B a day · in one project" - what stands under the figure
+ * of tokens.
  *
- * The projects are named as a count rather than added up as minutes. Their minutes overlap whenever two
- * agents run at once, and the sum of them was the figure that made a day of two hours read as four; what
- * the day really holds is above, and how it was spread is in the list of where the hours went.
+ * The projects are named as a count: the list of where the tokens went, further down, says how they were
+ * shared out.
  */
-const timeFoot = (time: TimeTile, hours: DayHours, oneDay: boolean): string => {
-  if (time.minutes === 0) return oneDay ? 'nothing in the panel yet' : 'nothing in the panel in this range'
+const tokenFoot = (tile: TokenTile, summary: TokenSummary, oneDay: boolean, reading: boolean): string => {
+  if (tile.tokens === 0) {
+    if (reading) return 'counting the tokens…'
+    return oneDay ? 'no tokens spent today yet' : 'no tokens spent in this range'
+  }
 
   const when = oneDay
-    ? hours.peak
-      ? // As on the chart, the top is often shared: naming the first of several says the day had one.
-        hours.peaks.length > 1
-        ? `${hours.peaks.length} hours at ${duration(hours.peak.minutes)}`
-        : `busiest hour ${clock(hours.peak.hour)}`
-      : 'the hours of it are not marked'
-    : `${duration(time.perDay)} a day`
-  const where = time.projects <= 1 ? 'in one project' : `across ${time.projects} projects`
+    ? tile.busiestHour === null
+      ? 'the hours of it are not marked'
+      : `busiest hour ${clock(tile.busiestHour)}`
+    : summary.average
+      ? `${tokenAmount(summary.average.tokens)} a day`
+      : `${tokenAmount(tile.tokens)} in all`
+  const where = tile.projects <= 1 ? 'in one project' : `across ${tile.projects} projects`
 
   return `${when} · ${where}`
 }
-
-/**
- * "09:00 to 21:00 · busiest 17:00 with 42m" - what the hours of the day add up to.
- *
- * The busiest hour is rarely alone. An hour spent in the panel end to end holds sixty minutes and there
- * is no sixty-first, so a working day ties for the top over and over - and the chart lights every hour
- * that reaches it. Naming one of them here while three glowed there was the whole of the puzzle: the note
- * says which they are, and up to three of them it says so by name.
- */
-const dayNote = (hours: DayHours): string => {
-  if (hours.peak === null || hours.first === null || hours.last === null) return 'nothing in the panel today yet'
-
-  const span = `${clock(hours.first)} to ${clock(hours.last + 1)}`
-  const spent = duration(hours.peak.minutes)
-  const top =
-    hours.peaks.length > NAMED_PEAKS
-      ? `busiest ${hours.peaks.length} hours with ${spent} each`
-      : `busiest ${listOf(hours.peaks.map(clock))} with ${spent}${hours.peaks.length > 1 ? ' each' : ''}`
-
-  return `${span} · ${top}`
-}
-
-/** An hour of the panel's time: what a bar of minutes reaches to when it is spent end to end. */
-const HOUR = 60
-
-/**
- * "09:00 · 1h 00m · busiest hour of the day".
- *
- * The last part is there because the lit bar is the one thing on this card nothing explains. Two hours
- * both spent end to end stand at exactly the same height, one of them glowing, and from the picture alone
- * the light reads as a state of its own rather than as "this is the most there was" - so hovering says
- * which it is. The note over the card names the same hours; this is for the one under the pointer.
- */
-const hourTip = (bar: HourBar, peaks: number[]): string => {
-  const spent = bar.minutes > 0 ? duration(bar.minutes) : 'quiet'
-  const top = peaks.includes(bar.hour) ? (peaks.length > 1 ? ' · among the busiest' : ' · busiest hour of the day') : ''
-
-  return `${clock(bar.hour)} · ${spent}${top}`
-}
-
-const MILLION = 1_000_000
-
-/**
- * Where the tokens come from, on the card's label: they are not the panel's own turns, and a figure that
- * looks four times the size of what the panel showed before has to say why.
- */
-const TOKENS_SOURCE =
-  "Read from Claude Code's own transcripts: every session on this machine, subagents and scenario runs included"
-
-/** Said instead of "nothing spent" while the IDE is still reading the transcripts for the first time. */
-const COUNTING_TOKENS = "counting the tokens in Claude Code's transcripts…"
-
-/** "12 403M in all · busiest day 3 162M on Oct 15". */
-const tokensNote = (tokens: TokenSeries, reading: boolean): string => {
-  if (!tokens.busiest) return reading ? COUNTING_TOKENS : 'no tokens spent in this range yet'
-  const busiest = `${tokenMillions(tokens.busiest.tokens)} on ${shortDate(tokens.busiest.date)}`
-  return `${tokenMillions(tokens.total)} in all · busiest day ${busiest}`
-}
-
-/**
- * Over which days the tokens' average is taken, when that is not the whole range - "Over the 32 days from
- * Sep 16, the first one Claude Code's transcripts still hold". Nothing when it is the whole range: then
- * the figure needs no footnote.
- */
-const averageBasis = (average: { from: string; days: number }, rangeFrom: string): string | undefined =>
-  average.from > rangeFrom
-    ? `Over the ${average.days} days from ${shortDate(average.from)}, the first one Claude Code's transcripts still hold`
-    : undefined
-
-/** "2 207M so far · busiest 14:00 with 412M". */
-const dayTokensNote = (tokens: DayTokens, reading: boolean): string => {
-  if (!tokens.peak) return reading ? COUNTING_TOKENS : 'no tokens spent today yet'
-  return `${tokenMillions(tokens.total)} so far · busiest ${clock(tokens.peak.hour)} with ${tokenMillions(tokens.peak.tokens)}`
-}
-
-/** "14:00 · 412M tokens · busiest hour of the day". */
-const tokenHourTip = (hour: number, spent: number, tokens: DayTokens): string => {
-  if (spent === 0) return `${clock(hour)} · quiet`
-  const top = tokens.peak?.hour === hour ? ' · busiest hour of the day' : ''
-  return `${clock(hour)} · ${tokenMillions(spent)} tokens${top}`
-}
-
-/** How many hours the note is willing to name before it counts them instead. */
-const NAMED_PEAKS = 3
-
-/** "09:00, 10:00 and 13:00" - an English list, for a note read as a sentence. */
-const listOf = (items: string[]): string =>
-  items.length <= 1 ? (items[0] ?? '') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
 
 const dayOfSince = (data: StatisticsData): string => {
   const date = new Date(data.since)

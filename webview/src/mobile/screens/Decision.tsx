@@ -3,7 +3,7 @@ import { modeShortLabel } from '../../catalog'
 import type { CardState } from '../../hooks/useCardState'
 import { answersOf, askReply } from '../../feed/askDraft'
 import type { PanelState } from '../../feed/panelState'
-import { awaiting } from '../../feed/streamStatus'
+import { agentLabel, askerOf, awaiting } from '../../feed/streamStatus'
 import type { AskItem, AskQuestion, FeedItem, PermItem, PlanItem, TextItem } from '../../feed/types'
 import { useT } from '../../i18n'
 import { Markdown } from '../../components/items/Markdown'
@@ -104,6 +104,8 @@ export const Decision = ({
   const permission: PermItem | undefined = waiting?.kind === 'perm' ? waiting : undefined
   const plan: PlanItem | undefined = waiting?.kind === 'plan' ? waiting : undefined
   const ask: AskItem | undefined = waiting?.kind === 'ask' ? waiting : undefined
+  /** A subagent's call is offered here as much as the conversation's own, and says whose it is (see askerOf). */
+  const asker = permission ? askerOf(permission, feed.items) : undefined
 
   /** What has been gathered for the call on screen - the rest of the application holds it by call. */
   const held = (ask ? gathering[ask.id] : undefined) ?? EMPTY_PHONE_ASK
@@ -155,6 +157,11 @@ export const Decision = ({
           <>
             <h1 className={m.decisionVerb}>{t.permission.underMode(modeShortLabel(t, permission.mode))}</h1>
             <p className={m.decisionTarget}>{permission.target}</p>
+            {asker && (
+              <p className={m.decisionContext}>
+                {[t.permission.askedBy(agentLabel(asker)), asker.meta].filter(Boolean).join(' · ')}
+              </p>
+            )}
 
             {permission.command && (
               <pre

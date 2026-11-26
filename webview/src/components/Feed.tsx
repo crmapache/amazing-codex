@@ -16,6 +16,7 @@ import { parseParagraphs } from '../feed/markdown'
 import { PIN_LIMIT, pinnedRows } from '../feed/pins'
 import { placeShift, rowAtEdge, type FeedMemory } from '../feed/place'
 import { matchSpans } from '../feed/searchText'
+import { agentsWaiting, askerOf } from '../feed/streamStatus'
 import { mathVersion, subscribeMath } from '../math'
 import type { PaintedTerm } from '../protocol'
 import type { FeedItem, FeedRowItem, ToolItem, UserItem } from '../feed/types'
@@ -48,6 +49,7 @@ import type { SignInOffer } from './items/Rows'
 import { REVEAL_UNIT, TextCard } from './items/TextCard'
 import { ToolGroupCard } from './items/ToolGroupCard'
 import { UserCard } from './items/UserCard'
+import { pastMenu } from './Menu'
 import { PinnedBar } from './PinnedBar'
 import { ScrollThumb } from './ScrollThumb'
 import { useT } from '../i18n'
@@ -121,6 +123,13 @@ interface FeedProps {
    * there. Hand in a STABLE function, for the same reason.
    */
   onCodexConfig?: () => void
+  /**
+   * Continue in terminal for this tab - the button on the `/status` row (see SessionInfoRow).
+   *
+   * Absent on the phone and in a step log: there is no terminal there. Hand in a STABLE function, for the same
+   * reason as above.
+   */
+  onTerminal?: () => void
   /**
    * Put back what a turn changed - the buttons on the list of changed files (see ChangesRow).
    *
@@ -206,7 +215,7 @@ interface FeedProps {
   pins?: readonly string[]
   /**
    * Pin this message, or unpin it. Absent where there is nothing to pin with - the phone, which has no
-   * pin button and so no strip either (the same way the reuse button is absent there).
+   * pin and so no strip either (the same way putting a message back into the field is absent there).
    */
   onPin?: (id: string) => void
   /**
@@ -242,6 +251,7 @@ export const Feed = ({
   onChooseModel,
   signIn,
   onCodexConfig,
+  onTerminal,
   onRevertChanges,
   projectRoot,
   onReuse,
@@ -352,14 +362,14 @@ export const Feed = ({
   }, [settled])
 
   /**
-   * While an unanswered permission request of the MAIN stream is open somewhere in the feed (not a
-   * subagent's - its decisions have a tab of their own, see AgentStreamView), the freshest "running" card
-   * is in fact simply waiting for a person. Without this mark both situations look like the same
-   * spinner.
+   * While an unanswered permission request of the MAIN stream is open somewhere in the feed, the freshest
+   * "running" card is in fact simply waiting for a person. Without this mark both situations look like the
+   * same spinner. A subagent's request is not it: the call it holds is inside that agent, not among the
+   * main stream's cards (see askerOf).
    */
   const lastPendingId = useMemo(() => {
     const awaitingPermission = items.some(
-      (item) => item.kind === 'perm' && item.decision === null && item.taskId === undefined,
+      (item) => item.kind === 'perm' && item.decision === null && askerOf(item, items) === undefined,
     )
     if (!awaitingPermission) return undefined
 
@@ -367,6 +377,8 @@ export const Feed = ({
       .flatMap<ToolItem>((item) => (item.kind === 'toolGroup' ? item.tools.filter((tool) => tool.pending) : []))
       .at(-1)?.id
   }, [items])
+  /** The agent cards standing on a permission of theirs - their card says so instead of pulsing on. */
+  const waitingAgents = useMemo(() => agentsWaiting(items, cards.answeredAsks), [items, cards.answeredAsks])
   /** Until the user scrolls up themselves, the feed sticks to the bottom. */
   const stick = useRef(true)
   /** The same thing, but in state - whether to draw the "down" button depends on it. */
@@ -886,6 +898,7 @@ export const Feed = ({
               item={item}
               cards={folding}
               lastPendingId={lastPendingId}
+              waitingAgents={waitingAgents}
               awaitingPlan={streaming}
               onPlanDecision={onPlanDecision}
               onDismissError={onDismissError}
@@ -893,6 +906,7 @@ export const Feed = ({
               onChooseModel={onChooseModel}
               signIn={signIn}
               onCodexConfig={onCodexConfig}
+              onTerminal={onTerminal}
               onRevertChanges={closedChanges.has(item.id) ? undefined : onRevertChanges}
               projectRoot={projectRoot}
               onReuse={onReuse}
@@ -942,6 +956,8 @@ export const Feed = ({
           type="button"
           className={s.jumpToBottom}
           onClick={jumpToBottom}
+          // Hover and one click while a menu is open, not two: the menu's scrim steps aside over it.
+          {...pastMenu}
           data-tooltip={t.feed.jumpToLatest}
           data-tooltip-at="top right"
         >
@@ -967,6 +983,8 @@ interface ItemViewProps {
   cards: CardState
   /** The id of the call genuinely awaiting permission right now (or undefined when there is none). */
   lastPendingId: string | undefined
+  /** The agent cards standing on a decision of theirs - see agentsWaiting. */
+  waitingAgents: ReadonlySet<string>
   /** Whether a turn is running: whether the buttons under a plan are alive depends on it (see PlanCard). */
   awaitingPlan: boolean
   onPlanDecision: (itemId: string, decision: 'approve' | 'keepPlanning') => void
@@ -977,6 +995,8 @@ interface ItemViewProps {
   signIn?: SignInOffer
   /** The screen of Codex's own settings - see FeedProps.onCodexConfig. */
   onCodexConfig?: () => void
+  /** See FeedProps.onTerminal. */
+  onTerminal?: () => void
   /** See FeedProps.onRevertChanges. */
   onRevertChanges?: RevertChanges
   /** See FeedProps.projectRoot. */
@@ -1013,6 +1033,7 @@ const ItemView = memo(({
   item,
   cards,
   lastPendingId,
+  waitingAgents,
   awaitingPlan,
   onPlanDecision,
   onDismissError,
@@ -1020,6 +1041,7 @@ const ItemView = memo(({
   onChooseModel,
   signIn,
   onCodexConfig,
+  onTerminal,
   onRevertChanges,
   projectRoot,
   onReuse,
@@ -1076,7 +1098,14 @@ const ItemView = memo(({
       return <ToolGroupCard item={item} cards={cards} awaitingPermissionId={lastPendingId} />
 
     case 'task':
-      return <TaskCard item={item} open={cards.isOpen(item.id)} onToggle={() => cards.toggle(item.id)} />
+      return (
+        <TaskCard
+          item={item}
+          open={cards.isOpen(item.id)}
+          onToggle={() => cards.toggle(item.id)}
+          waiting={waitingAgents.has(item.id)}
+        />
+      )
 
     case 'findings':
       return (
@@ -1120,7 +1149,7 @@ const ItemView = memo(({
       return <FastModeRow item={item} />
 
     case 'session':
-      return <SessionInfoRow item={item} />
+      return <SessionInfoRow item={item} onTerminal={onTerminal} />
 
     case 'changes':
       return <ChangesRow item={item} root={projectRoot} onRevert={onRevertChanges} />

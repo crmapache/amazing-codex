@@ -280,7 +280,6 @@ internal class ProjectCatalog(
             put("type", "init")
             put("projectName", project.name)
             put("workingDirectory", project.basePath.orEmpty())
-            ProjectFacts.gitBranch(project)?.let { put("gitBranch", it) }
             // The panel's own version, shown at the foot of the menu. Asked of the platform rather
             // than kept as a constant of ours: a second copy of a number that Gradle already patches
             // into plugin.xml is a number that will one day disagree with it.
@@ -653,31 +652,95 @@ internal class ProjectCatalog(
     /** Reading the history folder touches the disk, so it happens in the background. */
     fun sendHistory(clientId: String) {
         ApplicationManager.getApplication().executeOnPooledThread {
-            val entries = CodexHistory.list(project.basePath)
-
             // Addressed at whoever asked rather than broadcast: this is a dialog someone opened, and it
             // is of no interest to anyone else watching the same project.
+            hub.emitTo(clientId, historyMessage())
+        }
+    }
+
+    private fun historyMessage(): String {
+        val entries = CodexHistory.list(project.basePath)
+
+        return buildJsonObject {
+            put("type", "history")
+            // Whether the rows may offer deleting - see CodexHistory.canDelete.
+            put("canDelete", CodexHistory.canDelete(project.basePath))
+            putJsonArray("conversations") {
+                for (entry in entries) {
+                    addJsonObject {
+                        put("id", entry.id)
+                        put("title", entry.title)
+                        put("updatedAt", entry.updatedAt)
+                        put("messages", entry.messages)
+                        // Where the name came from: a conversation opened in a tab keeps it at
+                        // that rank - a guess is worth replacing with the model's own name once
+                        // the conversation carries on (see CodexSession.requestTitle), and the
+                        // person's own is replaced by nobody but them.
+                        put("titleSource", entry.titleSource)
+                    }
+                }
+            }
+        }.toString()
+    }
+
+    /**
+     * Deleting a past conversation from the history - by Codex itself, for good (see CodexHistory.delete). Whoever
+     * pressed is told how it went, and the list goes again to every window at this desk - each of them asked for it
+     * at its start and would go on offering a conversation that is no longer there. The phone asks afresh every time
+     * it opens its list, and cannot delete.
+     *
+     * A conversation a tab holds is not touched: its process writes into that very thread, and Codex would take the
+     * thread from under it. The panel offers no button on such a row; this is the same rule for a message that
+     * arrives anyway - asked here, right before the request, so that a tab opened on it a moment ago counts too. A
+     * deleted conversation also goes from "Recently closed": the row would only fail to bring it back.
+     *
+     * The outcome keeps the original's word `trashed` for "it is gone": the panel's protocol is shared with it.
+     */
+    fun deleteConversation(clientId: String, id: String) {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val outcome = when {
+                hub.holdsConversation(id) -> "open"
+                CodexHistory.delete(id) -> "trashed"
+                else -> "refused"
+            }
+            if (outcome == "trashed") hub.forgetClosedConversation(id)
+
             hub.emitTo(
                 clientId,
                 buildJsonObject {
-                    put("type", "history")
-                    putJsonArray("conversations") {
-                        for (entry in entries) {
-                            addJsonObject {
-                                put("id", entry.id)
-                                put("title", entry.title)
-                                put("updatedAt", entry.updatedAt)
-                                put("messages", entry.messages)
-                                // Where the name came from: a conversation opened in a tab keeps it at
-                                // that rank - a guess is worth replacing with the model's own name once
-                                // the conversation carries on (see CodexSession.requestTitle), and the
-                                // person's own is replaced by nobody but them.
-                                put("titleSource", entry.titleSource)
-                            }
-                        }
-                    }
+                    put("type", "historyDeleted")
+                    put("id", id)
+                    put("outcome", outcome)
                 }.toString(),
             )
+            hub.emitToDesk(historyMessage())
+        }
+    }
+
+    /**
+     * A past conversation named from its row in the history (ACC PR #26). Where the name goes is decided here
+     * rather than by the panel, whose list of tabs can be a step behind this one:
+     *
+     * - A conversation open in a tab is named the way its tab is (see CodexSessionHub.nameSession): the tab
+     *   wears it, and the conversation gets it through its process.
+     * - Any other one is named in Codex's record of the thread through the shared catalog process
+     *   (`thread/name/set`, see CodexHistory.rename), and a closed tab of it in "Recently closed" takes the name
+     *   too (see CodexSessionHub.renameClosedConversation). The list goes to every window at the desk afterwards,
+     *   whether Codex took the name or not: the panel shows the name at once, and a name Codex refused has to go
+     *   back.
+     */
+    fun renameConversation(id: String, title: String) {
+        val name = SessionTitle.own(title) ?: return
+
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val tab = hub.tabHolding(id)
+            if (tab != null) {
+                hub.nameSession(tab, name)
+                return@executeOnPooledThread
+            }
+
+            if (CodexHistory.rename(id, name)) hub.renameClosedConversation(id, name)
+            hub.emitToDesk(historyMessage())
         }
     }
 

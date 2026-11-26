@@ -86,8 +86,8 @@ export const MessageSheet = ({
         </span>
       </button>
 
-      {/* Cutting the conversation back to before this message - the desk's rewind button, behind the same
-          three dots as the fork beside it. It opens a sheet of its own that asks first. */}
+      {/* Cutting the conversation back to before this message - the desk's rewind, behind the same three
+          dots as the fork beside it. It opens a sheet of its own that asks first. */}
       {onRewind ? (
         <button type="button" className={m.sheetAction} onClick={onRewind}>
           <span className={m.sheetActionGlyph} style={{ color: 'var(--acc-c-rose-4)' }}>

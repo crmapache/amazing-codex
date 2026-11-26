@@ -66,7 +66,7 @@ export const AchievementFilterSwitch = ({
 
 export const useAchievementFilter = () => useState<AchievementFilter>('all')
 
-/** "9 of 46 done · 61 of 226 steps" - the head's hint. */
+/** "9 of 42 done · 61 of 192 steps" - the head's hint. */
 export const achievementsHint = (groups: DressedGroup[]): string => {
   const summary = summarize(groups)
   return `${summary.completed} of ${summary.total} done · ${summary.tiers} of ${summary.tiersTotal} steps`

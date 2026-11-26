@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { WORKLET } from './dictation'
+import { WORKLET, listenUrl } from './dictation'
 
 /**
  * The worklet runs in a thread of the browser's and cannot be imported here, so it is run the way the
@@ -93,5 +93,28 @@ describe('the dictation worklet', () => {
 
     // Dead after the flush: the graph goes on carrying silence, and none of it is wanted.
     expect(tap.process([[new Float32Array(128)]])).toBe(false)
+  })
+})
+
+/**
+ * The desk asks for the same addresses with its own code (`DeepgramStream.listenUrl`), and its test
+ * expects these same strings - a change to one side has to be a change to both.
+ */
+describe('what a dictation asks Deepgram for', () => {
+  const asked = { model: 'nova-3', language: 'en', sampleRate: 16000 }
+
+  it('asks for what the desk asks for', () => {
+    expect(listenUrl({ ...asked, trainingOptOut: false })).toBe(
+      'wss://api.deepgram.com/v1/listen?model=nova-3&language=en&encoding=linear16&sample_rate=16000' +
+        '&channels=1&smart_format=true&interim_results=true',
+    )
+  })
+
+  // Deepgram fails the handshake on any value but `true`, so the parameter is either right or absent.
+  it('adds the one parameter Deepgram reads an opt-out of training by', () => {
+    expect(listenUrl({ ...asked, trainingOptOut: true })).toBe(
+      'wss://api.deepgram.com/v1/listen?model=nova-3&language=en&encoding=linear16&sample_rate=16000' +
+        '&channels=1&smart_format=true&interim_results=true&mip_opt_out=true',
+    )
   })
 })

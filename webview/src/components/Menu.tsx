@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { Anchor } from './StatusBar'
 import s from './shell.module.css'
 
@@ -14,12 +14,42 @@ export interface MenuOption {
   /**
    * A glyph in the place of the tick - for a menu whose entries are not a choice of one out of several
    * but separate errands (see Thanks.tsx): there is nothing to tick there, while the column the tick
-   * stands in is exactly the width of an icon.
+   * stands in is exactly the width of an icon. A glyph or a drawing: the card's menu carries the very
+   * drawings its buttons used to wear (see UserCard), since ↩ and ⟲ are not in the panel's font.
    */
-  icon?: string
-  /** The icon's paint. The default is the accent's, as the tick's is; `dim` is a switch that is off. */
+  icon?: ReactNode
+  /**
+   * The icon's paint. The default is the accent's, as the tick's is; `dim` is a switch that is off, and an
+   * errand drawn in the card's own faint ink.
+   */
   iconTone?: 'accent' | 'warn' | 'dim'
+  /** The label drawn in this font family - a font's own name in the list of fonts (see Appearance). */
+  labelFont?: string
 }
+
+const PAST_MENU_ATTRIBUTE = 'data-past-menu'
+const PAST_MENU = `[${PAST_MENU_ATTRIBUTE}]`
+
+/**
+ * Spread on a control the pointer reaches through an open menu (see the scrim in Menu): it lights up under
+ * the pointer and takes the first click, and the menu closes on that click.
+ *
+ * Only for what is safe to press on the way out of a menu - it scrolls, opens or shows, and the worst a
+ * stray click does is put something in front of the person. Nothing that allows, sends or takes away.
+ * And never the button a menu is opened from: it would get the click after the menu closed and open it
+ * again.
+ */
+export const pastMenu = { [PAST_MENU_ATTRIBUTE]: true }
+
+/**
+ * The control marked with [pastMenu] the pointer stands over beyond a menu's scrim, if any.
+ *
+ * [stack] is everything under the pointer, topmost first (document.elementsFromPoint), the scrim among it
+ * or not - not, while it stands aside. Only what lies right under the scrim counts: a marked control
+ * further down is covered there by something else, and the pointer is not over it.
+ */
+export const controlPastMenu = (stack: readonly Element[], scrim: Element): Element | null =>
+  stack.find((element) => element !== scrim)?.closest(PAST_MENU) ?? null
 
 interface MenuProps {
   title: string
@@ -32,9 +62,11 @@ interface MenuProps {
   selected: string
   onPick: (id: string) => void
   onClose: () => void
+  /** One step up the stack and a scrim over the header too - a right-click menu's (see ContextMenu). */
+  raised?: boolean
 }
 
-export const Menu = ({ title, hint, width, anchor, options, selected, onPick, onClose }: MenuProps) => {
+export const Menu = ({ title, hint, width, anchor, options, selected, onPick, onClose, raised = false }: MenuProps) => {
   /*
    * The entry under the cursor, by its id - the same way the command hint above the input field does it
    * (see .suggestItemOn in SlashSuggest), and for the same reason: inside the IDE the panel is an
@@ -51,6 +83,66 @@ export const Menu = ({ title, hint, width, anchor, options, selected, onPick, on
    * light two entries at a time - the browser's under the cursor, ours on the one before it.
    */
   const [hot, setHot] = useState<string | null>(null)
+
+  /*
+   * Escape closes the menu and goes no further. Left to travel, it reached the panel's own handler, and
+   * there Escape is Stop: a person backing out of a menu stopped the turn the agent was running (see the
+   * keydown handler in App). Capture on the window is the earliest place a key is heard on this page, so
+   * the field under the menu does not see it either. A key an input method is assembling a character out
+   * of belongs to it, as everywhere in the panel.
+   */
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing) return
+      event.preventDefault()
+      event.stopPropagation()
+      onClose()
+    }
+
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [onClose])
+
+  /*
+   * The scrim takes every click beside the menu and closes it, so that a click into nowhere does not land
+   * on whatever lies under it (a form's backdrop would shut the form). A control a person heads for
+   * straight from the menu is the exception: the jump to the latest message took two clicks - one to close
+   * the menu, one for itself - and lit nothing under the pointer on the way. Lifting it above the scrim,
+   * as the selectors are, cannot work: it stands in the feed's .content, whose translateZ(0) is a stacking
+   * context of its own, and no z-index inside one reaches past it.
+   *
+   * The same goes for whatever in the feed opens a file or a picture - a chip, a path, the line of what the
+   * editor showed: the menu is open over a message, and what that message points at is the next thing
+   * reached for.
+   *
+   * So over such a control (see pastMenu) the scrim steps aside, and the control gets the pointer itself:
+   * its hover, its hint and the hand cursor (the last two are read from the element under the mouse, see
+   * Tooltips and the cursor in App), the picture behind a chip, and then its click - on which the menu
+   * closes, as on any click beside it. Asked on every movement, for the same reason as the highlight of
+   * the entries: one lost event must not leave the scrim open or shut. Written on the node rather than
+   * through state: a movement is no reason to render.
+   */
+  const scrim = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    const onMove = (event: MouseEvent) => {
+      const own = scrim.current
+      if (!own) return
+      const control = controlPastMenu(document.elementsFromPoint(event.clientX, event.clientY), own)
+      own.style.pointerEvents = control ? 'none' : ''
+    }
+
+    const onClick = (event: MouseEvent) => {
+      if (event.target instanceof Element && event.target.closest(PAST_MENU)) onClose()
+    }
+
+    document.addEventListener('mousemove', onMove, true)
+    document.addEventListener('click', onClick, true)
+    return () => {
+      document.removeEventListener('mousemove', onMove, true)
+      document.removeEventListener('click', onClick, true)
+    }
+  }, [onClose])
 
   // We stick to the button's right edge but do not let it run off the panel's sides: in the IDE the panel
   // is sometimes narrower than the menu itself.
@@ -90,9 +182,22 @@ export const Menu = ({ title, hint, width, anchor, options, selected, onPick, on
 
   return (
     <>
-      <div className={s.menuScrim} onClick={onClose} />
       <div
-        className={s.menu}
+        ref={scrim}
+        className={`${s.menuScrim} ${raised ? s.menuScrimRaised : ''}`}
+        onClick={onClose}
+        // A right click beside a right-click menu puts it away rather than opening the browser's own on top.
+        onContextMenu={
+          raised
+            ? (event) => {
+                event.preventDefault()
+                onClose()
+              }
+            : undefined
+        }
+      />
+      <div
+        className={`${s.menu} ${raised ? s.menuRaised : ''}`}
         /* One handler for the whole list rather than one per entry: a disabled entry gets no mouse events
            of its own (the browser swallows them), and here that arrives as a movement over the menu with
            no entry under it - which is precisely "nothing is highlighted". */

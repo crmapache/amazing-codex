@@ -1,15 +1,16 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { AgentStreamView } from '../../components/AgentStreamView'
 import { fastModeShown } from '../../feed/fastMode'
 import { Feed } from '../../components/Feed'
 import { WorkflowAgentView } from '../../components/items/WorkflowAgentView'
 import { StreamSwitcher } from '../../components/StreamSwitcher'
+import { TerminalCard } from '../../components/TerminalCard'
 import type { CardState } from '../../hooks/useCardState'
 import { useNow } from '../../hooks/useNow'
 import { OpenAgentContext, type OpenedAgent } from '../../hooks/useOpenAgent'
 import { contextOf } from '../../feed/build'
 import type { PanelState } from '../../feed/panelState'
-import { awaiting, buildAgentTabs, mainStatusOf, streamStatus } from '../../feed/streamStatus'
+import { agentsWaiting, awaiting, buildAgentTabs, mainStatusOf, streamStatus } from '../../feed/streamStatus'
 import { countSessionImages } from '../../feed/tokens'
 import { openedAgentOf } from '../../feed/workflow'
 import type { FeedItem, TaskItem, TodoItem } from '../../feed/types'
@@ -20,6 +21,7 @@ import type { SessionEntry } from '../projects'
 import { Back } from './Back'
 import { Magnifier, SearchCapsule } from '../../components/SearchCapsule'
 import { Composer, type OutgoingPrompt } from './Composer'
+import { SelectionQuote } from './SelectionQuote'
 import { SideQuestionCard } from '../../components/SideQuestion'
 import { ModDock } from '../../components/ModDock'
 import type { SideExchange, SideThread } from '../../feed/side'
@@ -102,6 +104,8 @@ interface ThreadProps {
   /** Quoted out of the feed and waiting above the field - see the message sheet. */
   quotes: string[]
   onDropQuote: (index: number) => void
+  /** Words selected in an answer, quoted by the button over the feed (see SelectionQuote). */
+  onQuote: (text: string) => void
   onStop: () => void
   onStopTask: (taskId: string) => void
   /**
@@ -123,7 +127,7 @@ interface ThreadProps {
   onPickTab: (session: SessionEntry) => void
   /** The model, the effort and the mode of this conversation - the sheet behind the chip. */
   onRun: () => void
-  /** One message's own actions: quote, fork, copy, pin. */
+  /** One message's own actions: quote the whole of it, fork, copy, pin. */
   onMessage: (item: FeedItem) => void
   /**
    * Text to put into the field from outside this screen - a message a rewind took out of the conversation,
@@ -186,6 +190,7 @@ export const Thread = ({
   dictates,
   quotes,
   onDropQuote,
+  onQuote,
   onSend,
   onQueue,
   side,
@@ -312,6 +317,9 @@ export const Thread = ({
   /** The newest task list the agent sent - the one line the row above the field carries. */
   const todo = useMemo(() => latestTodo(feed.items), [feed.items])
 
+  /** The box the feed scrolls in - where a selection has to be for the quote button to take it. */
+  const threadBox = useRef<HTMLDivElement | null>(null)
+
   return (
     <OpenAgentContext.Provider value={openAgent}>
       <header className={m.threadHeader}>
@@ -389,8 +397,12 @@ export const Thread = ({
         }}
       />
 
-      <div className={m.thread}>
+      <div className={m.thread} ref={threadBox}>
         {capsule && resolvedStream === 'main' ? <SearchCapsule {...capsule} /> : null}
+
+        {/* The conversation's own feed only, as the desk's selection menu: a subagent's stream is not what
+            the next message answers. */}
+        <SelectionQuote container={threadBox} on={resolvedStream === 'main'} onQuote={onQuote} />
 
         {/* One agent of a fleet, over the thread - the same window the desk draws, and needed here rather
             more: a fleet is what runs for half an hour with nobody at the machine. */}
@@ -403,7 +415,10 @@ export const Thread = ({
         ) : null}
 
         {resolvedStream !== 'main' ? (
-          <AgentStreamView item={activeTask} />
+          <AgentStreamView
+            item={activeTask}
+            waiting={activeTask ? agentsWaiting(feed.items, cards.answeredAsks).has(activeTask.id) : false}
+          />
         ) : loading && feed.items.length === 0 ? (
           <p className={m.empty}>{t.mobile.thread.loading}</p>
         ) : (
@@ -469,6 +484,9 @@ export const Thread = ({
             <span className={m.taskRowChevron}>›</span>
           </button>
         )}
+
+        {/* The desk's card without its buttons: the terminal is on the desk (see TerminalCard). */}
+        <TerminalCard state={feed.terminal} />
 
         <Composer
           facts={facts}

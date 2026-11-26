@@ -5,6 +5,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class StatsDataTest {
 
@@ -378,5 +379,61 @@ class StatsDataTest {
         val tbilisi = book.tokensByDay(java.time.ZoneId.of("Asia/Tbilisi"))
         assertEquals(120L, tbilisi["2026-10-17"]!![1])
         assertEquals(7L, tbilisi["2026-10-16"]!![13])
+    }
+
+    @Test
+    fun `the tokens by project survive the file and a merge, and come out by day`() {
+        val mine = snapshot {
+            tokens["h-1"] = TokenHome().apply {
+                recordProjects(
+                    mapOf(
+                        "p-app" to TokenProject("app").apply {
+                            hours[hourOf("2026-10-16T09:00:00Z")] = 500L
+                            hours[hourOf("2026-10-16T21:00:00Z")] = 10L
+                        },
+                    ),
+                    1_000,
+                )
+            }
+        }
+        // The other IDE's copy: one hour read further, and a project this one has not met.
+        val theirs = snapshot {
+            tokens["h-1"] = TokenHome().apply {
+                recordProjects(
+                    mapOf(
+                        "p-app" to TokenProject("app").apply { hours[hourOf("2026-10-16T09:00:00Z")] = 300L },
+                        "p-tool" to TokenProject("tool").apply { hours[hourOf("2026-10-16T10:00:00Z")] = 70L },
+                    ),
+                    2_000,
+                )
+            }
+            tokens["h-wsl"] = TokenHome().apply {
+                recordProjects(mapOf("p-app" to TokenProject("app").apply { hours[hourOf("2026-10-16T09:00:00Z")] = 5L }), 3)
+            }
+        }
+
+        val decoded = StatsJson.decode(StatsJson.encode(mine.mergedWith(theirs)))
+        assertNotNull(decoded)
+        val home = decoded.tokens["h-1"]
+        assertNotNull(home)
+        assertEquals(2_000, home.projectsReadAt)
+        assertEquals(500L, home.projects["p-app"]?.hours?.get(hourOf("2026-10-16T09:00:00Z")))
+        assertEquals("tool", home.projects["p-tool"]?.name)
+
+        // Two folders add up; four hours east, nine in the evening is the next morning.
+        val utc = decoded.tokensByProject(java.time.ZoneId.of("UTC"))
+        assertEquals(mapOf("2026-10-16" to 515L), utc["p-app"]?.days?.toMap())
+        assertEquals(mapOf("2026-10-16" to 70L), utc["p-tool"]?.days?.toMap())
+        val tbilisi = decoded.tokensByProject(java.time.ZoneId.of("Asia/Tbilisi"))
+        assertEquals(mapOf("2026-10-16" to 505L, "2026-10-17" to 10L), tbilisi["p-app"]?.days?.toMap())
+    }
+
+    @Test
+    fun `a file without projects reads as never read by project`() {
+        val decoded = StatsJson.decode("""{"version":1,"tokens":{"h-1":{"readAt":5000,"hours":{"1":10}}}}""")
+        assertNotNull(decoded)
+        assertEquals(5_000, decoded.tokens["h-1"]?.readAt)
+        assertEquals(0, decoded.tokens["h-1"]?.projectsReadAt)
+        assertTrue(decoded.tokens["h-1"]?.projects?.isEmpty() == true)
     }
 }

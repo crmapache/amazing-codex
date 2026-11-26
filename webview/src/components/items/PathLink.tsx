@@ -1,6 +1,7 @@
 import { withFileRefs, type KnownFiles, type TextRun } from '../../feed/paths'
 import { useMissingFiles, useOpenFile } from '../../hooks/useOpenFile'
 import { useT } from '../../i18n'
+import { pastMenu } from '../Menu'
 import s from '../feed.module.css'
 
 /**
@@ -35,6 +36,7 @@ export const PathLink = ({ run, children, fallback }: { run: TextRun; children?:
       className={s.pathLink}
       aria-label={`${does}: ${run.text}`}
       data-tooltip={does}
+      {...pastMenu}
       onClick={() => openFile(request)}
     >
       {children ?? run.text}

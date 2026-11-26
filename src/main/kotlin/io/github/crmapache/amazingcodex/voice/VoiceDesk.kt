@@ -84,6 +84,11 @@ internal class VoiceDesk(
         announce()
     }
 
+    fun setTrainingOptOut(optOut: Boolean) {
+        CodexPreferences.voiceTrainingOptOut = optOut
+        announce()
+    }
+
     fun setDevice(id: String) {
         CodexPreferences.voiceDevice = id
         announce()
@@ -242,6 +247,7 @@ internal class VoiceDesk(
             put("enabled", CodexPreferences.voiceEnabled)
             put("language", VoiceLanguages.sanitize(CodexPreferences.voiceLanguage))
             put("device", CodexPreferences.voiceDevice)
+            put("trainingOptOut", CodexPreferences.voiceTrainingOptOut)
             put("keyHint", VoiceKeys.hint())
 
             putJsonArray("languages") {

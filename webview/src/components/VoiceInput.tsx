@@ -16,6 +16,8 @@ export interface VoiceSettings {
   languages: VoiceLanguage[]
   device: string
   devices: VoiceDevice[]
+  /** Whether Deepgram is asked to keep dictations out of its model training. */
+  trainingOptOut: boolean
   /** The last four characters of the key, or empty. The key itself never comes back from the IDE. */
   keyHint: string
   hotkeys: Record<VoiceHotkeySlot, VoiceHotkey>
@@ -36,6 +38,7 @@ interface VoiceInputProps {
   onClear: (slot: VoiceHotkeySlot) => void
   onOpenLanguages: () => void
   onOpenDevices: () => void
+  onTrainingOptOut: (optOut: boolean) => void
   onOpenSite: () => void
   /** An address to the system browser - this page has no browser of its own (see App.openLink). */
   onOpenLink: (url: string) => void
@@ -74,6 +77,7 @@ export const VoiceInput = ({
   onClear,
   onOpenLanguages,
   onOpenDevices,
+  onTrainingOptOut,
   onOpenSite,
   onOpenLink,
 }: VoiceInputProps) => {
@@ -224,6 +228,23 @@ export const VoiceInput = ({
           <span className={s.switchHint}>{t.voice.deviceHint}</span>
         </span>
         <span className={s.rowValue}>{device}</span>
+      </button>
+
+      {/* With the hint, unlike the switch at the top: what it asks of Deepgram is not obvious from three
+          words, and the first question about it - does it cost more - has an answer worth giving here. */}
+      <button
+        type="button"
+        className={s.switchRow}
+        onClick={() => onTrainingOptOut(!settings.trainingOptOut)}
+        aria-pressed={settings.trainingOptOut}
+      >
+        <span className={s.switchText}>
+          <span className={s.switchLabel}>{t.voice.trainingOptOut}</span>
+          <span className={s.switchHint}>{t.voice.trainingOptOutHint}</span>
+        </span>
+        <span className={`${s.switchTrack} ${settings.trainingOptOut ? s.switchTrackOn : ''}`}>
+          <span className={`${s.switchKnob} ${settings.trainingOptOut ? s.switchKnobOn : ''}`} />
+        </span>
       </button>
 
       {/* The same card the menu's foot carries, for the same reason it stands last: whoever has read

@@ -18,11 +18,6 @@ export const ACHIEVEMENT_ICONS: Record<string, string> = {
   'a-year-in': 'M13.6 8a5.6 5.6 0 11-11.2 0 5.6 5.6 0 0111.2 0 M8 4.6V8l2.6 1.6',
   // A fir tree: three tiers of branches and a stump.
   'home-for-the-holidays': 'M8 2.2l3.2 4.6H9.8l2.6 3.8h-1.6l2 3.2H3.2l2-3.2H3.6l2.6-3.8H4.8z M8 13.8v1.2',
-  'hours-in-panel': 'M5.4 2.4h5.2v11.2H5.4z M5.4 9.4h5.2 M3.4 4.6h1 M3.4 11.4h1',
-  'deep-work': 'M2.6 2.6h10.8v10.8H2.6z M5.4 5.4h5.2v5.2H5.4z',
-  marathon: 'M4 13.4V2.6 M4 3.2h7.6l-1.6 2.4 1.6 2.4H4',
-  'full-day':
-    'M11.4 8a3.4 3.4 0 11-6.8 0 3.4 3.4 0 016.8 0 M8 1.6v1.6 M8 12.8v1.6 M1.6 8h1.6 M12.8 8h1.6 M3.6 3.6l1.1 1.1 M11.3 11.3l1.1 1.1 M3.6 12.4l1.1-1.1 M11.3 4.7l1.1-1.1',
   sprint: 'M9.4 2L4.6 9h3.2l-1 5 4.6-7H8.2z',
   'quick-turn': 'M3 4l4 4-4 4 M9 4l4 4-4 4',
   'long-haul': 'M2.4 8h11.2 M10.4 4.8L13.6 8l-3.2 3.2',

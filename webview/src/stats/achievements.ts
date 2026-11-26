@@ -294,19 +294,9 @@ export const closest = (groups: DressedGroup[]): ClosestAchievement | null => {
   const left = Math.max(0, best.target - best.rawValue)
   return {
     item: best,
-    remaining: `${figureOf(best, left)} to go`,
-    standing: `${figureOf(best, best.rawValue)} of ${figureOf(best, best.target)} ${unitWord(best)}`.trim(),
+    remaining: `${Math.round(left)} to go`,
+    standing: `${Math.round(best.rawValue)} of ${Math.round(best.target)} ${unitWord(best)}`.trim(),
   }
-}
-
-const figureOf = (item: DressedAchievement, value: number): string => {
-  if (item.spec.unit === 'minutes') {
-    const hours = Math.floor(value / 60)
-    const rest = Math.round(value % 60)
-    if (hours === 0) return `${rest}m`
-    return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`
-  }
-  return String(Math.round(value))
 }
 
 const unitWord = (item: DressedAchievement): string => {

@@ -1,5 +1,6 @@
 package io.github.crmapache.amazingcodex.stats
 
+import io.github.crmapache.amazingcodex.codex.ModelNames
 import java.time.Instant
 import java.time.ZoneId
 import java.util.TreeMap
@@ -184,10 +185,8 @@ internal class DayRecord {
 
     var plugins = 0
 
-    /** The longest a single conversation ran, in active minutes, and its longest unbroken stretch. */
+    /** The longest a single conversation ran, in active minutes - for the usage report (see UsageReport). */
     var longestSession = 0
-
-    var longestStretch = 0
 
     /** The most forks in one conversation's tree, and the deepest fork of a fork. */
     var maxForksInTree = 0
@@ -350,7 +349,6 @@ internal class DayRecord {
             DayRecord::mcpConnected,
             DayRecord::plugins,
             DayRecord::longestSession,
-            DayRecord::longestStretch,
             DayRecord::maxForksInTree,
             DayRecord::maxDepth,
         )
@@ -418,14 +416,62 @@ internal class TokenHome {
         readAt = maxOf(readAt, at)
     }
 
+    /**
+     * The same tokens again, by the project they were spent in (see TranscriptTokens.projectOf) - project
+     * key -> its name and its hours. What the tab's list of where the tokens went is drawn from.
+     *
+     * Beside [hours] rather than instead of them, and with a reading time of its own, because of the
+     * neighbour: an IDE running an older plugin writes this file too, knows only [hours] and [readAt], and
+     * drops everything else it finds. Its readings move [readAt] on; had the projects shared it, the next
+     * reading here would start after hours whose projects nobody had read.
+     */
+    val projects = LinkedHashMap<String, TokenProject>()
+
+    /**
+     * When the projects were last read, epoch millis. Zero until a reading has been through every
+     * transcript with them - in a book written before tokens were kept by project, and in one an older
+     * plugin saved last - and zero is what makes the next reading open every transcript there is: the
+     * history by project fills in from everything still on the disk, rather than from the day the plugin
+     * was updated.
+     */
+    var projectsReadAt = 0L
+
+    /** A reading's projects taken in, each hour at the larger of what was known and what was read - see [record]. */
+    fun recordProjects(read: Map<String, TokenProject>, at: Long) {
+        for ((key, project) in read) {
+            val known = projects.getOrPut(key) { TokenProject(project.name) }
+            if (project.name.isNotBlank()) known.name = project.name
+            known.record(project.hours)
+        }
+        projectsReadAt = maxOf(projectsReadAt, at)
+    }
+
     /** This and another copy of the same folder's figures - the larger of every hour, the later reading. */
     fun mergedWith(other: TokenHome): TokenHome {
         val merged = TokenHome()
         merged.record(hours, readAt)
         merged.record(other.hours, other.readAt)
+        merged.recordProjects(projects, projectsReadAt)
+        merged.recordProjects(other.projects, other.projectsReadAt)
         return merged
     }
 }
+
+/** One project's share of a folder of transcripts: its name and its tokens by the hour since the epoch. */
+internal class TokenProject(var name: String) {
+
+    val hours = TreeMap<Long, Long>()
+
+    /** Each hour at the larger of what was known and what was read - see [TokenHome.record]. */
+    fun record(read: Map<Long, Long>) {
+        for ((hour, tokens) in read) {
+            if (tokens > (hours[hour] ?: 0L)) hours[hour] = tokens
+        }
+    }
+}
+
+/** A project's tokens by calendar day, every folder of transcripts added up - see [StatsSnapshot.tokensByProject]. */
+internal class ProjectTokens(val name: String, val days: TreeMap<String, Long>)
 
 /**
  * Everything on disk, in memory: the projects with their days, the achievements with their moments.
@@ -467,8 +513,8 @@ internal class StatsSnapshot {
      *
      * The statistics are about a person's day, not a project's: a day at work is a day at work whichever
      * project it was spent in, and a figure that changes when another window is in front is not a figure
-     * about the person. Where the hours went by project is still shown - out of the minutes each project
-     * keeps (see StatsPayload), and that list is the one place the tab breaks the day up.
+     * about the person. Where the tokens went by project is still shown - out of the transcripts (see
+     * [tokensByProject]), and that list is the one place the tab breaks the work up.
      *
      * Records of their own, never the book's own: a day only one project knows is folded with an empty one
      * rather than handed over, so nothing that reads this can write into the book by accident.
@@ -521,6 +567,31 @@ internal class StatsSnapshot {
                 val local = Instant.ofEpochSecond(hour * 3600).atZone(zone)
                 val day = out.getOrPut(local.toLocalDate().toString()) { LongArray(24) }
                 day[local.hour] += count
+            }
+        }
+        return out
+    }
+
+    /**
+     * The tokens of every project, by calendar day in [zone] - the tab's list of where the tokens went.
+     * Added up across the folders for the same reason as [tokensByDay]; a project known to more than one
+     * folder keeps the first name that is not blank.
+     */
+    fun tokensByProject(zone: ZoneId): LinkedHashMap<String, ProjectTokens> {
+        val out = LinkedHashMap<String, ProjectTokens>()
+        for (home in tokens.values) {
+            for ((key, project) in home.projects) {
+                val known = out[key]
+                val entry = if (known == null || (known.name.isBlank() && project.name.isNotBlank())) {
+                    ProjectTokens(project.name, known?.days ?: TreeMap()).also { out[key] = it }
+                } else {
+                    known
+                }
+                for ((hour, count) in project.hours) {
+                    if (count <= 0) continue
+                    val day = Instant.ofEpochSecond(hour * 3600).atZone(zone).toLocalDate().toString()
+                    entry.days.merge(day, count, Long::plus)
+                }
             }
         }
         return out
@@ -658,9 +729,21 @@ internal object StatsJson {
                         key,
                         buildJsonObject {
                             put("readAt", home.readAt)
+                            put("hours", hourCounts(home.hours))
+                            put("projectsReadAt", home.projectsReadAt)
                             put(
-                                "hours",
-                                buildJsonObject { for ((hour, count) in home.hours) put(hour.toString(), count) },
+                                "projects",
+                                buildJsonObject {
+                                    for ((project, record) in home.projects) {
+                                        put(
+                                            project,
+                                            buildJsonObject {
+                                                put("name", record.name)
+                                                put("hours", hourCounts(record.hours))
+                                            },
+                                        )
+                                    }
+                                },
                             )
                         },
                     )
@@ -726,16 +809,31 @@ internal object StatsJson {
             val home = element as? JsonObject ?: continue
             val record = TokenHome()
             record.readAt = home["readAt"]?.jsonPrimitive?.longOrNull ?: 0L
-            val hours = home["hours"] as? JsonObject ?: JsonObject(emptyMap())
-            for ((hour, count) in hours) {
-                val number = hour.toLongOrNull() ?: continue
-                val value = (count as? JsonPrimitive)?.longOrNull ?: continue
-                if (value > 0) record.hours[number] = value
+            readHours(home["hours"], record.hours)
+            record.projectsReadAt = home["projectsReadAt"]?.jsonPrimitive?.longOrNull ?: 0L
+            val projects = home["projects"] as? JsonObject ?: JsonObject(emptyMap())
+            for ((project, projectElement) in projects) {
+                val projectObject = projectElement as? JsonObject ?: continue
+                val tokens = TokenProject(projectObject["name"]?.jsonPrimitive?.contentOrNull.orEmpty())
+                readHours(projectObject["hours"], tokens.hours)
+                if (tokens.hours.isNotEmpty()) record.projects[project] = tokens
             }
             snapshot.tokens[key] = record
         }
 
         return snapshot
+    }
+
+    private fun hourCounts(hours: Map<Long, Long>): JsonObject =
+        buildJsonObject { for ((hour, count) in hours) put(hour.toString(), count) }
+
+    private fun readHours(element: kotlinx.serialization.json.JsonElement?, into: MutableMap<Long, Long>) {
+        val map = element as? JsonObject ?: return
+        for ((hour, count) in map) {
+            val number = hour.toLongOrNull() ?: continue
+            val value = (count as? JsonPrimitive)?.longOrNull ?: continue
+            if (value > 0) into[number] = value
+        }
     }
 
     fun decodeDay(day: JsonObject): DayRecord {
@@ -752,10 +850,10 @@ internal object StatsJson {
         readCounts(day["models"], record.models)
         readCounts(day["features"], record.features)
         // A book written before the CLI's own marks were told apart from models holds rows like
-        // "<synthetic>" (see StatsCollector.isRealModel). They are dropped as the file is read rather
-        // than once at startup: this file is shared with the other JetBrains IDEs on the machine, and one
-        // of them running an older plugin would write them again.
-        record.models.keys.removeAll { !StatsCollector.isRealModel(it) }
+        // "<synthetic>", and one written before PR #25 a proxy's "custom" (see ModelNames.isModel). They
+        // are dropped as the file is read rather than once at startup: this file is shared with the other
+        // JetBrains IDEs on the machine, and one of them running an older plugin would write them again.
+        record.models.keys.removeAll { !ModelNames.isModel(it) }
         readStrings(day["files"], record.files)
         readStrings(day["slash"], record.slash)
         readStrings(day["thanksWays"], record.thanksWays)

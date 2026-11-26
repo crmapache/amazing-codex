@@ -86,11 +86,10 @@ personalizados vienen contigo. Sin proxy y sin ninguna cuenta nuestra.
 - **Todo corre en tu máquina.** Sin proxy y sin ningún servidor nuestro por el medio. Tu inicio de
   sesión de Codex pertenece al CLI: el plugin nunca lo envía a ningún sitio ni va buscando claves
   de API por tu disco.
-- **Nada sale sin tu permiso.** Sin cuenta y sin analíticas a tus espaldas. Las estadísticas
-  de uso anónimas están apagadas hasta que pulsas Permitir en la tarjeta que pregunta una sola
-  vez: solo recuentos, nunca código, mensajes ni nombres de archivo. Con ellas y el acceso
-  remoto apagados, lo único que sale es un informe que tú escribes y envías - y un botón muestra
-  antes su texto exacto.
+- **Sin cuenta, y sin analítica si no la permites.** El panel pregunta una vez si puede enviar
+  contadores diarios anónimos de uso y no envía nada hasta que pulsas Permitir: los ajustes
+  muestran antes el informe entero, y al desactivarlo se borra lo enviado. Aparte de eso, con el
+  acceso remoto apagado, nada sale de la máquina.
 - **Tus reglas siguen siendo tuyas.** Codex aplica tu configuración, su propio sandbox y su propia
   política de aprobación; el modo en pantalla es exactamente la política con la que corre el hilo,
   y el plugin nunca arranca un hilo en un modo más laxo.

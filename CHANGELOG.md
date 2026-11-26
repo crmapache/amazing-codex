@@ -5,6 +5,26 @@ Marketplace and the IDE's update dialog show, so every release lists only its ow
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-11-25
+
+- Added: continue a conversation in Codex's own interface in a terminal of the IDE, and come back to the chat with everything done there. "Continue in terminal" is in the tab's right-click menu, under /status, as /terminal in the field and as an IDE action you can bind a key to. The terminal opens `codex resume` with the tab's model, effort, mode and account; while it runs, what you write in the panel waits in the queue. When Codex exits, the turns from the terminal appear in the feed and the queue goes on.
+- Added: the list of files under a turn now shows every file the turn changed on disk, including files created or edited by shell commands and scripts, which Codex's own patches never mention. The list also shows the turn's total of files and lines, and a file the turn removed can be reverted like any other.
+- Added: right-click a tab or a row of the history to rename the conversation. A conversation not open in a tab can be deleted from the history; Codex deletes it for good, together with the agents it ran.
+- Added: the statistics tab measures work in tokens: bars by the hour for today and the week, by day or by week for longer ranges, and a card of where the tokens went by project.
+- Added: a font of the panel's own, chosen from the monospaced fonts on your computer (Settings → Appearance).
+- Added: a switch on the Voice input screen that asks Deepgram not to use your dictations to train its models.
+- Added: the panel asks Codex for a guess at your next message after each turn and shows it as gray text in the empty field, Tab takes it. Codex does not make such guesses yet; the panel asks once, and the gray text will appear by itself with a Codex that does.
+- Added: on the phone, select words in an answer to quote them, and a conversation whose agents still work after the turn shows as working.
+- Added: an account whose sign-in is gone offers "Sign in again" on the accounts screen, into that account's own drawer.
+- Changed: the feedback form is gone. The speech bubble now explains how to ask for a change - a tip on Ko-fi with the wish in the message, or a pull request - and still offers the debug report for the open tab, which you copy yourself. The form had been sending to a receiver that no longer accepts messages.
+- Changed: a message's corner has copy and a menu behind three dots instead of a row of buttons; the header's right side is new tab, fork and menu, and the "+" stands right after the last tab again.
+- Changed: a multi-line shell command shows in full in its expandable card.
+- Fixed: when the IDE's built-in browser stops, the panel says so with a restart button instead of going white, and a panel page that crashes reloads by itself.
+- Fixed: a quote from the feed lands where the caret stood in the message field, not at the end.
+- Fixed: Escape in a menu no longer reaches the panel and stops the running turn.
+- Fixed: a subagent waiting for your permission now shows it on every screen of the conversation.
+- Fixed: a conversation open in another Codex process (a terminal where it was resumed) now says so in the feed and what to do, instead of a raw error.
+
 ## [0.3.1] - 2026-10-18
 
 - Added: keyboard shortcuts for the panel's tabs and for Queue. While the focus is in the panel, the keys that switch and close editor tabs in your IDE keymap do the same to the panel's tabs: Cmd+Shift+] and Cmd+Shift+[ and Cmd+W on a Mac, Alt+Right, Alt+Left and Ctrl+F4 elsewhere. Cmd+T (Ctrl+T on Windows and Linux) opens a new tab, and Option+Enter (Alt+Enter) puts the message in the queue while Codex works. In the editor these keys keep doing what they did before. All of them are actions in Settings | Keymap, where they can be rebound, and a key that opens the panel from anywhere in the IDE can be set there too.

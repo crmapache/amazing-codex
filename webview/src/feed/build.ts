@@ -15,6 +15,7 @@ import { parseParagraphs } from './markdown'
 import { initialPanelState, push, type PanelAction, type PanelState } from './panelState'
 import { togglePin } from './pins'
 import { applyApiRetry, closeRetry, closeRetryFor } from './retry'
+import { declineSuggestion, takeSuggestion, withoutSuggestion } from './suggestion'
 import {
   appendAgentLog,
   applyReplayedTaskNotification,
@@ -237,6 +238,10 @@ export const reducePanel = (state: PanelState, action: PanelAction, now = Date.n
         stopRequestedAt: undefined,
         stoppedForAccount: undefined,
         crashed: action.status === 'running' ? false : state.crashed,
+        // A turn under way - started by the CLI itself or reconnected to - answers the guess one way or
+        // the other, and the guess after it is welcome again (see PanelState.suggestion).
+        suggestion: action.status === 'running' ? undefined : state.suggestion,
+        suggestionDeclined: action.status === 'running' ? undefined : state.suggestionDeclined,
         // Usually the turn is already marked through 'prompt' - this is only the fallback route: the
         // 'running' status caught the panel up by itself, without a local prompt (after reconnecting to a
         // background turn already under way, for instance). We do not touch what is already ticking -
@@ -329,6 +334,9 @@ export const reducePanel = (state: PanelState, action: PanelAction, now = Date.n
         ? state
         : { ...state, pausedMs: state.pausedMs + (now - state.waitStartedAt), waitStartedAt: undefined }
 
+    case 'suggestionDismissed':
+      return declineSuggestion(state)
+
     case 'stopRequested':
       return { ...state, stopRequestedAt: now }
 
@@ -341,10 +349,14 @@ export const reducePanel = (state: PanelState, action: PanelAction, now = Date.n
     case 'processExited':
       // The process is gone right in the middle of a pause before a retry - there is nobody left to
       // retry, and the card has to stop waiting along with it.
-      return applyProcessExited(closeRetry(finishCompacting(state), 'stopped', now), action.exitCode, now)
+      return applyProcessExited(
+        closeRetry(finishCompacting(withoutSuggestion(state)), 'stopped', now),
+        action.exitCode,
+        now,
+      )
 
     case 'processReplaced':
-      return applyProcessReplaced(state, now)
+      return applyProcessReplaced(withoutSuggestion(state), now)
 
     case 'streamPrimed': {
       // The same identifier the first delta would have handed out, and for the same reason: the card
@@ -380,7 +392,7 @@ export const reducePanel = (state: PanelState, action: PanelAction, now = Date.n
       // and the unfinished answer it is printing right now must not be interrupted - clearing the
       // streaming fields would wipe it off the screen mid-sentence.
       if (action.steering) {
-        return { ...state, seq: state.seq + 1, items: [...state.items, message] }
+        return { ...withoutSuggestion(state), seq: state.seq + 1, items: [...state.items, message] }
       }
 
       // A turn that ended without a result to list its files (see closeChanges) has them listed here, at
@@ -415,11 +427,15 @@ export const reducePanel = (state: PanelState, action: PanelAction, now = Date.n
         // Whatever the IDE was going to carry on is spent or set aside by this turn - its own word comes after
         // (see carryOnWait), and the row must not stand over the turn in the meantime.
         carryOn: undefined,
+        // Taken or not, the guess was about the message just sent; the next turn's is welcome again.
+        suggestion: undefined,
+        suggestionDeclined: undefined,
       }
     }
 
     case 'rewound':
-      return applyRewound(state, action.uuid, action.all === true, now)
+      // The guess answered a turn that is no longer in the conversation.
+      return applyRewound(withoutSuggestion(state), action.uuid, action.all === true, now)
 
     case 'changesReverted':
       return applyChangesReverted(state, action.id, action.files, action.restore === true)
@@ -596,8 +612,9 @@ export const reducePanel = (state: PanelState, action: PanelAction, now = Date.n
         id,
         kind: 'session' as const,
         ...(conversationId ? { conversationId } : {}),
-        // The IDE's line is about the id it named; one the feed falls back to has none of its own.
-        ...(action.conversationId && action.resume ? { resume: action.resume } : {}),
+        // The IDE's line belongs to the id it was built for: a panel that fell back to its own note of the id has
+        // no line from the IDE to go with it.
+        ...(action.conversationId && action.command ? { command: action.command } : {}),
         ...(action.account ? { account: action.account } : {}),
         ...(action.onDefault ? { onDefault: true } : {}),
       }))
@@ -607,6 +624,13 @@ export const reducePanel = (state: PanelState, action: PanelAction, now = Date.n
     // the one that changed it, and what arrives is how it stands now (see SessionQueue.kt).
     case 'queue':
       return { ...state, queue: action.items, queueHeld: action.held === true }
+
+    // A held tab is its own again, or has just been taken: either way the note about a refused try is stale.
+    case 'terminal':
+      return { ...state, terminal: action.state, terminalRefused: undefined }
+
+    case 'terminalRefused':
+      return { ...state, terminalRefused: action.reason }
 
     case 'agent':
       return noteOldest(applyAgentEvent(state, action.event, now, action.replay === true), action.event)
@@ -1279,12 +1303,15 @@ const rateLimitState = (
  * A real model - or nothing.
  *
  * Some messages are signed not with a model but with an internal mark in angle brackets: "<synthetic>",
- * for instance - the placeholder the CLI closes a turn interrupted by the person with. No model of that
- * name exists, and letting it through means declaring the conversation has moved to it: the panel would
- * name it in the bottom line and offer it as a separate row in the model list.
+ * for instance - the placeholder the CLI closes a turn interrupted by the person with. Custom proxies
+ * and model routers can also sign events with the literal placeholder "custom" alongside the real model
+ * name. No real model of that name exists, and letting it through means declaring the conversation has
+ * moved to it: the panel would name it in the bottom line and announce a fake swap in the feed. The IDE
+ * steps over the same signatures (ModelNames.isModel) when it picks the model a conversation from the
+ * history comes up on and counts the statistics' models.
  */
 const realModel = (model: string | undefined): string | undefined =>
-  model && !model.startsWith('<') ? model : undefined
+  model && !model.startsWith('<') && model.toLowerCase() !== 'custom' ? model : undefined
 
 /**
  * Is there an answer on a new model on its way, put there by the person themselves?
@@ -1457,11 +1484,11 @@ const applyAgentEvent = (
       }))
 
     /**
-     * What the turn really did to the files its diffs do not account for - said by the IDE right before the
-     * result that closes their list (see settleChanges).
+     * What the turn really did to its files - the ones its diffs do not account for, and the ones no call reported
+     * at all - said by the IDE right before the result that closes their list (see settleChanges).
      */
     case 'files_settled':
-      return settleChanges(state, event.files)
+      return settleChanges(state, event)
 
     /**
      * The subscription limit. The event arrives in ordinary life too - with a "let through" status - and
@@ -1535,11 +1562,17 @@ const applyAgentEvent = (
         waitStartedAt: undefined,
         stopRequestedAt: undefined,
         starting: false,
+        suggestion: undefined,
+        suggestionDeclined: undefined,
         items: [
           { id: `cleared-${state.seq}`, kind: 'checkpoint', chip: 'CLEAR', target: '', targetKey: 'cleared' },
         ],
       }
     }
+
+    // The CLI's guess at the next message, if it is still wanted - see takeSuggestion.
+    case 'prompt_suggestion':
+      return takeSuggestion(state, event.suggestion, replay)
 
     case 'stream_event': {
       const delta = event.event.delta
@@ -2502,6 +2535,9 @@ const agentAnswers = (state: PanelState): string[] =>
  * its only trace, and without it a conversation opened from the history consisted of answers alone, as
  * though nobody had asked for any of it.
  */
+/** The origin the CLI files a message typed by the person under - the one origin that IS the person. */
+const HUMAN_ORIGIN = 'human'
+
 const addReplayedPrompt = (
   state: PanelState,
   event: Extract<AgentEvent, { type: 'user' }>,
@@ -2516,7 +2552,14 @@ const addReplayedPrompt = (
   // (see AgentUserEvent.origin). The text below says the same thing, and is the only word about it in
   // transcripts written before the field existed - but a long enough report reaches here with its end cut
   // off, and the field is what holds then.
-  if (event.isMeta || event.parent_tool_use_id || event.origin?.kind) return state
+  //
+  // Any origin but the person's own: the CLI's own interface files every message typed into it under
+  // `origin: {kind: 'human'}` (2.1.293), and reading every origin as "not the person" dropped each of them - a
+  // conversation carried on in a terminal came back to the panel as answers with nobody asking (see
+  // terminal-handoff.md), and so did any terminal conversation opened from the history.
+  if (event.isMeta || event.parent_tool_use_id || (event.origin?.kind && event.origin.kind !== HUMAN_ORIGIN)) {
+    return state
+  }
 
   const blocks = blocksOf(event.message.content)
   const text = replayedPromptText(blocks)

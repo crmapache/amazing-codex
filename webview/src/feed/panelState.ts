@@ -1,5 +1,15 @@
 import type { FastModeReport } from './fastMode'
-import type { AgentEvent, AgentStatus, AgentUsage, EditorRef, OutrankedReason, QueuedMessage, RevertOutcome } from '../protocol'
+import type {
+  AgentEvent,
+  AgentStatus,
+  AgentUsage,
+  EditorRef,
+  OutrankedReason,
+  QueuedMessage,
+  RevertOutcome,
+  TerminalHoldState,
+  TerminalRefusal,
+} from '../protocol'
 import type {
   BackgroundTask,
   CheckpointItem,
@@ -301,6 +311,15 @@ export interface PanelState {
    */
   queueHeld: boolean
   /**
+   * A terminal holds this conversation (see TerminalDesk.kt): one the panel opened for it, or somebody else's
+   * process over the same transcript. While it does, nothing raises a process here - what is written waits in the
+   * queue - and the card over the field says why and how to come back. A state of the tab, told live by the IDE,
+   * like the queue.
+   */
+  terminal?: TerminalHoldState
+  /** Why the last Continue in terminal did not go - shown on the same card until it is closed or the next try. */
+  terminalRefused?: TerminalRefusal
+  /**
    * The files the turn going on now has changed so far - laid into the feed as one row when it ends (see
    * closeChanges in feed/changes.ts), and empty again after that.
    *
@@ -355,6 +374,21 @@ export interface PanelState {
    * no (see CarryOnRow); absent when nothing is planned. `guess`: the limit did not say when it resets.
    */
   carryOn?: { at: number; guess: boolean }
+  /**
+   * What the CLI guesses the person will type next (see PromptSuggestionEvent) - the gray text of the empty
+   * input field, put into it by Tab. Taken only while no turn runs: one that arrives after a queued message
+   * has already started the next turn answers the turn before. Gone with anything that moves the
+   * conversation on - a message, a turn starting by itself, /clear, a rewind, the process dying or replaced
+   * - and with the person's first keystroke in the field after the turn (suggestionDismissed). Kept per tab
+   * like the rest of the state, so a turn that ended in the background has its guess waiting when the tab is
+   * opened. The rules live in feed/suggestion.ts.
+   */
+  suggestion?: string
+  /**
+   * The field was touched since the last turn ended, so that turn's guess is not wanted any more - also when it
+   * had not arrived yet (see editDeclines in feed/suggestion.ts). Cleared where the next turn starts.
+   */
+  suggestionDeclined?: boolean
   /** The conversation's process has died on its own since the last turn - the tab has something to point at. */
   crashed: boolean
   /** A context compaction is running right now - the status line should name that rather than "working". */
@@ -599,10 +633,14 @@ export type PanelAction =
   | { kind: 'contextModeApplied'; mode: 'standard' | 'long'; born?: boolean }
   /** Whether this conversation asks for fast mode - the shell's word, or a pick of one's own drawn at once. */
   | { kind: 'fastModeApplied'; on: boolean }
-  /** `/status` answered: a row with the conversation's id, and the IDE's word on the terminal line (see SessionInfoItem). */
-  | { kind: 'sessionInfo'; conversationId?: string; resume?: string; account?: string; onDefault?: boolean }
+  /** `/status` answered: a row with the conversation's id, and the line for a terminal when the IDE built one. */
+  | { kind: 'sessionInfo'; conversationId?: string; command?: string; account?: string; onDefault?: boolean }
   /** The queue as the IDE now holds it - the whole list, from whichever window last changed it. */
   | { kind: 'queue'; items: QueuedMessage[]; held?: boolean }
+  /** Whether a terminal holds the conversation now - the IDE's word (see the `terminal` message). */
+  | { kind: 'terminal'; state?: TerminalHoldState }
+  /** Continue in terminal did not go, and why; `undefined` takes the note away (closed, or a new try). */
+  | { kind: 'terminalRefused'; reason?: TerminalRefusal }
   /** A mark from the panel in the feed: that this conversation was branched off another, for instance. */
   | { kind: 'checkpoint'; chip: string; target: string; targetKey?: CheckpointItem['targetKey'] }
   /** Once a second it pulls up the duration of the calls that have not finished. */
@@ -635,6 +673,8 @@ export type PanelAction =
   | { kind: 'attentionStarted' }
   /** The decision has been taken - the waiting time goes into the current turn's pausedMs. */
   | { kind: 'attentionEnded' }
+  /** The person edited the field after the turn, Tab putting the guess in included - see PanelState.suggestionDeclined. */
+  | { kind: 'suggestionDismissed' }
 
 export const initialPanelState: PanelState = {
   items: [],

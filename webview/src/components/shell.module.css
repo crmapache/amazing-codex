@@ -335,8 +335,7 @@
   min-height: 32px;
 }
 
-.headerCompact .tab,
-.headerCompact .tabAdd {
+.headerCompact .tab {
   height: 32px;
 }
 
@@ -370,6 +369,15 @@
      the hand, away from the places the gesture had measured. */
   align-content: flex-start;
   min-width: 0;
+  /* The "+" after the last tab: its size, which is the header button's own in either layout (see
+     .historyButton and its compact size), and how far it stands off the tab. The room for both is kept by
+     the last tab (see .tabTail). */
+  --acc-add: 28px;
+  --acc-add-gap: 4px;
+}
+
+.headerCompact .tabs {
+  --acc-add: 26px;
 }
 
 /* A tab is as wide as its name, and a long name first grows into the room its row has. The rows are laid
@@ -473,6 +481,24 @@
 
 .tabGroupStart:first-child {
   margin-left: 0;
+}
+
+/*
+ * The strip's last tab keeps the room the "+" stands in, as a margin of its own: a flex row wraps by its
+ * items' outer sizes, so the tab and the room go down a row together, and the "+" (whose own outer size is
+ * nothing, see .tabAdd) stays beside it on whatever row it lands. A "+" of its own width wrapped alone onto
+ * a row of its own whenever the last row was full.
+ *
+ * The basis gives way for a narrow strip: there a tab alone on its row is wider than the row, and a row
+ * already overflowing takes nothing more - not even something of no size - so the "+" went down by itself
+ * after all. Never wider than the row less the room and a group's gap, the tab and the "+" fit together.
+ *
+ * Handed by the markup to the last tab, and by hand to the one a drop is going to put last while a gesture
+ * measures it (see projectionFor in Header).
+ */
+.tabTail {
+  margin-right: calc(var(--acc-add-gap) + var(--acc-add));
+  flex-basis: min(210px, 100% - var(--acc-add-gap) - var(--acc-add) - var(--acc-group-gap, 0px));
 }
 
 /* The line-height is shared with .tabTitle: the fork sign is mono 11px while the title is sans 12px, and
@@ -759,87 +785,24 @@
   color: var(--acc-fg-faint);
 }
 
-/* The tab's own buttons (the cross and the fork) light up in the tab's group colour on hover: a grey square
-   on the open tab's coloured light read as a smudge. Translucent, so the one mix sits on the open tab's light
-   and on a plain tab alike. */
-.tabClose:hover,
-.tabForkButton:hover {
+/* The tab's own cross lights up in the tab's group colour on hover: a grey square on the open tab's coloured
+   light read as a smudge. Translucent, so the one mix sits on the open tab's light and on a plain tab alike. */
+.tabClose:hover {
   background: color-mix(in srgb, var(--acc-group-paint) 35%, transparent);
   color: var(--acc-fg);
 }
 
-.tabAdd {
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 34px;
-  flex: none;
-  font-size: 15px;
-  color: var(--acc-fg-dim);
-  /* It makes room for a dragged tab the way the tabs do (see .tab): a tab carried to the end of a row can
-     push it onto the next one. */
-  transition: transform 0.16s ease;
-}
-
-.tabAdd:hover {
-  background: var(--acc-bg-hover);
-  color: var(--acc-fg);
-}
-
-/* Fork this tab's conversation - beside the cross and in its box (see Header). On every conversation's tab
-   and always, so that no tab's width depends on it; 4px from the cross, the two read as a pair of the
-   tab's own actions. */
-.tabForkButton {
-  flex: none;
-  width: 15px;
-  height: 15px;
-  margin-right: -3px;
-  display: grid;
-  place-items: center;
-  border-radius: var(--acc-r-xs);
-  color: var(--acc-fg-faint);
-}
-
-/* Nothing to fork yet: the button keeps its place and its hint, and stops looking pressable. */
-.tabForkButtonOff {
-  opacity: 0.4;
-  cursor: default;
-}
-
-.tabForkButtonOff:hover {
-  background: none;
-  color: var(--acc-fg-faint);
-}
-
-.forkIcon {
-  flex: none;
-  width: 11px;
-  height: 11px;
-}
-
+/*
+ * The fork and the burger (see Header). 2px apart, the gap of Amazing IDE's own buttons: they are one row of
+ * the panel's actions, and their hovers nearly touching is what says so. No min-width: 0 - the two never
+ * shrink, and the tabs wrap instead.
+ */
 .headerTools {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-right: 6px;
-  /* No min-width: 0 here, and that is the point: the row may shrink only as far as its pieces can -
-     the branch down to its first few letters, the PR mark and the burger not at all (see .statusItem).
-     With min-width: 0 it went further, since flex shrinking is shared out by width wanted and a strip of
-     tabs wants many times more than "main no PR": with nine tabs this row got fifteen pixels, the branch
-     vanished and "no PR" spilled over the burger. Now it keeps what it needs, and the tabs wrap instead. */
-}
-
-/* Someone else is watching this project - a browser page beside the IDE, later a phone.
-   Deliberately quiet: it is a fact worth knowing, not a thing to look at. What it must never be is
-   absent, so that a remote connection is never a silent one (see the clients message in protocol.ts). */
-.watchers {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
   flex: none;
-  font-size: 11px;
-  color: var(--acc-fg-dim);
-  cursor: default;
+  align-items: center;
+  gap: 2px;
+  padding-right: 6px;
 }
 
 /* The icon alone: room in the header is dear, and the caption wrapped onto a second row. */
@@ -870,10 +833,31 @@
   color: var(--acc-fg);
 }
 
-.historyButton:disabled {
+.historyButton:disabled,
+.historyButton[aria-disabled='true'],
+.historyButton[aria-disabled='true']:hover,
+.historyButton[aria-disabled='true']:active {
   background: none;
   color: var(--acc-fg-ghost);
   opacity: 0.5;
+  cursor: default;
+}
+
+/* The new tab, at the end of the strip in the room the last tab keeps for it (see .tabTail). Pulled back
+   over its own width, so that its outer size is nothing: the row breaks before the last tab or not at all,
+   never between the two. */
+.tabAdd {
+  align-self: center;
+  width: var(--acc-add);
+  height: var(--acc-add);
+  /* It makes room for a dragged tab the way the tabs do (see .tab): a tab carried to the end of a row can
+     push it onto the next one. */
+  transition: transform 0.16s ease;
+}
+
+/* Only after a tab: on a strip with none it stands at the start, and pulled back it would leave the strip. */
+.tab ~ .tabAdd {
+  margin-left: calc(-1 * var(--acc-add));
 }
 
 /* --- The stream switcher --------------------------------------------------- */
@@ -1311,64 +1295,6 @@
   justify-content: flex-end;
   gap: 10px;
   flex: 1000000 0 auto;
-}
-
-/* Every meter is one whole piece: the key and the value must not drift apart. A size of its own rather than
-   an inherited one: the branch row used to stand inside .statusLine with this same font - now BranchChip
-   stands in the header (see Header.tsx), in the interface font and smaller, and without a font of its own
-   here it would read in that one. */
-.statusItem {
-  display: inline-grid;
-  /* A grid rather than a flex row, for the sake of its smallest width. The branch's column may shrink to
-     four characters and no further, the PR mark's not at all, so the smallest this chip can be is those
-     two - and that is what the header's row counts on (see .headerTools). A flex row had no such floor to
-     give: its smallest width was either the whole branch name, or nothing at all, and nothing at all left
-     the PR mark standing outside the chip, over the burger.
-
-     Four characters rather than zero, because a PR mark with no branch before it says whose PR it is to
-     nobody; and four rather than three, because the ellipsis takes one of them. Four is "main" whole - the
-     name most repositories sit on most of the time - and of a longer name three letters and the ellipsis,
-     still enough to tell feature/ from fix/. The font is monospaced, so ch is one character exactly. */
-  grid-template-columns: minmax(4ch, auto) auto;
-  align-items: baseline;
-  column-gap: 4px;
-  white-space: nowrap;
-  font: 12.5px/1.4 var(--acc-mono);
-  /* The width is counted from the room the branch name genuinely needs rather than fixed - it is given the
-     room the tabs leave free, and conversely it gives way to them itself, clipped with an ellipsis (see
-     .statusBranch), when there is not enough room for everyone. max-width is only a ceiling: even with a
-     completely empty header one branch must not take more than a third of a typical panel's width. */
-  flex: 0 1 auto;
-  max-width: 350px;
-}
-
-/* The branch is clipped to exactly the room its column is given rather than to some arbitrary constant in
-   pixels - short branches are shown whole, long ones squeeze only when there genuinely is no room. The
-   full name is then a hover away (see BranchChip). */
-.statusBranch {
-  color: var(--acc-ok-light);
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.statusPr {
-  color: var(--acc-fg-ghost);
-}
-
-.statusPrLink {
-  appearance: none;
-  background: none;
-  border: none;
-  padding: 0;
-  margin: 0;
-  font: inherit;
-  color: var(--acc-branch-light);
-  cursor: pointer;
-}
-
-.statusPrLink:hover {
-  text-decoration: underline;
 }
 
 /* --- The usage rings in the input field's bottom row ------------------------ */
@@ -1870,7 +1796,7 @@
 }
 
 /*
- * The speech bubble beside the heart (see Feedback.tsx) - the way to say something back rather than only
+ * The speech bubble beside the heart (see Feedback.tsx) - the way to ask for a change rather than only
  * to say thanks.
  *
  * The same box as the heart's in every measurement, deliberately: the two stand side by side, and a
@@ -1972,6 +1898,22 @@
 }
 
 /*
+ * A menu opened by a right click (see ContextMenu) stands one step above everything a menu usually stands
+ * over: the history it is opened from lives in the side menu's sheet, which is at 41 itself. Its scrim
+ * covers the whole panel, header included - a context menu is put away by a click anywhere outside it,
+ * and a click on another tab that switched tabs under a menu still offering the first one would act on
+ * the wrong conversation.
+ */
+.menuScrimRaised {
+  top: 0;
+  z-index: 42;
+}
+
+.menuRaised {
+  z-index: 43;
+}
+
+/*
  * The title and its hint share a line while they fit, and the hint drops whole onto the next one when
  * they do not. Left to wrap word by word, a long hint ("shift+tab cycles every mode but Don't ask" in a
  * narrow panel) broke both halves across two ragged lines at once - the title itself came out as
@@ -2028,7 +1970,14 @@
   background: var(--acc-accent-12);
 }
 
-.menuItem:disabled {
+/*
+ * The entry fades, its second line does not: on a dead entry that line is the reason it is dead and what to
+ * do about it (a pin with three up already, a rewind into a running turn - see feed/messageMenu.ts), and
+ * faded along with the rest it was the faintest text in the panel. It is already set in the faint ink of a
+ * second line, which is quiet enough beside a faded label.
+ */
+.menuItem:disabled .menuTick,
+.menuItem:disabled .menuRow {
   opacity: 0.45;
 }
 
@@ -2050,6 +1999,16 @@
 /* A switch that is off - fast mode in the model menu: its mark stays, so the entry reads as a switch, but greyed. */
 .menuIconDim {
   color: var(--acc-fg-faint);
+}
+
+/*
+ * A drawing in the tick's column rather than a glyph (see MenuOption.icon - the card's menu). Inline, an
+ * svg sits on the baseline and rides above the label beside it by its own descent; a block centred in the
+ * column's first line puts it level with the label's letters, whatever the font.
+ */
+.menuTick > svg {
+  display: block;
+  margin: 2px auto 0;
 }
 
 .menuBody {

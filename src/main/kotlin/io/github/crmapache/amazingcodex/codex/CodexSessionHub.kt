@@ -5,6 +5,7 @@ import io.github.crmapache.amazingcodex.codex.accounts.AccountIdentity
 
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.PathManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.diagnostic.thisLogger
@@ -12,17 +13,26 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.vfs.VfsUtilCore
+import com.intellij.openapi.vfs.VirtualFileManager
+import com.intellij.openapi.vfs.newvfs.BulkFileListener
+import com.intellij.openapi.vfs.newvfs.events.VFileEvent
+import com.intellij.openapi.vfs.newvfs.events.VFileMoveEvent
+import com.intellij.openapi.vfs.newvfs.events.VFilePropertyChangeEvent
 import com.intellij.util.concurrency.AppExecutorUtil
 import io.github.crmapache.amazingcodex.codex.accounts.AccountDesk
 import io.github.crmapache.amazingcodex.codex.accounts.AccountStore
 import io.github.crmapache.amazingcodex.codex.accounts.AccountsWatch
 import io.github.crmapache.amazingcodex.codex.accounts.CodexAccounts
+import io.github.crmapache.amazingcodex.codex.terminal.TerminalDesk
+import io.github.crmapache.amazingcodex.codex.terminal.TranscriptTail
 import io.github.crmapache.amazingcodex.editor.ChangeRevert
 import io.github.crmapache.amazingcodex.editor.DiskRefresh
 import io.github.crmapache.amazingcodex.editor.EditorContext
 import io.github.crmapache.amazingcodex.editor.FileReverts
 import io.github.crmapache.amazingcodex.editor.OpenInEditor
+import io.github.crmapache.amazingcodex.editor.TurnFootprint
 import io.github.crmapache.amazingcodex.editor.UnsavedEdits
+import io.github.crmapache.amazingcodex.editor.WorkTreeSnapshots
 import io.github.crmapache.amazingcodex.feedback.DiagnosticsLog
 import io.github.crmapache.amazingcodex.remote.LocalBridgeServer
 import io.github.crmapache.amazingcodex.remote.NotificationReasons
@@ -36,6 +46,7 @@ import io.github.crmapache.amazingcodex.stats.StatsCollector
 import io.github.crmapache.amazingcodex.usage.UsageReporter
 import io.github.crmapache.amazingcodex.webview.ImagePreviews
 import io.github.crmapache.amazingcodex.webview.PastedFiles
+import java.io.File
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
@@ -90,6 +101,9 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
             onError = { sessionId, text -> sendError(sessionId, text) },
             onDiagnostic = { sessionId, text -> diagnostics.forEach { it(sessionId, text) } },
             onFinished = { sessionId ->
+                // A turn the process took with it ends here, with no result to settle its files by.
+                pendingSettled.remove(sessionId)
+                footprint.drop(sessionId)
                 sendStatus(sessionId, SessionSnapshot.STATUS_IDLE)
             },
             onCrashed = { sessionId, exitCode -> sendProcessExited(sessionId, exitCode) },
@@ -110,6 +124,9 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
             ownTitle = { sessionId -> tabs.ownTitle(sessionId) },
             onRenamed = { sessionId, title -> adoptOwnTitle(sessionId, title) },
             onTurnEnded = { sessionId ->
+                // A turn may end with no result to settle its files by - stopped, cut back by a rewind - and nothing of it
+                // is to be built on after (see TurnFootprint.turnOver). After a result this has nothing left to do.
+                footprint.turnOver(sessionId)
                 // Before the status goes out, and the order is load-bearing twice over. The status is
                 // what drains this tab's queue (see runQueued), and a message queued while the turn ran
                 // must go into the process the person's choice named rather than into the one it
@@ -169,6 +186,7 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
             onRateLimits = { sessionId, figures -> usage.noteLive(figures, conversations.accountOf(sessionId)) },
             onMcpSettled = { sessionId -> catalog.mcpSettled(sessionId) },
             onAppAuthRequired = { sessionId, appId -> catalog.apps.needsAuth(sessionId, appId) },
+            heldElsewhere = { sessionId, conversationId -> terminal.holds(sessionId, conversationId) },
         )
     }
 
@@ -218,6 +236,9 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
      */
     val accounts: AccountDesk by lazy { AccountDesk(project, this, this) }
 
+    /** Conversations carried on in a terminal of the IDE, and given back to their tabs (see TerminalDesk). */
+    val terminal: TerminalDesk = TerminalDesk(project, this)
+
     /** Permissions, plans and questions - everything that stops a turn to wait for a person. */
     val permissions: SessionPermissions = SessionPermissions(this)
 
@@ -266,6 +287,22 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
      */
     private val disk: DiskRefresh = DiskRefresh(project.basePath, this)
 
+    /**
+     * Every file a turn changed, found on the disk: its patches, its shell commands and `sed`, its subagents (see
+     * TurnFootprint). The stores live with the IDE's caches - they are a snapshot of the moment, not anything anybody
+     * keeps.
+     */
+    private val footprint = TurnFootprint(
+        root = { project.basePath?.let(::File) },
+        snapshots = WorkTreeSnapshots(File(PathManager.getSystemPath(), "amazing-codex/turn-snapshots")),
+        say = { text -> DiagnosticsLog.note("editor", text) },
+    )
+
+    /**
+     * By tab: what the conversation's own settling of its patches said at the end of a turn (see TurnFiles.settle),
+     * held back until the turn's result, where the footprint's word is added to it and the two go out as one event.
+     */
+    private val pendingSettled = ConcurrentHashMap<String, String>()
     /**
      * What this project contributes to the statistics tab. It is told about everything below - the
      * stream, the messages, the tabs, the decisions - and writes it into the machine-wide ledger.
@@ -416,6 +453,24 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         onPermissionRequest { sessionId, request -> permissions.ask(sessionId, request) }
         // A lost sign-in is reported past the event stream, before the first answer.
         onDiagnostic { _, text -> auth.noteLoggedOut(text) }
+        // What the IDE writes itself - an editor saved, a refactoring, a revert - is the person's, never a turn's: the
+        // footprint leaves such a file out of the list, so "Revert all" cannot take it away (see TurnFootprint).
+        project.messageBus.connect(this).subscribe(
+            VirtualFileManager.VFS_CHANGES,
+            object : BulkFileListener {
+                override fun after(events: List<VFileEvent>) {
+                    for (event in events) {
+                        if (event.isFromRefresh) continue
+                        footprint.noteIdeWrite(event.path)
+                        when (event) {
+                            is VFileMoveEvent -> footprint.noteIdeWrite(event.oldPath)
+                            is VFilePropertyChangeEvent -> if (event.isRename) footprint.noteIdeWrite(event.oldPath)
+                            else -> Unit
+                        }
+                    }
+                }
+            },
+        )
         onRawLine { sessionId, line, replay ->
             auth.noteLoggedOut(line)
 
@@ -456,6 +511,19 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
             // ask the very process that has just finished for a fresh figure.
             if (line.contains(RESULT_MARKER)) {
                 usage.refreshContext(sessionId)
+                // What the turn really did to its files, said before its result goes out and closes their list. The
+                // conversation's own settling of its patches arrived just before (see TurnFiles.settle, held in
+                // [pendingSettled]); the footprint has the last word on every file it found: it measured the whole turn
+                // on the disk, where the settling knows only the files Codex's patches named (see TurnFootprint). The
+                // result itself, not the marker: a tool's output may hold the same words.
+                if (!replay && AgentStream.isTurnResult(line)) {
+                    val settled = pendingSettled.remove(sessionId)
+                    val found = runCatching { footprint.end(sessionId) }
+                        .onFailure { thisLogger().warn("Couldn't measure the turn's files on the disk", it) }
+                        .getOrDefault(emptyList())
+                    TurnFootprint.settledEvent(settled, found, UUID.randomUUID().toString())
+                        ?.let { event -> broadcast(sessionId, agentEnvelope(sessionId, event)) }
+                }
                 if (!replay) {
                     // The subscription usage: the turn has just cost some of the limit, and the freshest
                     // share is precisely at this process - it got it in the answer. A past conversation's
@@ -517,7 +585,7 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
      */
     fun register(client: SessionClient) {
         clients[client.id] = client
-        broadcastClients()
+        countWatchers()
     }
 
     /** A client says what it has and is caught up with the rest. */
@@ -577,6 +645,10 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
             // that opens the panel over a queue put there from a phone would otherwise show none of it.
             val waiting = queued.of(sessionId)
             if (waiting.isNotEmpty()) batch += queueMessage(sessionId, waiting)
+
+            // And whether a terminal holds it. Live rather than journalled, like the queue: it is a state
+            // and not something said in the conversation (see [terminalChanged]).
+            terminal.stateOf(sessionId)?.let { batch += terminalMessage(sessionId, it) }
 
             // And what it works at: the effort is told by nobody but us (see [changeEffort]), so a client
             // joining now has no other way to learn it. A conversation that has not started yet says
@@ -734,7 +806,7 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
 
     fun detach(clientId: String) {
         clients.remove(clientId)
-        broadcastClients()
+        countWatchers()
     }
 
     /**
@@ -799,38 +871,27 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
      * How many devices are watching over the network right now, as the agent counts them.
      *
      * Reported rather than inferred: from here, the whole relay is one client no matter how many
-     * phones are behind it, and "one client" is exactly what the panel must not say when two people
+     * phones are behind it, and "one client" is exactly what the count must not say when two people
      * are watching - or when nobody is.
      */
     fun noteRemoteWatchers(count: Int) {
-        if (remoteWatchers.getAndSet(count) != count) broadcastClients()
+        if (remoteWatchers.getAndSet(count) != count) countWatchers()
     }
 
-    private fun broadcastClients() {
-        // The panel is itself a client and is not worth telling a person about: they are looking at it.
-        // Neither is the relay's own connection - what matters there is the devices behind it, which it
-        // counts for us.
-        val local = clients.values.filterNot {
-            it.id.startsWith(PANEL_PREFIX) || it.id.startsWith(RELAY_PREFIX)
+    /**
+     * Who else is watching this project, for the statistics (see StatsCollector.noteWatchers).
+     *
+     * Counted and no longer said: the panel's header showed it once as "◉ 2" beside the branch, and both left
+     * it for a new tab and a fork (2026-10-21). The phone never read it.
+     */
+    private fun countWatchers() {
+        // The panel is itself a client and is no one else watching. Neither is the relay's own
+        // connection - what matters there is the devices behind it, which it counts for us.
+        val local = clients.values.count {
+            !it.id.startsWith(PANEL_PREFIX) && !it.id.startsWith(RELAY_PREFIX)
         }
-        val watchers = local
 
-        stats.noteWatchers(watchers.size + remoteWatchers.get())
-
-        broadcastProject(
-            buildJsonObject {
-                put("type", "clients")
-                put("count", watchers.size + remoteWatchers.get())
-                putJsonArray("clients") {
-                    watchers.forEach { watcher ->
-                        addJsonObject {
-                            put("id", watcher.id)
-                            put("local", watcher.isLocal)
-                        }
-                    }
-                }
-            }.toString(),
-        )
+        stats.noteWatchers(local + remoteWatchers.get())
     }
 
     /**
@@ -891,11 +952,18 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
             notificationListener?.invoke(sessionId, reason, targetOf(trimmed))
         }
 
-        // A phone's list is drawn from these two fields, and it is not on the receiving end of this
-        // message: it watches one conversation and hears nothing about the others. Without this the
-        // list only caught up when the phone next asked - up to half a minute later, which on a screen
-        // someone is holding reads as a card that simply refuses to say it is working.
-        if (before.status != after.status || before.awaitsYou != after.awaitsYou) inventoryChanged()
+        // A phone's list is drawn from these fields, and it is not on the receiving end of this message: it
+        // watches one conversation and hears nothing about the others. Without this the list only caught up
+        // when the phone next asked - up to half a minute later, which on a screen someone is holding reads
+        // as a card that simply refuses to say it is working. The agents count too: the work goes on after
+        // the turn that raised them, and the row says how many are left (see RemoteAgent.inventoryBody).
+        if (
+            before.status != after.status ||
+            before.awaitsYou != after.awaitsYou ||
+            before.pendingAgents.size != after.pendingAgents.size
+        ) {
+            inventoryChanged()
+        }
     }
 
     /**
@@ -945,6 +1013,16 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         if (!incoming.startsWith("{")) return
 
         val line = incoming
+        // The files the agent's patches name, its subagents' too: a file another tab's agent named is that tab's (see
+        // TurnFootprint).
+        if (!replay) footprint.noteLine(sessionId, line)
+
+        // The turn's settling of its patches waits for the turn's result, where the footprint joins it (see
+        // [pendingSettled]). Only live: a replayed one is a record, said as it was.
+        if (!replay && line.startsWith(SETTLED_START)) {
+            pendingSettled[sessionId] = line
+            return
+        }
 
         // A process reporting what it came up with names every command it knows, the MCP servers' ones
         // included - the one place they can be learned from at all (see ProjectCatalog.noteCommands).
@@ -996,6 +1074,10 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         broadcast(sessionId, envelope, JournalStrands.of(line))
     }
 
+    /** A line of the panel's own, in the envelope the agent's lines travel in. */
+    private fun agentEnvelope(sessionId: String, event: String): String =
+        """{"type":"agent","sessionId":"$sessionId","event":$event}"""
+
     fun sendStatus(sessionId: String, state: String) {
         stats.noteStatus(sessionId, running = state == SessionSnapshot.STATUS_RUNNING)
 
@@ -1046,7 +1128,7 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
                 posix = !HostOs.isWindows,
                 carried = AccountStore.OUTRANKING_VARIABLES.filter { !shell[it].isNullOrEmpty() },
             )
-            line.command?.let { put("resume", it) }
+            line.command?.let { put("command", it) }
             line.account?.let { put("account", it) }
             if (line.onDefault) put("onDefault", true)
         }.toString()
@@ -1225,6 +1307,8 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         rewinding.forget(id)
         // What this conversation was waiting to say goes with it: there is nothing left to say it to.
         queued.clear(id)
+        // A terminal holding it goes on: somebody may well be working there (see TerminalDesk.forget).
+        terminal.forget(id)
         conversations.close(id)
         forgetCarryOn(id)
         stats.noteSessionClosed(id)
@@ -1643,13 +1727,16 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
     /** Whether what this entry would bring back is on the strip already - see [reopenTab]. */
     private fun stillOpen(entry: ClosedTabs.Entry, openPanels: Set<String>): Boolean = when (entry) {
         is ClosedTabs.Panel -> entry.id in openPanels
-        is ClosedTabs.Chat -> {
-            val conversation = entry.kept.tab.conversationId
-            conversation != null && tabs.tabs().any { tab ->
-                (conversations.conversationIdOf(tab.id) ?: remembered[tab.id]?.conversationId) == conversation
-            }
-        }
+        is ClosedTabs.Chat -> entry.kept.tab.conversationId?.let(::holdsConversation) == true
     }
+
+    /** Whether a tab on the strip holds this conversation - asleep or awake. */
+    internal fun holdsConversation(conversation: String): Boolean = tabHolding(conversation) != null
+
+    /** The tab a conversation is open in, if it is - the same reading as [holdsConversation]. */
+    internal fun tabHolding(conversation: String): String? = tabs.tabs().firstOrNull { tab ->
+        (conversations.conversationIdOf(tab.id) ?: remembered[tab.id]?.conversationId) == conversation
+    }?.id
 
     /**
      * A conversation's tab back on the strip, where it stood and holding what it held - the same road a tab
@@ -1713,7 +1800,7 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         )
         if (!launch.isEmpty) conversations.rememberLaunch(id, launch)
         when {
-            onDisk -> conversations.resume(id, conversation!!)
+            onDisk -> conversations.resume(id, conversation)
             fork != null -> conversations.restoreFork(id, fork)
         }
 
@@ -1727,7 +1814,7 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         when {
             onDisk -> replayTranscript(
                 id,
-                conversation!!,
+                conversation,
                 adoptTranscriptModel = record.model.isEmpty(),
                 wakeAfter = false,
                 whenMissing = fork?.let { origin -> { bringBackFork(id, origin, launch) } },
@@ -1741,12 +1828,40 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
     }
 
     /** The tabs that can be opened again, to the windows at this desk - see [closedTabsMessage]. */
-    private fun sendClosedTabs() {
-        val message = closedTabsMessage()
+    private fun sendClosedTabs() = emitToDesk(closedTabsMessage())
+
+    /**
+     * A conversation deleted from the history (see ProjectCatalog.deleteConversation) goes from "Recently
+     * closed" too, held words and all: the row would only fail to bring it back, and the person has just said
+     * they want it gone.
+     */
+    /**
+     * A conversation named from the history while no tab held it (see ProjectCatalog.renameConversation): a
+     * closed tab of it in "Recently closed" takes the name too, or reopening it would bring the old one back.
+     */
+    fun renameClosedConversation(conversation: String, title: String) {
+        if (!closedTabs.rename(conversation, title)) return
+
+        rememberTabs()
+        sendClosedTabs()
+    }
+
+    fun forgetClosedConversation(conversation: String) {
+        if (!closedTabs.forget(conversation)) return
+
+        rememberTabs()
+        sendClosedTabs()
+    }
+
+    /**
+     * A message for every window at this desk and for no phone: the list of closed tabs, the history after a
+     * conversation was deleted from it. Not kept for whoever comes later - each window asks on its own start.
+     */
+    fun emitToDesk(json: String) {
         for (client in clients.values) {
             if (!client.isLocal) continue
-            runCatching { client.deliver(listOf(message)) }
-                .onFailure { thisLogger().warn("A client could not take the closed tabs", it) }
+            runCatching { client.deliver(listOf(json)) }
+                .onFailure { thisLogger().warn("A client at the desk could not take a message", it) }
         }
     }
 
@@ -1912,7 +2027,10 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
 
         val seen = editorSeen(withEditor, editorOnce, text)
         val running = snapshot(sessionId).get().status == SessionSnapshot.STATUS_RUNNING
-        if (PromptDelivery.waitsForTheTurn(text, running)) {
+        // Into the queue as well while a terminal holds the conversation: raising a process now would be a second
+        // writer over its transcript, and the message would be lost to a launch that refuses (see TerminalDesk).
+        val held = !running && terminal.holding(sessionId)
+        if (PromptDelivery.waitsForTheTurn(text, running) || held) {
             // An identifier of our own: the message came as a send rather than as a queued one, so
             // nobody has named it.
             enqueue(
@@ -1927,6 +2045,9 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
                 ),
                 before = null,
             )
+            // A panel that did not know of the hold yet has put its "thinking" up for this message; the tab is
+            // idle, and saying so takes it down. One that knew sent it to the queue itself (see App.submit).
+            if (held) sendStatus(sessionId, SessionSnapshot.STATUS_IDLE)
             return
         }
 
@@ -2059,6 +2180,14 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         // panel, a phone, a queued message and an answer to a question all arrive here, so saving in
         // this one place covers the lot.
         UnsavedEdits.flush(project)
+        // The project as the turn finds it - the editors saved, the agent not told yet (see TurnFootprint). A message
+        // into a running turn is part of that turn; one written while a background agent of the last turn still works
+        // keeps that turn's start, so what the agent changes meanwhile is reported too. Never on the interface thread:
+        // git takes a tenth of a second at best, and a turn without a start is only a list as it was before.
+        if (!steering && !ApplicationManager.getApplication().isDispatchThread) {
+            runCatching { footprint.begin(sessionId, carryOn = snapshot(sessionId).get().pendingAgents.isNotEmpty()) }
+                .onFailure { thisLogger().warn("Couldn't write the project down before the turn", it) }
+        }
         conversations.prompt(sessionId, text, images, context, uuid)
     }
 
@@ -2587,6 +2716,9 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
     /** Whether something may be said into this conversation now, as far as the conversation is concerned. */
     private fun freeToSay(sessionId: String): Boolean {
         if (snapshot(sessionId).get().status == SessionSnapshot.STATUS_RUNNING) return false
+        // A terminal holds the conversation: what was queued waits for it to come back (see TerminalDesk), and
+        // goes the moment it does (see [terminalReleased]).
+        if (terminal.holding(sessionId)) return false
         // Between a tab's two processes there is nothing to send into: the old conversation is gone and
         // the new one is not in yet, so this would raise a bare third one on no transcript at all. The
         // move says so itself the moment it is done (see CodexSessions.onMoved).
@@ -3163,6 +3295,8 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         }
 
         stats.noteResumed(sessionId, conversationId)
+        // A terminal holding what the tab held before is no longer this tab's business (see TerminalDesk.forget).
+        terminal.forget(sessionId)
         conversations.resume(sessionId, conversationId, wasScenarioHead)
         // The feed that was there described a different conversation: every client is told to drop it
         // rather than left showing something that no longer exists.
@@ -3190,6 +3324,8 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         wakeAfter: Boolean,
         /** What to do instead when the transcript is not on disk at all - see [lostTranscript]. */
         whenMissing: (() -> Unit)? = null,
+        /** What comes after the replay, on its thread - the queue of a tab back from the terminal (see [terminalReleased]). */
+        then: () -> Unit = {},
     ) {
         ApplicationManager.getApplication().executeOnPooledThread {
             if (whenMissing != null && CodexHistory.transcriptFile(project.basePath, conversationId) == null) {
@@ -3261,6 +3397,8 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
             } else {
                 settleRestored(sessionId)
             }
+
+            then()
         }
     }
 
@@ -3330,6 +3468,111 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         return if (own == null) conversations.forkOrigin(sessionId) else null
     }
 
+    // --- A conversation in the terminal -----------------------------------------
+
+    /**
+     * Whether a terminal holds the tab's conversation now - said to every client, live rather than into the
+     * journal: it is a state of the tab, like its queue, and not something said in the conversation. A client
+     * joining later is told in [attach].
+     */
+    fun terminalChanged(sessionId: String) {
+        emitLive(terminalMessage(sessionId, terminal.stateOf(sessionId)))
+    }
+
+    /**
+     * The conversation did not go into the terminal, and why - to the clients, which word it (see
+     * TerminalDesk.Refusal). Live: an answer to a press, not a line of the conversation.
+     */
+    fun terminalRefused(sessionId: String, reason: String) {
+        emitLive(
+            buildJsonObject {
+                put("type", "terminalRefused")
+                put("sessionId", sessionId)
+                put("reason", reason)
+            }.toString(),
+        )
+    }
+
+    private fun terminalMessage(sessionId: String, state: String?): String =
+        buildJsonObject {
+            put("type", "terminal")
+            put("sessionId", sessionId)
+            state?.let { put("state", it) }
+        }.toString()
+
+    /**
+     * The terminal has given the conversation back: what was done there goes into the feed, and what was
+     * written into the tab meanwhile goes into the conversation.
+     *
+     * Only when the tab still holds that conversation - a tab closed or given another one meanwhile has
+     * nothing to be told about this one.
+     */
+    fun terminalReleased(sessionId: String, conversationId: String) {
+        terminalChanged(sessionId)
+        if (conversations.conversationIdOf(sessionId) != conversationId) return
+
+        ApplicationManager.getApplication().executeOnPooledThread {
+            // The queue after the replay rather than beside it: what was written while the terminal held the
+            // conversation was written after everything the terminal did, and its card belongs under that.
+            runCatching { replayTerminalTail(sessionId, conversationId) { runQueued(sessionId) } }
+                .onFailure {
+                    thisLogger().warn("What was done in the terminal could not be replayed", it)
+                    runQueued(sessionId)
+                }
+        }
+    }
+
+    /**
+     * What the terminal added to the conversation, played into the feed after what the feed already holds.
+     *
+     * Anchored on the lines the journal holds rather than on a position in the file: a conversation taken by
+     * somebody else's terminal was not handed over at a moment this side wrote down (see TerminalDesk), and a
+     * uuid is unambiguous on either side of it (see TranscriptTail). When no anchor is found, the terminal
+     * rewound the conversation past it, or did more than a page's worth, the feed is drawn again from the
+     * conversation's end - the way it opens from the history, with nothing of the old feed left to disagree
+     * with it.
+     *
+     * The process is not raised for the replay: the terminal's has only just ended. It comes up the way a
+     * restored tab's does - when somebody looks at the tab, or writes into it (see [settleRestored]).
+     */
+    private fun replayTerminalTail(sessionId: String, conversationId: String, then: () -> Unit) {
+        if (CodexHistory.transcriptFile(project.basePath, conversationId) == null) return then()
+        val known = synchronized(lock(sessionId)) {
+            journal(sessionId).since(0).asReversed().asSequence()
+                .mapNotNull { entry -> TranscriptTail.uuidOf(entry.json) }
+                .take(TranscriptTail.ANCHORS)
+                .toList()
+        }
+
+        when (val tail = TranscriptTail.after(conversationId, known)) {
+            is TranscriptTail.Tail.Lines -> {
+                if (tail.lines.isEmpty()) {
+                    settleRestored(sessionId)
+                    return then()
+                }
+                tail.lines.forEach { line -> onAgentLine(sessionId, line, replay = true) }
+                // No cursor: the boundary over the feed is where it was (see withEarlier in feed/build.ts).
+                broadcast(
+                    sessionId,
+                    buildJsonObject {
+                        put("type", "replayFinished")
+                        put("sessionId", sessionId)
+                    }.toString(),
+                )
+                DiagnosticsLog.note(DiagnosticsLog.PANEL, "the terminal's turns went into the feed: ${tail.lines.size} messages")
+                settleRestored(sessionId)
+                then()
+            }
+
+            TranscriptTail.Tail.Whole -> {
+                // The conversation is the same one: what was queued for it is still meant for it (see resetJournal).
+                resetJournal(sessionId, keepQueue = true)
+                replayTranscript(sessionId, conversationId, adoptTranscriptModel = false, wakeAfter = false, then = then)
+                DiagnosticsLog.note(DiagnosticsLog.PANEL, "the feed was drawn again after the terminal")
+            }
+        }
+    }
+
     // --- The journal itself -------------------------------------------------------
 
     /**
@@ -3339,13 +3582,21 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
      * with a transcript of its own (see CodexSessions.resume), and the feed that was there belongs to
      * something else now.
      */
-    fun resetJournal(sessionId: String) {
+    fun resetJournal(
+        sessionId: String,
+        /**
+         * The feed is drawn again over the SAME conversation - back from a terminal that did more than a page's
+         * worth (see [replayTerminalTail]) - so what was queued for it still is. The reset wipes the clients' copy of
+         * the list with the rest, so it is said again.
+         */
+        keepQueue: Boolean = false,
+    ) {
         synchronized(lock(sessionId)) { journal(sessionId).reset() }
         streams[sessionId]?.clear()
         snapshots[sessionId]?.set(SessionSnapshot())
         // The tab now holds a different conversation: what was queued was meant for the one it replaced,
         // and saying it into this one would be answering a question nobody here asked.
-        if (queued.clear(sessionId)) sendQueue(sessionId, emptyList())
+        if (!keepQueue && queued.clear(sessionId)) sendQueue(sessionId, emptyList())
 
         deliver(
             buildJsonObject {
@@ -3375,6 +3626,8 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
         // second press on the same row of the history opened a second tab on one transcript, and a
         // search's jump into the conversation waited under its veil for a process that might not come.
         conversations.conversationIdOf(sessionId)?.let { emitLive(conversationMessage(sessionId, it)) }
+        // And what it is waiting to say, when that was kept - the reset wiped every client's copy of it.
+        if (keepQueue) queued.of(sessionId).takeIf { it.isNotEmpty() }?.let { sendQueue(sessionId, it) }
     }
 
     private fun conversationMessage(sessionId: String, conversationId: String): String =
@@ -3772,6 +4025,9 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
 
         private const val RESET_MARKER = "\"type\":\"conversation_reset\""
 
+        /** How the turn's settling of its patches begins (see TurnFiles.settle, which writes the type first). */
+        private val SETTLED_START = "{\"type\":\"${TurnFiles.SETTLED_TYPE}\""
+
         /** The end of a turn - the one moment the context window and the usage have genuinely moved. */
         private const val RESULT_MARKER = "\"type\":\"result\""
 
@@ -3828,7 +4084,6 @@ internal class CodexSessionHub(private val project: Project) : Disposable {
             "commands",
             // The commands a conversation came to know after its catalogue - a mod's (see AddedCommands).
             "addedCommands",
-            "clients",
             "remoteState",
             "mcpServers",
             "plugins",

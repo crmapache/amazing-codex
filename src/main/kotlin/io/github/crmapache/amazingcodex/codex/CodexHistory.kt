@@ -112,6 +112,48 @@ internal object CodexHistory {
     }
 
     /**
+     * Whether the history's rows may offer deleting (ACC 0.13.57). Codex deletes a thread by its own request
+     * (`thread/delete`), wherever its files live, so the only thing that rules it out is a project with no folder
+     * to list threads for.
+     */
+    fun canDelete(workingDirectory: String?): Boolean = CodexHome.of(workingDirectory).projectPaths.isNotEmpty()
+
+    /**
+     * Deletes a past conversation for good, through Codex: `thread/delete` takes the thread out of Codex's record
+     * and its files off the disk, together with the threads its agents ran in (read in Codex's source, 0.163). Not
+     * the original's trash: a rollout file moved away from under Codex's index stays in `thread/list` (see the
+     * listing's `reset`), and one put back would not come back into it. Whether Codex took it.
+     *
+     * The id is checked to be a plain one before it goes anywhere - it comes from a message of the panel.
+     */
+    fun delete(id: String): Boolean {
+        if (!PLAIN_ID.matches(id)) return false
+        val answer = CodexCatalog.ask("thread/delete", buildJsonObject { put("threadId", id) })
+        if (answer.result == null) {
+            thisLogger().warn("Codex did not delete thread $id: ${answer.error}")
+            return false
+        }
+        files.remove(id)
+        return true
+    }
+
+    /**
+     * Names a past conversation in Codex's record of the thread (`thread/name/set`) through the shared catalog
+     * process - one no tab holds. Whether Codex took the name.
+     */
+    fun rename(id: String, name: String): Boolean {
+        if (!PLAIN_ID.matches(id)) return false
+        val answer = CodexCatalog.ask(
+            "thread/name/set",
+            buildJsonObject {
+                put("threadId", id)
+                put("name", name)
+            },
+        )
+        return answer.result != null
+    }
+
+    /**
      * The conversation's file on disk - if Codex has written one. A thread that has not said a word yet
      * has none, and that is what tells a tab worth resuming from an empty one (see CodexSessions.moveTo).
      */
@@ -616,6 +658,9 @@ internal object CodexHistory {
 
     /** How many pages of the thread list are read at most for one listing - see [list]. */
     private const val MAX_LIST_PAGES = 10
+
+    /** A thread id as Codex writes it: letters, digits and hyphens - nothing a message could turn into a path or an argument. */
+    private val PLAIN_ID = Regex("[A-Za-z0-9-]{1,64}")
 
     /** A line's weight on the wire: what a relay frame is measured in. */
     internal fun utf8Bytes(line: String): Int {

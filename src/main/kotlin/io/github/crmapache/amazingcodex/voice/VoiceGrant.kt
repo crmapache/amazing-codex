@@ -77,6 +77,9 @@ internal object VoiceGrant {
                         // person speaking, and choosing it twice in two places is a setting that drifts.
                         put("language", VoiceLanguages.sanitize(CodexPreferences.voiceLanguage))
                         put("model", DeepgramStream.MODEL)
+                        // The machine's too, for the same reason: what the person asked of Deepgram at the
+                        // desk holds for the words they say into the phone.
+                        put("trainingOptOut", CodexPreferences.voiceTrainingOptOut)
                     }
 
                     DeepgramAccount.Grant.Rejected -> refusal(id, DeepgramStream.KEY_REFUSED)

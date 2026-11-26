@@ -1,7 +1,6 @@
 package io.github.crmapache.amazingcodex.usage
 
 import com.intellij.openapi.diagnostic.thisLogger
-import io.github.crmapache.amazingcodex.feedback.FeedbackSender
 import io.github.crmapache.amazingcodex.net.IdeHttp
 import java.net.URI
 import java.net.http.HttpClient
@@ -12,7 +11,7 @@ import java.time.Duration
 /**
  * The two requests the usage report makes: a report, and "forget everything under this identifier".
  *
- * Through the IDE's own proxy and certificates (see IdeHttp), like the feedback form's request - inside a
+ * Through the IDE's own proxy and certificates (see IdeHttp), like the relay and Deepgram - inside a
  * company neither is optional. Both answer only whether they went through: the caller has nothing to show
  * anybody about a report that did not arrive, it simply tries again later.
  */
@@ -49,7 +48,7 @@ internal object UsageSender {
         status in 200..299
     }.getOrElse { failure ->
         // The kind of failure only: the most ordinary one is no network, and it is not worth more than a line.
-        thisLogger().info("The usage $what did not go: ${FeedbackSender.describe(failure)}")
+        thisLogger().info("The usage $what did not go: ${IdeHttp.describe(failure)}")
         false
     }
 

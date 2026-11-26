@@ -1,7 +1,7 @@
-import { compactNumber, duration, durationTight, groupThousands } from './format'
+import { compactNumber, groupThousands } from './format'
 
 /**
- * The fifty-two achievements as a person reads them: the name, the hint under it, the group it sits in and
+ * The achievements as a person reads them: the name, the hint under it, the group it sits in and
  * how its figure is put into words.
  *
  * The rules - which figure, and where the five lines are - live on the IDE's side (see Achievements.kt),
@@ -9,7 +9,7 @@ import { compactNumber, duration, durationTight, groupThousands } from './format
  * only dresses them. A test on either side fails if the two lists part ways.
  */
 
-export type AchievementUnit = 'count' | 'days' | 'minutes' | 'lines'
+export type AchievementUnit = 'count' | 'days' | 'lines'
 
 export interface AchievementSpec {
   id: string
@@ -49,12 +49,11 @@ export interface AchievementGroup {
 /*
  * A name is a name, and a hint is what is measured. Neither says the line it is measured against.
  *
- * The card carries that line already - the figure against its target underneath ("2/30", "7h52/8h") and the
+ * The card carries that line already - the figure against its target underneath ("2/30", "18k/50k") and the
  * tier beside the name - so a hint that repeated it said the same thing twice ("30 active days without a
  * gap" over "2/30"), and a name that was the line itself read as a claim that had not come true: "10 hours"
- * over "7h52/8h" is the fifth line standing above the third. The chains measuring one and the same figure -
- * the hours in the panel, the lines written - are told apart by a title of their own rather than by the
- * number they end at.
+ * over "7h52/8h" was the fifth line standing above the third. A figure measured along one ladder - the
+ * lines written - is told apart by a title of its own rather than by the number it ends at.
  *
  * Where a figure does belong in a hint it says what the measure means rather than what it wants - "Replies
  * before 8:00", "Replies that ran past 10 minutes". Such a figure is written out in full, with a no-break
@@ -160,39 +159,10 @@ export const ACHIEVEMENT_GROUPS: AchievementGroup[] = [
     ],
   },
   {
-    id: 'hours',
-    name: 'HOURS',
-    note: 'time the agent carried instead of you',
+    id: 'pace',
+    name: 'PACE',
+    note: 'how the replies ran',
     items: [
-      {
-        id: 'hours-in-panel',
-        name: 'Old timer',
-        hint: 'Time in the panel, up to 10\u00a0000 hours.',
-        unit: 'minutes',
-        done: () => 'done',
-        note: (value) => `${duration(value)} in the panel`,
-      },
-      {
-        id: 'deep-work',
-        name: 'Deep work',
-        hint: 'The longest unbroken stretch in one chat.',
-        unit: 'minutes',
-        note: (value) => `${duration(value)} without leaving a tab`,
-      },
-      {
-        id: 'marathon',
-        name: 'Marathon',
-        hint: 'The most time spent in a single chat.',
-        unit: 'minutes',
-        note: (value) => `a ${durationTight(value)} single session`,
-      },
-      {
-        id: 'full-day',
-        name: 'Full day',
-        hint: 'The most time in the panel in one day.',
-        unit: 'minutes',
-        note: (value) => `${duration(value)} in one day`,
-      },
       {
         id: 'sprint',
         name: 'Sprint',
@@ -466,7 +436,7 @@ export const TIER_COUNT = 5
 export const ROMAN = ['', 'I', 'II', 'III', 'IV', 'V']
 
 /**
- * The figure against its target, in the achievement's own words: "23/30", "2h51/4h", "18k/100k", and
+ * The figure against its target, in the achievement's own words: "23/30", "18k/100k", and
  * once the top is reached, whatever the achievement calls being done.
  */
 export const achievementValue = (spec: AchievementSpec, value: number, target: number | undefined): string => {
@@ -476,9 +446,8 @@ export const achievementValue = (spec: AchievementSpec, value: number, target: n
     return figure(spec.unit, value)
   }
 
-  if (spec.unit === 'minutes') return `${durationTight(value)}/${durationTight(target)}`
   return `${figure(spec.unit, value)}/${figure(spec.unit, target)}`
 }
 
 const figure = (unit: AchievementUnit, value: number): string =>
-  unit === 'minutes' ? duration(value) : unit === 'lines' ? compactNumber(value) : groupThousands(value)
+  unit === 'lines' ? compactNumber(value) : groupThousands(value)

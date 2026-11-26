@@ -591,6 +591,18 @@ describe('the model swapped by the CLI itself', () => {
     expect(modelSwitches(state)).toEqual([])
   })
 
+  it('ignores a "custom" placeholder signature without announcing a model switch', () => {
+    const state = play([
+      initEvent('deepseek-ai/DeepSeek-V4.1-Flash-1017'),
+      signedTextEvent('deepseek-ai/DeepSeek-V4.1-Flash-1017', 'Hello.'),
+      signedTextEvent('custom', 'Still here.'),
+    ])
+
+    expect(state.model).toBe('deepseek-ai/DeepSeek-V4.1-Flash-1017')
+    expect(state.switchedFrom).toBeUndefined()
+    expect(modelSwitches(state)).toEqual([])
+  })
+
   it('keeps quiet about a change the person asked for themselves', () => {
     let state = play([initEvent('gpt-5.6-sol'), signedTextEvent('gpt-5.6-sol', 'Hello.')])
     state = reducePanel(state, { kind: 'modelRequested', model: 'gpt-5.6-terra' })
@@ -4008,6 +4020,22 @@ describe('a task notification out of a transcript', () => {
 
       expect(state.items.filter((item) => item.kind === 'user')).toHaveLength(0)
     })
+
+    // The CLI's own interface files what the person typed under `origin: human` - the one origin that is the
+    // person. Read as "not the person", every message of a conversation carried on in a terminal was dropped.
+    it('is shown as the person when the origin says it is one', () => {
+      const state = replay([
+        {
+          type: 'user',
+          message: { role: 'user', content: 'Hello from the IDE terminal' },
+          origin: { kind: 'human' },
+        } as AgentEvent,
+      ])
+
+      const users = state.items.filter((item) => item.kind === 'user')
+      expect(users).toHaveLength(1)
+      expect(JSON.stringify(users[0])).toContain('Hello from the IDE terminal')
+    })
   })
 
   it('skips a notification that names no call at all', () => {
@@ -4191,6 +4219,16 @@ describe('repeated requests to the API', () => {
     expect(cards(state)[0]).toMatchObject({ reason: 'overloaded', attempt: 1, maxRetries: 10, pending: true })
     expect(cards(state)[0]?.retryAt).toBe(START + 600)
     expect(state.retry?.attempt).toBe(1)
+  })
+
+  // A queued message has started the next turn and its request is being retried; the guess for the turn before
+  // arrives only now. It says nothing about this request and must leave the waiting card as it is.
+  it("is not closed by a late guess at the next message", () => {
+    let state = reducePanel(initialPanelState, { kind: 'agent', event: retryEvent(1, 600) }, START)
+    state = reducePanel(state, { kind: 'agent', event: { type: 'prompt_suggestion', suggestion: 'run the tests' } }, START + 300)
+
+    expect(state.retry?.attempt).toBe(1)
+    expect(cards(state)[0]).toMatchObject({ attempt: 1, pending: true })
   })
 
   it('lets the next attempts go into the same card rather than breed new ones', () => {
@@ -4617,5 +4655,73 @@ describe('the answer to /status', () => {
     const state = reducePanel(initialPanelState, { kind: 'sessionInfo' })
 
     expect(rows(state)[0]).not.toHaveProperty('conversationId')
+  })
+})
+
+describe("the CLI's guess at the next message", () => {
+  const NOW = 1_700_000_000_000
+  const guess = (suggestion: string): AgentEvent => ({ type: 'prompt_suggestion', suggestion })
+  const prompt = (state: PanelState, text: string, steering = false): PanelState =>
+    reducePanel(state, { kind: 'prompt', tokens: [{ kind: 'text', value: text }], quotes: [], steering }, NOW)
+
+  /** A turn asked for and answered - the guess comes a moment after its result. */
+  const answered = (): PanelState =>
+    play([textEvent('Done. Want tests too?'), resultEvent(1000)], prompt(initialPanelState, 'write it'))
+
+  it('waits in the tab once the turn is over', () => {
+    expect(play([guess('  yes, add the tests ')], answered()).suggestion).toBe('yes, add the tests')
+  })
+
+  // A queued message has already started the next turn: the guess answers the turn before it.
+  it('is dropped when it arrives into a running turn', () => {
+    const running = prompt(answered(), 'from the queue')
+
+    expect(play([guess('yes, add the tests')], running).suggestion).toBeUndefined()
+  })
+
+  it('never comes out of a replay, nor out of an empty one', () => {
+    const replayed = reducePanel(answered(), { kind: 'agent', event: guess('run the tests'), replay: true }, NOW)
+
+    expect(replayed.suggestion).toBeUndefined()
+    expect(play([guess('   ')], answered()).suggestion).toBeUndefined()
+  })
+
+  it('goes with a message, a turn the CLI starts itself and a keystroke in the field', () => {
+    const waiting = play([guess('run the tests')], answered())
+
+    expect(prompt(waiting, 'something else').suggestion).toBeUndefined()
+    expect(prompt(waiting, 'by the way', true).suggestion).toBeUndefined()
+    expect(reducePanel(waiting, { kind: 'status', status: 'running' }, NOW).suggestion).toBeUndefined()
+    expect(reducePanel(waiting, { kind: 'suggestionDismissed' }, NOW).suggestion).toBeUndefined()
+    // The turn coming free is not news to the guess.
+    expect(reducePanel(waiting, { kind: 'status', status: 'idle' }, NOW).suggestion).toBe('run the tests')
+  })
+
+  // The field touched between the turn's end and the guess - typed and wiped again - is the same first keystroke
+  // as one made over the gray text: the guess arriving after it is not taken.
+  it('is not taken once the field was touched after the turn, even before it came', () => {
+    const touched = reducePanel(answered(), { kind: 'suggestionDismissed' }, NOW)
+
+    expect(play([guess('yes, add the tests')], touched).suggestion).toBeUndefined()
+  })
+
+  // Typing while the agent still works is about the next message, not about a guess that does not exist yet.
+  it('is still taken after typing while the turn ran, and welcome again on the next turn', () => {
+    const typedDuringTurn = reducePanel(prompt(initialPanelState, 'write it'), { kind: 'suggestionDismissed' }, NOW)
+    const afterTurn = play([textEvent('Done. Want tests too?'), resultEvent(1000), guess('yes')], typedDuringTurn)
+    expect(afterTurn.suggestion).toBe('yes')
+
+    const declined = reducePanel(answered(), { kind: 'suggestionDismissed' }, NOW)
+    const nextTurn = play([textEvent('Here.'), resultEvent(800), guess('run them')], prompt(declined, 'go on'))
+    expect(nextTurn.suggestion).toBe('run them')
+  })
+
+  it('goes with /clear, a rewind and the process', () => {
+    const waiting = play([guess('run the tests')], answered())
+
+    expect(play([{ type: 'conversation_reset' }], waiting).suggestion).toBeUndefined()
+    expect(reducePanel(waiting, { kind: 'rewound', uuid: 'u-1', all: true }, NOW).suggestion).toBeUndefined()
+    expect(reducePanel(waiting, { kind: 'processExited', exitCode: 1 }, NOW).suggestion).toBeUndefined()
+    expect(reducePanel(waiting, { kind: 'processReplaced' }, NOW).suggestion).toBeUndefined()
   })
 })

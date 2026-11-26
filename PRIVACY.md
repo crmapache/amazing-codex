@@ -1,24 +1,21 @@
 # Privacy
 
-_Last updated: 2 October 2026_
+_Last updated: 25 November 2026_
 
-Amazing Codex GUI is a panel for OpenAI's Codex CLI inside JetBrains IDEs. With four exceptions, all
+Amazing Codex GUI is a panel for OpenAI's Codex CLI inside JetBrains IDEs. With three exceptions, all
 described below, it sends nothing anywhere: the agent runs on your machine, the conversation stays on
 your machine, and the plugin has no account of any kind. It collects no analytics unless you allow the
-anonymous usage statistics described in the fourth exception.
+anonymous usage statistics described in the third exception.
 
 The first exception is **remote access**, which lets you answer your agent from your phone. It is off
 when the plugin is installed and stays off until you turn it on. Most of this page is about what
 happens when you do.
 
-The second is **feedback** - the form behind the speech bubble beside the heart. Nothing travels from
-it unless you write something and press Send; see "Feedback" at the end of this page.
-
-The third is **voice input** - dictation with a Deepgram key of your own. It is off until you turn it
+The second is **voice input** - dictation with a Deepgram key of your own. It is off until you turn it
 on and add a key, and it records only while you hold the hotkey or the microphone button is lit; see
 "Voice input" below.
 
-The fourth is **anonymous usage statistics**: daily counts of how the panel is used, which help the
+The third is **anonymous usage statistics**: daily counts of how the panel is used, which help the
 author decide what to work on. The panel asks once, and nothing is sent unless you press Allow; see
 "Usage statistics" below.
 
@@ -113,38 +110,39 @@ address. If you do, everything on this page becomes "logs on your own server" in
 See the relay's README for how to deploy it - by Docker, by Node, or on any host that can run a
 small Node service.
 
-## Feedback
+## Feedback and the debug report
 
-The panel has a form for telling the plugin's author something - a bug, an idea, or nothing in
-particular. It sends only when you press Send, and it sends only these things:
+The panel no longer sends feedback. Up to version 0.3.1 it had a form behind the speech bubble beside
+the heart, which posted a message - with an optional address, files and a debug report - to a service
+that forwarded it to the author's Telegram. The form is gone: the screen behind the bubble now explains
+how to ask for a change, through a tip on Ko-fi or a pull request on GitHub, and its two buttons only
+open those pages in your browser. What you do there is between you and Ko-fi or GitHub.
 
-- **What you wrote**, and which of the three kinds you picked.
-- **Your email address, if you filled it in.** It is optional, it is kept on your machine so you need
-  not type it twice, and it is used to answer you and for nothing else. Nothing is ever sent to it by
-  the plugin itself.
-- **The files you attached**, if you attached any.
-- **A debug report**, if you left that switch on. It is offered with a bug report only - on an idea or
-  a hello the switch is off and cannot be turned on, because there is nothing for the report to describe.
+The address the old form remembered on your machine is deleted the first time a newer version starts.
+The service at `feedback.mzpizote.com` stays up only to answer copies of the plugin that still have the
+form: it reads what they post, throws it away, and replies with a line about Ko-fi and pull requests.
+It forwards nothing and keeps nothing; its log records that one request was turned away and how big it
+was, never what was in it.
 
-The debug report is the part worth being exact about. It contains: the plugin's version, your IDE and
-its build, your operating system and processor architecture, the version of Codex, an outline of
-what the current conversation did, anything that failed, and a few counts of what the plugin did on its
-own - how many messages a conversation was opened with, for instance, or that a batch of them did not
-reach the panel.
+The same screen still offers a **debug report** for the tab that is open, for when you write about a bug
+in a pull request or the author asks you about one. The plugin never sends it anywhere: it is built when
+you open it, shown to you in full, and copied only when you press Copy - after that it goes wherever you
+paste it.
+
+It contains: the plugin's version, your IDE and its build, your operating system and processor
+architecture, the version of Codex, an outline of what the current conversation did, anything that
+failed, and a few counts of what the plugin did on its own - how many messages a conversation was opened
+with, for instance, or that a batch of them did not reach the panel. With remote access on, it also says
+what a paired phone asked for: that it opened a conversation, that a message from it arrived (how long it
+was and how many pictures it carried, never its words), that a copy of one was dropped, or that a request
+was turned away and why.
 
 The outline is a list of shapes rather than contents - "a Read call, 118 bytes in, 4 kilobytes back, at
 this many seconds". It does **not** contain your messages, the agent's answers, the contents of any
 file, the commands it ran, the paths on your disk, the names of your files, your project's name, or
 your Codex account. File names appear only as twelve characters of a hash, so that the same file reads
-as the same file without saying which one it is.
-
-You can read the whole report before sending it: the form has "See exactly what gets attached", and
-what it shows is the entire string that travels. There is no fuller version kept back for the wire.
-
-It goes to `feedback.mzpizote.com`, a small service run by the plugin's author on the same server as
-the relay, which forwards it to the author's Telegram and keeps nothing itself. Its logs record that a
-message arrived, roughly how big it was and when - never what was in it. Once forwarded, the message
-lives in that Telegram chat for as long as the author keeps it.
+as the same file without saying which one it is. What the screen shows is the entire string the Copy
+button copies; there is no fuller version.
 
 ## Voice input
 
@@ -165,11 +163,16 @@ the meantime and nothing is listening while you are not dictating.
 **Nothing is recorded.** The audio is not written to disk, not kept in memory past the moment it is
 sent, and not logged; the words come back into the input field and are yours from then on. The plugin's
 own debug report never contains any of it - what a dictation writes there is that one happened, in
-which language, at what sample rate.
+which language, at what sample rate, and whether it opted out of model training.
 
 What Deepgram does with the audio is between you and Deepgram: they are the processor here, under
 whatever terms your account with them says. The plugin sends the audio, the chosen language and nothing
 else - no file names, no project name, no part of your conversation.
+
+By default Deepgram may keep audio to improve its models, under its Model Improvement Program. The
+"Opt out of model training" switch on the Voice input screen asks it not to, on every dictation, from the
+desk and from your phone alike (`mip_opt_out=true` on the request). The switch is off until you turn it
+on, which leaves your account as Deepgram set it up.
 
 **Dictating from your phone** works the same way, with one difference: the phone records with its own
 microphone and streams to Deepgram itself, so the audio never crosses the relay. The key stays in the
@@ -278,7 +281,7 @@ in `~/.codex` - `config.toml`, sessions, skills, prompts, logs - and Codex's own
 conversation history are the same whichever account is in force; only the sign-in differs. Removing an
 account deletes its folder and nothing it links to.
 
-**Nothing about accounts is sent anywhere.** The list is not in a feedback report: the debug buffer
+**Nothing about accounts is sent anywhere.** The list is not in the debug report: the debug buffer
 records shapes only - that an account was added, that the current one changed, that it changed in
 another IDE, that a turn was stopped so a conversation could move - never an address, a folder or a
 credential. Today's token count remains a figure for the whole machine rather than per account,
@@ -291,8 +294,8 @@ cannot add an account or sign in: that happens in a terminal and a browser on yo
 ## Your choices
 
 - Remote access is off by default; the plugin does nothing over the network until you turn it on.
-- Feedback is sent only when you press Send, and only what the form lists - with the debug report shown
-  to you in full beforehand, and switchable off.
+- The plugin sends no feedback. The debug report on the feedback screen is shown to you in full and
+  leaves your machine only if you copy it and paste it somewhere yourself.
 - You can revoke any paired device at any time, from the panel: menu → Remote access.
 - You can reset this IDE's identity entirely, which drops every pairing at once.
 - You can run your own relay.

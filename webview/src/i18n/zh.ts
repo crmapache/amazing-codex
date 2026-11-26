@@ -25,7 +25,8 @@ export const zh: Dict = {
       mcp: { title: 'MCP 服务器', hint: '状态 · 登录 · 重新连接' },
       plugins: { title: '插件', hint: '已安装 · 浏览 · 市场' },
       settings: { title: '设置', hint: '面板的行为和提示音' },
-      appearance: { title: '外观', hint: '主题和文字大小' },
+      appearance: { title: '外观', hint: '主题、文字大小和字体' },
+      font: { title: '字体', hint: '面板用的字体' },
       sounds: { title: '提示音', hint: '面板需要你的时候' },
       calmColors: { title: '柔和配色', hint: '仪表用什么颜色画' },
       indicators: { title: '指示器', hint: '输入框周围保留什么' },
@@ -51,8 +52,8 @@ export const zh: Dict = {
       customModels: { title: '自定义模型', hint: 'Codex 没有列出的那些' },
       language: { title: '语言', hint: '面板使用的语言' },
       accounts: { title: 'Codex 账号', hint: '这些工作由哪个订阅付费' },
-      feedback: { title: '反馈', hint: '问题、想法，或者只是打个招呼' },
-      feedbackLog: { title: '将要附带的内容', hint: '发送之前的完整报告' },
+      feedback: { title: '反馈', hint: '如何提出修改' },
+      feedbackLog: { title: '调试报告', hint: '完整报告，可复制' },
       usageStats: { title: '使用统计', hint: '匿名计数，仅在你允许时' },
       usageStatsReport: { title: '将要发送的内容', hint: '下一次发送的完整报告' },
     },
@@ -65,7 +66,7 @@ export const zh: Dict = {
       remote: { label: '远程访问', sub: '状态、中继、已配对设备' },
       accounts: { label: 'Codex 账号', sub: '不用退出登录也能切换' },
       settings: { label: '设置', sub: '主题、提示音、新对话、语言' },
-      feedback: { label: '发送反馈', sub: '问题、想法，或者只是打个招呼' },
+      feedback: { label: '反馈', sub: '如何提出修改' },
     },
 
     author: {
@@ -165,6 +166,13 @@ export const zh: Dict = {
     darkWord: '深色',
     lightWord: '浅色',
     auto: '自动',
+    font: '字体',
+    followConsoleFont: '与控制台一致',
+    followConsoleFontSub: (font) => `跟随 IDE 的控制台字体 - 当前是 ${font}`,
+    ownFont: '单独设置字体',
+    ownFontSub: '只影响面板 - 编辑器和终端保持不变',
+    ownFontChosen: (font) => `${font}，只用于面板`,
+    fontsNote: '这台电脑上的等宽字体。面板按终端的方式排版，代码和表格的列才能对齐。',
   },
 
   restoreTabs: {
@@ -257,7 +265,7 @@ export const zh: Dict = {
       hint: 'Business 席位每月消费上限的圆环 - 仅在席位设有上限时显示',
     },
     tokens: { label: '今日 token', hint: '今天消耗的，所有项目合计' },
-    feedback: { label: '反馈按钮', hint: '打开反馈表单的气泡 - 菜单里始终可以打开' },
+    feedback: { label: '反馈按钮', hint: '打开反馈页面的气泡 - 菜单里始终可以打开' },
     thanks: { label: '爱心', hint: '一颗星、一条评价、向朋友推荐，或打赏一下' },
   },
 
@@ -269,6 +277,11 @@ export const zh: Dict = {
     reopen: (key) => (key ? `在原位置重新打开 · ${key}` : '在原位置重新打开'),
     fork: '分叉',
     messages: (n) => `${n} 条消息`,
+    delete: '删除',
+    deleteTitle: '删除这个对话？',
+    deleteNote: 'Codex 会永久删除它，连同它启动过的代理一起删除，无法恢复。',
+    deleteOpen: (title) => `“${title}”正在标签页中打开。请先关闭该标签页再删除。`,
+    deleteRefused: (title) => `Codex 无法删除“${title}”，所以它仍在这里。`,
   },
 
   search: {
@@ -779,6 +792,8 @@ export const zh: Dict = {
       search: '搜索对话',
       fork: '从所选内容分叉',
       forkWhen: '在消息流中选中文本时',
+      terminal: '在终端中继续',
+      terminalWhen: 'IDE 操作，指定前没有快捷键',
     },
   },
 
@@ -841,6 +856,9 @@ export const zh: Dict = {
     deviceDefault: '系统默认',
     deviceDefaultHint: '跟随系统的设置',
     deviceNote: '改动会在下一次听写时生效。',
+
+    trainingOptOut: '不用于模型训练',
+    trainingOptOutHint: '请求 Deepgram 不保留你的听写内容，也不用它来改进模型。Pay as you go 和 Growth 套餐的价格不受影响。',
 
     promo: {
       title: '喜欢在这里口述吗？',
@@ -1000,8 +1018,31 @@ export const zh: Dict = {
     fork: '分叉此对话：新标签页从这里接着聊，当前这个保持不变',
     forkEmpty: '还没有可以分叉的内容：这个标签页里还没有对话',
     renameTab: '重命名对话',
+    tabMenu: '这个对话',
     menu: '菜单',
-    watchers: (n) => `另有 ${n} 个客户端正在看这个项目`,
+  },
+
+  terminal: {
+    label: '终端',
+    continue: '在终端中继续',
+    show: '显示终端',
+    back: '回到聊天',
+    here: '这个会话正在终端中继续',
+    hereBody:
+      '在这里写的内容会在队列中等待，会话回来后再发送。“回到聊天”会关闭终端，Codex 在那里正在做的事会停止。',
+    elsewhere: '这个会话已在另一个终端中打开',
+    elsewhereBody: '在那边关闭它，就能在这里继续。在此之前，这里写的内容会在队列中等待。',
+    atDesk: '这个会话正在电脑上的终端中。这里写的内容会在队列中等待，回到聊天后再发送。',
+    refused: '无法在终端中继续',
+    reasons: {
+      noConversation: '这个标签页还没有会话，请先发送一条消息。',
+      busy: 'Codex 正在工作或在等你回答。请在这一轮结束后再试。',
+      background: '这个会话中还有后台代理或命令在运行，它们会随之停止。',
+      notFound: '在这台机器上没有找到 Codex。',
+      account: '无法使用这个标签页的账号。请在账号界面检查。',
+      noTerminal: '无法打开 IDE 终端。',
+    },
+    dismiss: '关闭',
   },
 
   side: {
@@ -1105,6 +1146,7 @@ export const zh: Dict = {
     copyBlock: '复制这段代码',
     copyReply: '复制整条回复',
     moreActions: '更多',
+    messageMenu: '这条消息',
     copyMessage: '复制这条消息，附件以路径形式复制',
     editor: {
       selected: (n, name) => `${name} 中的 ${n} 行`,
@@ -1113,7 +1155,6 @@ export const zh: Dict = {
     },
     reuse: {
       label: '修改后重新发送',
-      hint: '把这条消息放回输入框，修改后重新发送',
       lostImages: (n: number): string =>
         n === 1
           ? '会回到输入框，但粘贴的图片带不回来，请重新附上'
@@ -1121,7 +1162,7 @@ export const zh: Dict = {
     },
     rewind: {
       label: '回退到这里',
-      hint: '回退到这里：这条消息及之后的一切都会离开对话',
+      hint: '这条消息及之后的一切都会离开对话',
       steering: '这条是在 Codex 工作时写的 - 请回退到开启那一轮的消息',
     },
     forkWhole: '这个分叉没能在所选消息处截断，所以带上了整段对话。',
@@ -1270,11 +1311,12 @@ export const zh: Dict = {
       terminal: '在终端中',
       copyId: '复制会话 ID',
       terminalNote: '在项目文件夹中打开的终端里继续这个会话',
-      terminalNoteOn: (account: string): string =>
-        `在项目文件夹中打开的终端里，以 ${account} 继续这个会话`,
-      terminalNoteDefault: (account: string): string =>
-        `在项目文件夹中打开的终端里继续这个会话，但使用的是 Codex 的默认登录，而不是 ${account}`,
-      unnamedAccount: '此标签页的账号',
+      terminalNoteAccount: (name: string): string =>
+        name
+          ? `用账号 ${name}，在项目文件夹中打开的终端里继续这个会话`
+          : '用这个标签页的账号，在项目文件夹中打开的终端里继续这个会话',
+      terminalNoteDefault: (name: string): string =>
+        `会用 Codex 的普通登录继续，而不是 ${name || '这个标签页的账号'}。“在终端中继续”会保留账号`,
       none: '还没有 ID，会话在第一条消息时获得',
     },
     outranked: {
@@ -1344,6 +1386,7 @@ export const zh: Dict = {
     changes: {
       all: (n) => `全部显示（${n}）`,
       fewer: '收起',
+      files: (n) => `${n} 个文件`,
       revert: '撤销此文件的改动',
       revertAll: '全部撤销',
       reverting: '正在撤销…',
@@ -1371,6 +1414,7 @@ export const zh: Dict = {
       label: '排队中',
       hint: (n) => `${n} 条会在本轮结束后按顺序发出 · 拖动可调整顺序`,
       held: (n) => `${n} 条会在你发出下一条消息后按顺序发出（它们等待的那一轮已停止） · 拖动可调整顺序`,
+      terminal: (n) => `${n} 条会在会话从终端回来后按顺序发出 · 拖动可调整顺序`,
       edit: '在输入框中编辑',
       editing: (key, button) => `正在输入框中编辑 · 按 ${key} 或点「${button}」放回这里`,
     },
@@ -1456,6 +1500,7 @@ export const zh: Dict = {
     logout: '退出登录',
     logoutConfirm: '退出 Codex？',
     forget: '忘记',
+    signInAgain: '重新登录',
     add: '添加账号',
     adding: '等待登录完成…',
     cancel: '取消',
@@ -1486,6 +1531,7 @@ export const zh: Dict = {
       'already-here': '该账号已经在这里了：它就是 Codex 自己的登录（codex login），因此未添加任何账号。',
       'logout-failed': '退出失败。请在终端中尝试。',
       'already-running': '已经有一个登录在进行中了。',
+      'no-drawer': '从这个项目访问不到这个账号，所以没有开始登录。',
       unknown: '这次没成功。',
     } as Record<string, string>,
   },
@@ -1547,40 +1593,26 @@ export const zh: Dict = {
   },
 
   feedback: {
-    button: '报告问题或提个想法',
-    kinds: {
-      bug: { label: '问题', placeholder: '发生了什么？你原本期待的是什么？' },
-      idea: { label: '想法', placeholder: '你希望这个面板能做什么？' },
-      hello: { label: '打招呼', placeholder: '随便说点什么 - 这会到一个人手里，不是排队系统。' },
+    button: '想改点什么？',
+    lead:
+      '这个插件由我一个人开发，它占用了我 Codex 订阅的很大一部分和大量时间。所以我不再在这里接收需求和问题报告。如果你想改点什么，有两种方式：',
+    ways: {
+      tip: {
+        title: '支持并提出需求',
+        body: '在 Ko-fi 上打赏，并在留言里写下你想要什么。我来实现。',
+      },
+      code: {
+        title: '自己动手',
+        body: '代码是公开的：做出修改并提交 pull request。我会审阅，也可能会合并。',
+      },
     },
-    email: '邮箱',
-    emailOptional: '可不填',
-    attachments: '附件',
-    addFiles: '添加文件',
-    removeFile: (name) => `移除：${name}`,
-    attachTotal: (count, max, size, budget) => `${count} / ${max} · ${size} / ${budget}`,
-    logs: '附带调试日志',
-    logsFromTab: (tab) => `来自标签页 ${tab} - `,
-    logsFromOpenTab: '来自当前打开的标签页：',
-    logsWhat:
-      '版本、耗时和出错的地方。不含你的对话内容、文件名和路径 - 而且发送前你可以整份读一遍。',
-    logsOnlyBug: '只在报告问题时可用：这份报告是在讲哪里出了错，而这里没有可讲的。',
-    seeWhat: '看看究竟会附带什么',
-    send: '发送',
-    sending: '发送中…',
-    sentPartly: (note) => `已发送，但不是全部。${note}`,
-    sent: '已发送。谢谢 ❤️ - 这会直接到我手里。',
-    notSent: '没能发出去。什么都没丢 - 再试一次吧。',
+    thanks: '感谢你使用这个插件',
+    report: '这个标签页的调试报告',
     reportNote: (tab) =>
-      `这就是附件的全部内容，一字不差${tab ? `，对应标签页 ${tab}` : ''}。它是在你的 IDE 里、用插件自己看到的东西拼出来的：版本、那次对话的形状，以及所有失败的地方。文件名以短哈希出现，同一个文件读起来还是同一个，但不会说是哪一个。`,
+      `可以附在关于问题的 pull request 里，或者在我需要时发给我。这是完整的报告${tab ? `（标签页 ${tab}）` : ''}，在你的 IDE 里根据插件自己看到的内容生成：版本、对话的结构以及出错的地方 - 不包含对话里的任何文字。文件名以短哈希显示。`,
     building: '正在生成…',
     copy: '复制',
-    problems: {
-      empty: '先写几句吧。',
-      tooLong: (max) => `超过 ${max} 个字符了。`,
-      tooMany: (max) => `最多 ${max} 个文件。`,
-      tooHeavy: (budget) => `这些文件加起来超过 ${budget} 了。`,
-    },
+    copied: '已复制',
   },
 
   mcp: {
@@ -1698,6 +1730,7 @@ export const zh: Dict = {
         waitingQuestion: '等你处理 · 提问',
         waitingPlan: '等你处理 · 计划',
         working: '进行中',
+        agents: (n) => `${n} 个子智能体进行中`,
         done: '完成',
       },
       reach: {
@@ -1863,6 +1896,9 @@ export const zh: Dict = {
       addNote: '添加账号留在电脑上完成：它会在那台机器上打开终端和浏览器登录。',
       forgetAsk: (name) => `忘记 ${name}？它的凭据会从那台机器上删掉；账号本身不受影响，重新登录即可找回。`,
       logoutAsk: '退出 Codex？这会在 OpenAI 一侧吊销凭据 - 你所有机器上的登录都会失效。',
+      signInAtDesk: '没有存下来的登录凭据。重新登录需要那台机器上的终端和浏览器，所以要在电脑上完成。',
+      forgetSignedOutAsk: (name) =>
+        `把 ${name} 从列表里移除？它已经退出登录了，不会吊销任何东西；在电脑上重新登录即可找回。`,
     },
 
     newSession: {
@@ -1944,8 +1980,6 @@ export const zh: Dict = {
 
   status: {
     todayTokens: '今天所有项目消耗的 token',
-    openPr: '在浏览器中打开 pull request',
-    noPr: '无 PR',
     effortHint: (effort) => `思考强度：${effort}`,
     modelHint: (model) => `模型：${model}`,
     modelHintSwitched: (model, from) => `模型：${model} - Codex 自己从 ${from} 切了过来`,
@@ -1980,6 +2014,7 @@ export const zh: Dict = {
     label: '授权',
     decisions: { once: '这次允许', always: '总是允许', deny: '拒绝' },
     underMode: (mode) => `${mode}模式`,
+    askedBy: (agent) => `来自 ${agent}`,
   },
 
   selectors: {
@@ -2053,6 +2088,7 @@ export const zh: Dict = {
     btwArgument: '<问题>',
     fast: '切换快速模式 - 回答更快，额度消耗也更快',
     status: '这个会话的 ID，以及在终端中继续它的命令',
+    terminal: '在 IDE 终端中继续这个会话，之后再回到聊天',
     model: '切换本次会话使用的模型',
     effort: '设置 Codex 动手前思考多久',
     codeReview: '用 Codex 自带的审查器审查更改',

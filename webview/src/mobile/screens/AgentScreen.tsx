@@ -8,6 +8,8 @@ import { EmptyPlate } from './EmptyPlate'
 interface AgentScreenProps {
   /** Absent when the agent has gone from the feed under this screen - see the note below. */
   task: TaskItem | undefined
+  /** Whether it stands on a decision of its own - see agentsWaiting. */
+  waiting: boolean
   onStop: () => void
   onBack: () => void
 }
@@ -23,7 +25,7 @@ interface AgentScreenProps {
  * The stream itself is the panel's own component, for the reason the feed is: an agent's log that reads
  * differently on the two screens is worse than one that is only on one of them.
  */
-export const AgentScreen = ({ task, onStop, onBack }: AgentScreenProps) => {
+export const AgentScreen = ({ task, waiting, onStop, onBack }: AgentScreenProps) => {
   const t = useT()
 
   return (
@@ -54,7 +56,11 @@ export const AgentScreen = ({ task, onStop, onBack }: AgentScreenProps) => {
       <div className={m.thread}>
         {/* The agent is gone from the feed under this screen - the conversation was switched, or its
             journal was reset. Saying so beats a blank screen with a back arrow on it. */}
-        {task ? <AgentStreamView item={task} /> : <EmptyPlate title={t.mobile.tasks.agentGone} inset />}
+        {task ? (
+          <AgentStreamView item={task} waiting={waiting} />
+        ) : (
+          <EmptyPlate title={t.mobile.tasks.agentGone} inset />
+        )}
       </div>
     </>
   )

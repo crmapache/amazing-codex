@@ -292,23 +292,61 @@ const withHeadCounts = (items: FeedItem[], heads: Map<string, { added: number; r
   )
 
 /**
- * The turn's list with each file the IDE settled taking its figures and edits from it (see FilesSettledEvent): the
- * file's whole change in the turn, measured on the disk, in place of the sum of its diffs - which did not take the
- * file to what stands there, so a revert by them could only refuse. A file the list does not hold stays out of it:
- * the IDE settles every file the turn's edits named, and the list leaves out the ones that changed nothing.
+ * The turn's list with what the IDE settled at its end (see FilesSettledEvent).
+ *
+ * A file the list holds takes its figures and edits from it: the file's whole change in the turn, measured on the
+ * disk, in place of the sum of its diffs - which did not take the file to what stands there, so a revert by them
+ * could only refuse. A file the list does not hold joins it, after the others: the turn changed it by a road no call
+ * reported - the agent's Python or `sed`, a subagent (whose results reach the stream without a diff), a generator it
+ * ran. Reported by Max with a turn of a hundred and eighty files listed as five.
+ *
+ * Such a file is named by the event rather than by a call, so a list made of them alone is named the same in every
+ * feed built from the journal (see closeChanges).
  */
-export const settleChanges = (state: PanelState, files: FilesSettledEvent['files']): PanelState => {
-  if (!state.turnChanges.some((file) => files.some((settled) => settled.path === file.path))) return state
+export const settleChanges = (state: PanelState, event: Pick<FilesSettledEvent, 'files' | 'turn'>): PanelState => {
+  if (event.files.length === 0) return state
 
-  return {
-    ...state,
-    turnChanges: state.turnChanges.map((file) => {
-      const settled = files.find((candidate) => candidate.path === file.path)
-      if (!settled) return file
-      const { uncounted: _uncounted, ...counted } = file
-      return { ...counted, added: settled.added, removed: settled.removed, edits: settled.edits }
-    }),
-  }
+  const settledOf = new Map(event.files.map((settled) => [pathKey(settled.path), settled]))
+  const listed = new Set(state.turnChanges.map((file) => pathKey(file.path)))
+  const marks = (settled: FilesSettledEvent['files'][number]) => ({
+    ...(settled.deleted ? { deleted: true as const } : {}),
+    ...(settled.uncounted ? { uncounted: true as const } : {}),
+  })
+
+  const settledList = state.turnChanges.map((file): FileChange => {
+    const settled = settledOf.get(pathKey(file.path))
+    if (!settled) return file
+    const { uncounted: _uncounted, deleted: _deleted, ...counted } = file
+    return { ...counted, added: settled.added, removed: settled.removed, edits: settled.edits, ...marks(settled) }
+  })
+
+  const workingDirectory = state.project?.workingDirectory ?? ''
+  const firstCall = `disk-${event.turn ?? state.seq}`
+  const found = event.files
+    .filter((settled) => !listed.has(pathKey(settled.path)))
+    .map(
+      (settled): FileChange => ({
+        path: settled.path,
+        shown: shortenPath(settled.path, workingDirectory),
+        added: settled.added,
+        removed: settled.removed,
+        created: settled.created === true,
+        firstCall,
+        ...(settled.edits ? { edits: settled.edits } : {}),
+        ...marks(settled),
+      }),
+    )
+
+  return { ...state, turnChanges: [...settledList, ...found] }
+}
+
+/**
+ * One spelling of a path for telling files apart: the CLI on Windows writes `\` and the drive as typed, the IDE `/` -
+ * and the IDE names a file it found on the disk from the project's root, the CLI as the agent wrote it.
+ */
+const pathKey = (path: string): string => {
+  const forward = path.replace(/\\/g, '/')
+  return /^[A-Za-z]:/.test(forward) ? forward.toLowerCase() : forward
 }
 
 /**
@@ -328,6 +366,27 @@ export const projectRelative = (path: string, root: string | undefined): string 
   const same = head === base || (/^[A-Za-z]:/.test(base) && head.toLowerCase() === base.toLowerCase())
   return same && full.charAt(base.length) === '/' ? full.slice(base.length + 1) : null
 }
+
+/**
+ * A file's figures as its row says them. A file the turn created shows how long it came out - what was added less
+ * what the later edits took out again - and nothing removed: there was nothing in it to remove.
+ */
+export const countsShown = (file: FileChange): { added: number; removed: number } =>
+  file.created ? { added: Math.max(file.added - file.removed, 0), removed: 0 } : { added: file.added, removed: file.removed }
+
+/**
+ * The lines the whole turn added and removed - the sum of what the rows say, so the head never disagrees with
+ * the rows under it. A file nobody could count (the "±" row) adds nothing to it.
+ */
+export const totalOf = (files: FileChange[]): { added: number; removed: number } =>
+  files.reduce(
+    (sum, file) => {
+      if (file.uncounted) return sum
+      const counts = countsShown(file)
+      return { added: sum.added + counts.added, removed: sum.removed + counts.removed }
+    },
+    { added: 0, removed: 0 },
+  )
 
 /** The call this result answers, among the feed's own cards. */
 const callOf = (state: PanelState, id: string): ToolItem | undefined => {

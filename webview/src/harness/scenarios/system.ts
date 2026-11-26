@@ -765,6 +765,28 @@ export const scenariosSystem: Scenario[] = [
   ]),
 
   /**
+   * The CLI wiped its own ordinary sign-in - a refresh the server turned down - while the work went on on
+   * another account. The row stays, signed out, instead of vanishing (see CodexAccounts.keepsSignedOutDefault):
+   * open the menu, "Codex accounts". "Sign in again" plays the terminal and the landing (every third press
+   * refuses), "Forget" takes the row off.
+   */
+  scenario('sign-in-lost', 'The ordinary sign-in was lost', 'system', [
+    checkpoint('Work runs on Personal, and the ordinary sign-in is signed out but still on the list', [
+      shell({
+        type: 'accounts',
+        capability: 'supported',
+        current: 'a2',
+        accounts: [
+          { id: '', alias: 'Main', email: 'you@company.com', plan: '', health: 'absent', isDefault: true },
+          { id: 'a2', alias: 'Personal', email: 'you@personal.com', plan: 'pro', health: 'present' },
+          { id: 'a4', alias: 'Work', email: 'you@work.com', plan: 'team', health: 'present' },
+        ],
+      }),
+      wait(500),
+    ]),
+  ]),
+
+  /**
    * Fast mode (see feed/fastMode.ts), asked for in the panel: the model menu's "Fast mode", or `/fast` in the
    * field - the switch is live from the first checkpoint, and the menu quotes Codex's own line about Sol's tier.
    * The thread opens on the fast tier and the mark on MODEL lights up; at the second turn Codex runs without it,
@@ -877,6 +899,33 @@ export const scenariosSystem: Scenario[] = [
     checkpoint('The /clear turn ends', [
       agent({ type: 'assistant', message: { content: [{ type: 'text', text: '(no content)' }] } }),
       turnResult(300),
+    ]),
+  ]),
+
+  /**
+   * The CLI's guess at the next message (see PanelState.suggestion): gray in the empty field once the turn
+   * is over, put into the field by Tab, gone with the first keystroke. The third checkpoint is the late one:
+   * a message already started the next turn, and the guess for the turn before must not show up over it.
+   */
+  scenario('prompt-suggestion', 'The next message, guessed', 'system', [
+    checkpoint('The agent answers and offers tests', [
+      user('Add a retry with backoff to the payment webhook'),
+      wait(300),
+      ...textReply('Done: the webhook now retries up to three times with exponential backoff. Want me to add tests for it?'),
+      turnResult(4200),
+      wait(300),
+    ]),
+    checkpoint('The guess waits in the field', [
+      agent({ type: 'prompt_suggestion', suggestion: 'yes, add tests for the retry' }),
+      wait(300),
+    ]),
+    checkpoint('A guess late for the next turn stays away', [
+      user('Also log every retry attempt'),
+      wait(300),
+      agent({ type: 'prompt_suggestion', suggestion: 'yes, add tests for the retry' }),
+      wait(300),
+      ...textReply('Every retry is now logged with its attempt number and delay.'),
+      turnResult(2600),
     ]),
   ]),
 

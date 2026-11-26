@@ -1,6 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import { addDays, dayNumber, daysBetween, weekday } from './dates'
-import { clock, compactNumber, duration, durationDelta, durationTight, groupThousands, longDate, money, shortDate, tokenMillions, tokenScale, turnLength } from './format'
+import {
+  clock,
+  compactNumber,
+  groupThousands,
+  longDate,
+  money,
+  monthYear,
+  shortDate,
+  shortMonth,
+  tokenAmount,
+  tokenDelta,
+  tokenScale,
+} from './format'
 
 describe('figures', () => {
   it('sets thousands off with a narrow space', () => {
@@ -18,9 +30,15 @@ describe('figures', () => {
   })
 
   it('says tokens in millions, and on a scale as short as it gets', () => {
-    expect(tokenMillions(2_794_300_000)).toBe('2 794M')
-    expect(tokenMillions(586_000_000)).toBe('586M')
-    expect(tokenMillions(18_430)).toBe('18.4k')
+    // Billions from a thousand millions up, three figures that matter: "57 673M" was digits to count.
+    expect(tokenAmount(57_673_000_000)).toBe('57.7B')
+    expect(tokenAmount(2_794_300_000)).toBe('2.79B')
+    expect(tokenAmount(2_800_000_000)).toBe('2.8B')
+    expect(tokenAmount(3_000_000_000)).toBe('3B')
+    expect(tokenAmount(138_327_000_000)).toBe('138B')
+    expect(tokenAmount(999_400_000)).toBe('999M')
+    expect(tokenAmount(586_000_000)).toBe('586M')
+    expect(tokenAmount(18_430)).toBe('18.4k')
     expect(tokenScale(0)).toBe('0')
     expect(tokenScale(500_000_000)).toBe('500M')
     expect(tokenScale(1_000_000_000)).toBe('1B')
@@ -29,25 +47,10 @@ describe('figures', () => {
     expect(tokenScale(500_000)).toBe('500k')
   })
 
-  it('says minutes as hours and minutes', () => {
-    expect(duration(0)).toBe('0m')
-    expect(duration(45)).toBe('45m')
-    expect(duration(2290)).toBe('38h 10m')
-    // Tenths of an hour above the hour, and plain minutes below it: "4h13/8h" ran two figures together.
-    expect(durationTight(171)).toBe('2.9h')
-    expect(durationTight(240)).toBe('4h')
-    expect(durationTight(253)).toBe('4.2h')
-    expect(durationTight(59)).toBe('59m')
-    expect(durationTight(6765)).toBe('112.8h')
-    expect(durationDelta(360)).toBe('+6h')
-    expect(durationDelta(-45)).toBe('-45m')
-    expect(durationDelta(0)).toBe('±0m')
-  })
-
-  it('says a turn\'s length in seconds until it is minutes', () => {
-    expect(turnLength(41_000)).toBe('41s')
-    expect(turnLength(842_000)).toBe('14m 02s')
-    expect(turnLength(3_780_000)).toBe('1h 03m')
+  it('says a change of tokens with its sign', () => {
+    expect(tokenDelta(2_100_000_000)).toBe('+2.1B')
+    expect(tokenDelta(-480_000_000)).toBe('-480M')
+    expect(tokenDelta(0)).toBe('±0')
   })
 
   it('prices in whole dollars once there are enough of them', () => {
@@ -59,6 +62,10 @@ describe('figures', () => {
   it('names dates the way the calendar does', () => {
     expect(shortDate('2026-08-14')).toBe('Aug 14')
     expect(longDate('2026-08-14')).toBe('Aug 14, 2026')
+    expect(shortMonth('2026-10-14')).toBe('Oct')
+    // January says its year: on a row of months it is where one year turns into the next.
+    expect(shortMonth('2027-01-03')).toBe('Jan 2027')
+    expect(monthYear('2026-10-14')).toBe('Oct 2026')
     expect(clock(10)).toBe('10:00')
     expect(clock(24)).toBe('00:00')
   })

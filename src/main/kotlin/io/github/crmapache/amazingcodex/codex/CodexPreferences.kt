@@ -213,6 +213,15 @@ internal object CodexPreferences {
         set(value) = write(TEXT_SIZE_KEY, if (value in TEXT_SIZE_MIN..TEXT_SIZE_MAX) value.toString() else "")
 
     /**
+     * The font family the panel is set in, or empty - the default - to follow the IDE's console font, as
+     * [textSize] follows its size. Machine-wide like it, and only a name: the page quotes it into CSS and
+     * draws the list it was picked from (see fontFamilies.ts).
+     */
+    var fontFamily: String
+        get() = fontName(read(FONT_FAMILY_KEY))
+        set(value) = write(FONT_FAMILY_KEY, fontName(value))
+
+    /**
      * Whether the tabs open when a project was last closed - and what was being typed in them - come back
      * when it is opened again (see TabMemory).
      *
@@ -364,17 +373,6 @@ internal object CodexPreferences {
         set(value) = write(REMOTE_RELAY_KEY, value.trim())
 
     /**
-     * The address a person left on the feedback screen last time, so they need not type it again.
-     *
-     * Kept in the ordinary settings rather than in the password safe: it is what somebody chose to give
-     * out in order to be answered, not a secret. It is theirs alone - nothing is ever sent to it from
-     * here, and it travels only inside a message they pressed Send on.
-     */
-    var feedbackEmail: String
-        get() = read(FEEDBACK_EMAIL_KEY)
-        set(value) = write(FEEDBACK_EMAIL_KEY, value.trim())
-
-    /**
      * Whether the microphone button and its hotkeys exist at all.
      *
      * Off until it is turned on, like remote access above and for a smaller version of the same reason:
@@ -389,6 +387,17 @@ internal object CodexPreferences {
     var voiceLanguage: String
         get() = read(VOICE_LANGUAGE_KEY)
         set(value) = write(VOICE_LANGUAGE_KEY, value.trim())
+
+    /**
+     * Whether Deepgram is asked to keep dictations out of its model training (`mip_opt_out`).
+     *
+     * Off until it is turned on, which is Deepgram's own default: the plugin does not decide on somebody's
+     * behalf how their account takes part in that program. A machine setting like the rest of voice input,
+     * and the phone dictates by it too - see VoiceGrant.
+     */
+    var voiceTrainingOptOut: Boolean
+        get() = read(VOICE_TRAINING_OPT_OUT_KEY) == "true"
+        set(value) = write(VOICE_TRAINING_OPT_OUT_KEY, if (value) "true" else "")
 
     /**
      * The input device by its mixer name. Empty means whatever the system calls the default, which is
@@ -442,10 +451,28 @@ internal object CodexPreferences {
     const val TEXT_SIZE_FOLLOW = 0
     const val TEXT_SIZE_MIN = 8
     const val TEXT_SIZE_MAX = 32
+    const val FONT_FAMILY_MAX = 100
+
+    /** One line, no control characters, no longer than any family's name gets. */
+    internal fun fontName(value: String): String = value.filterNot(Char::isISOControl).trim().take(FONT_FAMILY_MAX)
 
     private const val UNUSABLE_IN_MODEL = "\"'`\\,"
     private const val MAX_MODEL_NAME = 120
     private const val MAX_CUSTOM_MODELS = 30
+
+    init {
+        forgetRetired()
+    }
+
+    /**
+     * Wipe what a retired feature left in the IDE's settings - for now, the address the old feedback form
+     * remembered between visits. The form is gone, and with it the only reason to keep a person's address
+     * here, so it goes on the first read of any preference rather than staying behind for good. Cheap to
+     * repeat: an absent key stays absent.
+     */
+    internal fun forgetRetired() {
+        runCatching { PropertiesComponent.getInstance().unsetValue(RETIRED_FEEDBACK_EMAIL_KEY) }
+    }
 
     private fun read(key: String): String = PropertiesComponent.getInstance().getValue(key).orEmpty()
 
@@ -471,6 +498,7 @@ internal object CodexPreferences {
     private const val LANGUAGE_KEY = "acx.language"
     private const val THEME_KEY = "acx.theme"
     private const val TEXT_SIZE_KEY = "acx.textSize"
+    private const val FONT_FAMILY_KEY = "acx.fontFamily"
     private const val RESTORE_TABS_KEY = "acx.restoreTabs"
     private const val RESTORE_TABS_OFF = "off"
     private const val SHARE_EDITOR_KEY = "acx.shareEditor"
@@ -483,12 +511,15 @@ internal object CodexPreferences {
     private const val SOUND_VOLUMES_KEY = "acx.sounds.volumes"
     private const val REMOTE_ENABLED_KEY = "acx.remote.enabled"
     private const val REMOTE_RELAY_KEY = "acx.remote.relayUrl"
-    private const val FEEDBACK_EMAIL_KEY = "acx.feedback.email"
     private const val VOICE_ENABLED_KEY = "acx.voice.enabled"
     private const val VOICE_LANGUAGE_KEY = "acx.voice.language"
     private const val VOICE_DEVICE_KEY = "acx.voice.device"
+    private const val VOICE_TRAINING_OPT_OUT_KEY = "acx.voice.trainingOptOut"
     private const val VOICE_PUSH_KEY = "acx.voice.push"
     private const val VOICE_HOLD_KEY = "acx.voice.hold"
     private const val VOICE_PUSH_MOUSE_KEY = "acx.voice.pushMouse"
     private const val VOICE_HOLD_MOUSE_KEY = "acx.voice.holdMouse"
+
+    /** Kept only so that it can be wiped - see [forgetRetired]. */
+    private const val RETIRED_FEEDBACK_EMAIL_KEY = "acx.feedback.email"
 }

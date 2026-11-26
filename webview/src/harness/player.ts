@@ -1,4 +1,5 @@
 import type {
+  AccountInfo,
   CodexConfigSetting,
   PaintedTerm,
   PanelKeyCommand,
@@ -159,25 +160,10 @@ const download = (name: string, base64: string): void => {
 }
 
 /*
- * The IDE's half of the feedback screen, played by the harness.
- *
- * The screen is the one place in the panel that asks the shell for things it cannot make up itself - the
- * address kept from last time, the files a native dialog picked, the debug report - so without an answer
- * here it would sit empty and none of it could be looked at. The files are invented; the report is a
- * sample of the real shape (see FeedbackReport on the plugin's side).
- *
- * Sending fails every third time on purpose. The failed path has its own banner and leaves the draft
- * where it was, and that is precisely the state one never reaches by accident when checking by hand.
+ * The IDE's half of the feedback screen, played by the harness: the debug report it offers to copy. The
+ * report is a sample of the real shape (see FeedbackReport on the plugin's side) - without an answer here
+ * its screen would sit on "Building it…" and could not be looked at.
  */
-let feedbackFiles: { id: string; name: string; bytes: number }[] = []
-let feedbackSends = 0
-
-const SAMPLE_FILES = [
-  { name: 'screenshot.png', bytes: 184_320 },
-  { name: 'idea.md', bytes: 2_140 },
-  { name: 'crash-report.txt', bytes: 51_200 },
-]
-
 const SAMPLE_REPORT = [
   'Amazing Codex GUI 0.1.0',
   'WebStorm 2026.2 (WS-262.19173.4)',
@@ -209,15 +195,17 @@ const SAMPLE_REPORT = [
  * both visible. Their figures ride the ordinary `usage` messages, keyed by account, exactly as they do
  * in the plugin - which is what makes the per-account limits on the rows real here too.
  */
-let harnessAccounts = [
+let harnessAccounts: AccountInfo[] = [
   // The sign-in Claude Code already had, first and always: it is what a person who has never touched this
   // screen is actually running on, and leaving it out is what made the screen claim they had no account.
-  { id: '', alias: '', email: 'you@company.com', plan: 'max', health: 'present' as const, isDefault: true },
-  { id: 'a2', alias: 'Personal', email: 'you@personal.com', plan: 'pro', health: 'present' as const },
-  { id: 'a3', alias: 'Old client', email: 'me@client.com', plan: 'pro', health: 'absent' as const },
+  { id: '', alias: '', email: 'you@company.com', plan: 'max', health: 'present', isDefault: true },
+  { id: 'a2', alias: 'Personal', email: 'you@personal.com', plan: 'pro', health: 'present' },
+  { id: 'a3', alias: 'Old client', email: 'me@client.com', plan: 'pro', health: 'absent' },
 ]
 
 let harnessCurrent = ''
+/** How many rows have been signed in again - every third one is played as a terminal that would not open. */
+let harnessSignIns = 0
 let harnessAdds = 0
 let harnessAdding = false
 
@@ -317,6 +305,38 @@ const answerAccounts = (message: WebviewMessage): void => {
     sendAccounts()
   }
 
+  /*
+   * Signing a lost row in again. In the IDE a terminal opens in that row's drawer and the drawer is asked
+   * every few seconds; here the row says "signing in" for a moment and then lands - every third press
+   * instead answers like a terminal that would not open, so the refusal line is on the screen too.
+   */
+  if (message.type === 'accountSignIn') {
+    harnessSignIns += 1
+    if (harnessSignIns % 3 === 0) {
+      window.__accReceive?.({ type: 'accountOutcome', code: 'no-terminal' })
+      return
+    }
+
+    const id = message.id
+    harnessAccounts = harnessAccounts.map((one) => (one.id === id ? { ...one, signingIn: true } : one))
+    sendAccounts()
+
+    window.setTimeout(() => {
+      // Stopped while this was in flight: the row is not waiting any more, so nothing lands.
+      if (harnessAccounts.find((one) => one.id === id)?.signingIn !== true) return
+
+      harnessAccounts = harnessAccounts.map((one) =>
+        one.id === id ? { ...one, signingIn: false, health: 'present', plan: one.plan || 'max' } : one,
+      )
+      sendAccounts()
+    }, 2_400)
+  }
+
+  if (message.type === 'accountSignInStop') {
+    harnessAccounts = harnessAccounts.map((one) => (one.id === message.id ? { ...one, signingIn: false } : one))
+    sendAccounts()
+  }
+
   // Giving up on a sign-in halfway: the drawer goes, the list comes back without it.
   if (message.type === 'accountCancel') {
     harnessAdding = false
@@ -402,47 +422,37 @@ const answerUsageStats = (message: WebviewMessage): void => {
   }
 }
 
+/**
+ * The families a Mac names, monospaced and not, the IDE's own among them - the page sorts out which it can
+ * draw and which are monospaced (see fontFamilies.ts), so a browser without some of them shows a shorter list.
+ */
+const FONT_FAMILIES = [
+  'Andale Mono',
+  'Arial',
+  'Courier New',
+  'Fira Code',
+  'Georgia',
+  'Helvetica',
+  'JetBrains Mono',
+  'JetBrains Mono NL',
+  'Menlo',
+  'Monaco',
+  'PT Mono',
+  'SF Mono',
+  'Source Code Pro',
+  'Times New Roman',
+]
+
+const answerFonts = (message: WebviewMessage): void => {
+  if (message.type !== 'fontFamilies') return
+  // A beat late, as the IDE is, so the list's loading line can be seen.
+  setTimeout(() => window.__accReceive?.({ type: 'fontFamilies', families: FONT_FAMILIES }), 200)
+}
+
 const answerFeedback = (message: WebviewMessage): void => {
-  const state = (note?: string): void => {
-    window.__accReceive?.({
-      type: 'feedbackState',
-      email: 'you@example.com',
-      attachments: feedbackFiles,
-      ...(note ? { note } : {}),
-    })
-  }
-
-  if (message.type === 'feedbackOpen') state()
-
+  // A beat late on purpose, so that the screen's "Building it…" can be looked at too.
   if (message.type === 'feedbackReport') {
-    window.__accReceive?.({ type: 'feedbackLog', text: SAMPLE_REPORT })
-  }
-
-  if (message.type === 'feedbackAttach') {
-    const next = SAMPLE_FILES[feedbackFiles.length % SAMPLE_FILES.length]
-    if (next) {
-      feedbackFiles = [...feedbackFiles, { id: `f${feedbackFiles.length + 1}`, ...next }]
-      state(feedbackFiles.length >= 3 ? 'One of them was skipped: it is bigger than 10 MB.' : undefined)
-    }
-  }
-
-  if (message.type === 'feedbackDetach') {
-    feedbackFiles = feedbackFiles.filter((file) => file.id !== message.id)
-    state()
-  }
-
-  if (message.type === 'feedbackSend') {
-    feedbackSends += 1
-    const ok = feedbackSends % 3 !== 0
-    if (ok) feedbackFiles = []
-
-    setTimeout(() => {
-      window.__accReceive?.(
-        ok
-          ? { type: 'feedbackSent', ok: true }
-          : { type: 'feedbackSent', ok: false, error: 'The feedback service did not answer. Try again.' },
-      )
-    }, 700)
+    setTimeout(() => window.__accReceive?.({ type: 'feedbackLog', text: SAMPLE_REPORT }), 300)
   }
 }
 
@@ -454,8 +464,8 @@ const answerFeedback = (message: WebviewMessage): void => {
  * were. That is the half of the feature worth looking at without an IDE: the attachments have to come back
  * as chips, in their new place, and none of them may go missing.
  *
- * Every third press fails, as with the feedback screen above: the strip that explains a failed rewrite is
- * otherwise a piece of interface nobody ever sees.
+ * Every third press fails on purpose: the strip that explains a failed rewrite is otherwise a piece of
+ * interface nobody ever sees.
  */
 let improveRuns = 0
 
@@ -519,6 +529,7 @@ let voiceSettings = {
   enabled: true,
   language: 'en',
   device: '',
+  trainingOptOut: false,
   keyHint: '…9f2c',
   hotkeys: {
     push: { caps: [{ glyph: 'option', text: '', side: 'right' }] },
@@ -564,6 +575,7 @@ const voiceConfig = (): ShellMessage => ({
   languages: VOICE_LANGUAGES,
   device: voiceSettings.device,
   devices: VOICE_DEVICES,
+  trainingOptOut: voiceSettings.trainingOptOut,
   keyHint: voiceSettings.keyHint,
   hotkeys: voiceSettings.hotkeys,
 })
@@ -609,6 +621,12 @@ const answerVoice = (message: WebviewMessage): void => {
 
   if (message.type === 'voiceDevice') {
     voiceSettings = { ...voiceSettings, device: message.device }
+    sendVoiceConfig()
+    return
+  }
+
+  if (message.type === 'voiceTrainingOptOut') {
+    voiceSettings = { ...voiceSettings, trainingOptOut: message.optOut }
     sendVoiceConfig()
     return
   }
@@ -886,6 +904,50 @@ const answerAgentTranscript = (message: WebviewMessage): void => {
   }, 350)
 }
 
+/** What the harness remembers while it plays the IDE's terminal desk. */
+const terminalDesk = { statusAsked: 0, asked: 0 }
+
+/**
+ * Continue in terminal (see TerminalDesk.handOver): held at once, as the IDE holds a tab before the terminal is
+ * even open - and every third press refused, because the panel's process is "busy".
+ */
+const answerToTerminal = (sessionId: string): void => {
+  terminalDesk.asked += 1
+  setTimeout(() => {
+    if (terminalDesk.asked % 3 === 0) {
+      window.__accReceive?.({ type: 'terminalRefused', sessionId, reason: 'busy' })
+      return
+    }
+    window.__accReceive?.({ type: 'terminal', sessionId, state: 'here' })
+  }, 200)
+}
+
+/**
+ * Return to chat: the terminal is closed, its process ends, and the turn made there is played into the feed
+ * after what the feed held (see CodexSessionHub.replayTerminalTail) - a replay with no cursor, so the mark over
+ * the feed stays where it was.
+ */
+const answerFromTerminal = (sessionId: string): void => {
+  const line = (event: unknown): void => {
+    window.__accReceive?.({ type: 'agent', sessionId, event, replay: true } as never)
+  }
+
+  setTimeout(() => {
+    window.__accReceive?.({ type: 'terminal', sessionId })
+    line({
+      type: 'user',
+      uuid: `t-${sessionId}-1`,
+      message: { role: 'user', content: [{ type: 'text', text: 'Run the migrations against staging once more.' }] },
+    })
+    line({
+      type: 'assistant',
+      uuid: `t-${sessionId}-2`,
+      message: { content: [{ type: 'text', text: 'Done in the terminal: both migrations applied, no drift left.' }] },
+    })
+    window.__accReceive?.({ type: 'replayFinished', sessionId } as never)
+  }, 400)
+}
+
 /**
  * A conversation chosen in the history screen.
  *
@@ -910,8 +972,8 @@ const answerResume = (message: WebviewMessage): void => {
       type: 'user',
       uuid: uuid(1),
       // With a pasted image in it, because a transcript keeps only the caption for one: the bytes stayed
-      // in the panel that sent them. That is what the reuse button has to warn about before it is pressed
-      // (see feed/reuse.ts), and a replay is the only place to see the warning.
+      // in the panel that sent them. That is what the menu's "edit and send again" has to warn about before
+      // it is pressed (see feed/reuse.ts), and a replay is the only place to see the warning.
       message: {
         role: 'user',
         content: [{ type: 'text', text: `Where did we leave off on ${name}? [Image #1]` }],
@@ -1846,14 +1908,30 @@ const listenToPanel = () => {
     }
 
     // `/status`, answered as the IDE answers it: the conversation's id - made up here, as there is no CLI
-    // behind the harness to have given one.
+    // behind the harness to have given one. Every second answer is a tab on an added account, so the line with
+    // the account's drawer in front of it and its note can be seen as well (see ResumeLine.kt).
     if (message?.type === 'sessionInfo') {
+      const conversationId = 'b6f4c0de-71a2-4c3e-9d1f-5a7e2c8b9f10'
+      const onAccount = (terminalDesk.statusAsked += 1) % 2 === 0
       window.__accReceive?.({
         type: 'sessionInfo',
         sessionId: message.sessionId,
-        conversationId: 'b6f4c0de-71a2-4c3e-9d1f-5a7e2c8b9f10',
+        conversationId,
+        ...(onAccount
+          ? {
+              command: `CODEX_HOME=/Users/you/.amazing-codex/accounts/k3v9 CODEX_SQLITE_HOME=/Users/you/.codex OPENAI_API_KEY= codex resume ${conversationId}`,
+              account: 'Work',
+            }
+          : {}),
       })
     }
+
+    // Continue in terminal, answered as the IDE answers it (see TerminalDesk.kt): the tab is held at once, and
+    // every third press is refused, so the refusal's card can be seen too.
+    if (message?.type === 'toTerminal') answerToTerminal(message.sessionId)
+
+    // Closing the terminal gives the conversation back, with what was done there played into the feed.
+    if (message?.type === 'fromTerminal') answerFromTerminal(message.sessionId)
 
     // The defaults of the "New chats" screen, answered as the IDE answers them.
     if (message?.type === 'setDefaultModel') {
@@ -1931,6 +2009,7 @@ const listenToPanel = () => {
 
     if (message) answerFeedback(message)
     if (message) answerUsageStats(message)
+    if (message) answerFonts(message)
     if (message) answerHistoryPage(message)
     if (message) answerAgentTranscript(message)
     if (message) answerResume(message)
@@ -2223,6 +2302,13 @@ export class ScenarioPlayer {
 
     // A strip a scenario puts up is the strip the harness mirrors from then on (see answerClosedTabs).
     if (message.type === 'sessions') mirrorStrip(message.sessions)
+
+    // And the accounts a scenario puts up are the ones the harness holds from then on: the screen asks for
+    // the list when it opens, and an answer out of the harness's own book would undo the scenario.
+    if (message.type === 'accounts') {
+      harnessAccounts = message.accounts
+      harnessCurrent = message.current
+    }
 
     // A queue a scenario puts up is the queue the harness holds from then on (see answerQueue).
     if (message.type === 'queue') {

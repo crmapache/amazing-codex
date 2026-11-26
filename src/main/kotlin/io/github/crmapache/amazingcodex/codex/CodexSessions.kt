@@ -133,6 +133,8 @@ internal class CodexSessions(
      * Null: each conversation says it itself at its turn's end, which is how one stands when nothing drives it.
      */
     private val onUnsentWaiting: ((sessionId: String) -> Unit)? = null,
+    /** Whether a tab's conversation is held by a terminal and may not be raised here now - see terminal/TerminalDesk. */
+    private val heldElsewhere: (sessionId: String, conversationId: String) -> Boolean = { _, _ -> false },
 ) : Disposable {
 
     private val sessions = ConcurrentHashMap<String, CodexSession>()
@@ -1306,6 +1308,9 @@ internal class CodexSessions(
 
     fun contextMode(sessionId: String): String? = sessions[sessionId]?.contextMode
 
+    /** The context window the tab's process comes up with (see CodexSession.contextWindow) - for a terminal of it too. */
+    fun contextWindow(sessionId: String): Int? = sessions[sessionId]?.contextWindow()
+
     /**
      * This conversation starts on what was chosen for it rather than on what the settings hold.
      *
@@ -1543,6 +1548,7 @@ internal class CodexSessions(
             onAppAuthRequired = { app -> if (current()) onAppAuthRequired(sessionId, app) },
             putBack = putBacks.computeIfAbsent(sessionId) { PutBack() },
             settled = settlements.computeIfAbsent(sessionId) { TurnFiles.Settled() },
+            heldElsewhere = { conversationId -> heldElsewhere(sessionId, conversationId) },
         ).also { slot[0] = it }
     }
 

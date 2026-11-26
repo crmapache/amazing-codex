@@ -79,11 +79,10 @@ config, MCP servers, skills and custom prompts all come with it. No proxy, no ac
 - **Everything runs on your machine.** No proxy, no server of ours in the middle. Your Codex
   sign-in belongs to the CLI - the plugin never sends it anywhere and never hunts for API keys on
   your disk.
-- **Nothing leaves without your say.** No account and no analytics behind your back. Anonymous
-  usage statistics stay off until you press Allow on a card that asks once - counts only, never
-  code, messages or file names. With them off and remote access off, the only thing that ever
-  leaves is a feedback report you write and send yourself - and one button shows its exact text
-  first.
+- **No account, and no analytics unless you allow them.** The panel asks once whether it may send
+  anonymous daily counts of how it is used, and sends nothing until you press Allow - the settings
+  show the whole report first, and turning it off deletes what was sent. Apart from that, with
+  remote access off, nothing leaves the machine.
 - **Your rules stay yours.** Codex applies your config, its sandbox and its approval policy; the
   mode on screen is exactly the policy the thread runs with, and the plugin never starts a thread
   in a laxer one.

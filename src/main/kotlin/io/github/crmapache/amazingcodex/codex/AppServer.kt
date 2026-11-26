@@ -388,6 +388,9 @@ internal class AppServer(
         /** JSON-RPC's own code for "I do not know that method" - what an unknown server request gets. */
         const val METHOD_NOT_FOUND = -32601
 
+        /** JSON-RPC's "invalid request" - what Codex answers a method name it has no variant for at all. */
+        const val INVALID_REQUEST = -32600
+
         /** How long a request waits for its answer - see CodexUsage.SERVER_ANSWER_MAX_AGE_MS, which rests on it. */
         const val DEFAULT_TIMEOUT_SECONDS = 30L
 

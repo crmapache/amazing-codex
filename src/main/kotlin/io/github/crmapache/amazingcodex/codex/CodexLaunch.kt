@@ -37,6 +37,42 @@ internal object CodexLaunch {
         contextWindow?.let { listOf("-c", "model_context_window=$it") } ?: emptyList()
 
     /**
+     * The same conversation in Codex's own interface, in a terminal of the IDE (see terminal/TerminalDesk): what a
+     * person would have typed to carry it on, with the tab's choices on it - `codex resume <thread>` and the model,
+     * the effort, the mode as its approval policy and sandbox, the tier and the context window.
+     *
+     * `--no-daemon` most of all. Codex's interface otherwise joins a shared background server when one runs, and
+     * the thread would then be held by that server rather than by the terminal's process - still loaded after the
+     * person typed `/exit`, so the panel's own process could not take it back ("thread ... already has an active
+     * writer", see CLAUDE.md, "Писатель у треда один"). Its own process, the terminal's end is the thread's release.
+     *
+     * What does not carry over is the panel's own: the stream, and the briefing most of all - it tells the agent
+     * that a person is watching a panel with buttons, and in a terminal there is none. Under the same rule as
+     * [serverArguments]: no line feeds and no quotation marks, since on Windows npm's wrapper is a batch file run
+     * through cmd. Nothing here carries either - an identifier, a model's name, a level, a number - and the test
+     * holds that it stays so.
+     */
+    fun terminalArguments(
+        conversationId: String,
+        model: String,
+        effort: String,
+        permissionMode: String?,
+        fast: Boolean?,
+        contextWindow: Int?,
+    ): List<String> = buildList {
+        add("resume")
+        add(conversationId)
+        add("--no-daemon")
+        if (model.isNotEmpty() && model != "default") addAll(listOf("-m", model))
+        if (effort.isNotEmpty() && effort != "auto") addAll(listOf("-c", "model_reasoning_effort=$effort"))
+        val policy = PermissionModes.policyOf(permissionMode)
+        addAll(listOf("-c", "approval_policy=${policy.approval}"))
+        addAll(listOf("-c", "sandbox_mode=${policy.sandboxMode}"))
+        fast?.let { addAll(listOf("-c", "service_tier=${if (it) ServiceTiers.FAST else ServiceTiers.STANDARD}")) }
+        addAll(serverArguments(contextWindow))
+    }
+
+    /**
      * The environment a conversation's process runs in, over the one its account handed us.
      *
      * Only ever adds: what came in decides which account pays for the turn (see AccountStore), and a

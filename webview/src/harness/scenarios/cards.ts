@@ -184,12 +184,12 @@ export const scenariosCards: Scenario[] = [
    * Rewinding to an earlier message (see RewindDialog and Rewind.kt): three turns, each with an edit, so the
    * dialog has files to offer; the player plays the IDE's half (see answerRewind) - the preview, the cut
    * going out to every window, the message coming back into the field. A message written into a running
-   * turn shows its rewind button dead, with the reason in its hint.
+   * turn shows the rewind entry of its menu dead, with the reason under it.
    *
    * Other states of the dialog are one line in the console away - see answerRewind in player.ts.
    */
   scenario('rewind', 'Rewind to an earlier message', 'cards', [
-    checkpoint('Three messages, each answered with an edit - every one has a rewind button', [
+    checkpoint('Three messages, each answered with an edit - every one can be rewound to from its menu', [
       user('Add a discount line to the cart summary'),
       wait(300),
       ...textReply("I'll add a discount line under the subtotal."),
@@ -226,7 +226,7 @@ export const scenariosCards: Scenario[] = [
       ...textReply('Rounded with Math.round on the cents, and a test for 33.333%.'),
       turnResult(4000),
     ]),
-    checkpoint('A message written while Claude was working: its rewind button is dead and says why', [
+    checkpoint('A message written while Claude was working: its rewind entry is dead and says why', [
       wait(400),
       user('Refactor the totals into one helper'),
       wait(300),
@@ -472,6 +472,70 @@ export const scenariosCards: Scenario[] = [
       }),
       ...textReply('The theme has its own file, the legacy colors are gone and the strings live under ui now.'),
       turnResult(4100),
+    ]),
+    // A turn that changed most of its files by a script, not by edit calls: the IDE, holding the project against the
+    // turn's start, names every one of them right before the result (see TurnFootprint) - a created one, a removed
+    // one, a picture without figures. More than twelve rows, so the list stands folded, its total over the rows.
+    checkpoint('Files changed by a script, found on the disk - the whole turn summed over the rows', [
+      wait(400),
+      user('Move the API models to the new package and drop the old adapters'),
+      wait(300),
+      toolUse(
+        'Bash',
+        { command: "python3 scripts/move_models.py --from com.example.api --to com.example.net", description: 'Move the models with the script' },
+        'cf-8',
+      ),
+      toolResult('cf-8', 'Moved 9 models, rewrote 11 imports'),
+      toolUse(
+        'Edit',
+        {
+          file_path: '/Users/you/demo-project/app/proguard-rules.pro',
+          old_string: '-keep class com.example.api.** { *; }',
+          new_string: '-keep class com.example.net.** { *; }',
+        },
+        'cf-9',
+      ),
+      toolResult('cf-9', 'The file has been updated successfully.', false, {
+        filePath: '/Users/you/demo-project/app/proguard-rules.pro',
+        structuredPatch: [
+          { oldStart: 5, oldLines: 1, newStart: 5, newLines: 1, lines: ['-keep class com.example.api.** { *; }', '+-keep class com.example.net.** { *; }'] },
+        ],
+      }),
+      agent({
+        type: 'files_settled',
+        turn: 'harness-moved-models',
+        files: [
+          ...['Account', 'Address', 'Card', 'Cart', 'Order', 'Payment', 'Price', 'Product', 'User'].map((name, index) => ({
+            path: `/Users/you/demo-project/app/src/main/java/com/example/net/${name}.kt`,
+            added: 4 + index,
+            removed: 0,
+            created: true,
+            edits: [
+              { kind: 'create' as const, content: '' },
+              { kind: 'patch' as const, hunks: [{ oldStart: 0, newStart: 1, lines: Array.from({ length: 4 + index }, (_, line) => `+line ${line}`) }] },
+            ],
+          })),
+          ...['CheckoutViewModel', 'OrdersRepository', 'ProfileScreen'].map((name, index) => ({
+            path: `/Users/you/demo-project/app/src/main/java/com/example/ui/${name}.kt`,
+            added: 2 + index,
+            removed: 2 + index,
+            edits: [{ kind: 'patch' as const, hunks: [{ oldStart: 3, newStart: 3, lines: ['-import com.example.api.Model', '+import com.example.net.Model'] }] }],
+          })),
+          {
+            path: '/Users/you/demo-project/app/src/main/java/com/example/api/MoshiAdapters.kt',
+            added: 0,
+            removed: 38,
+            deleted: true,
+            edits: [
+              { kind: 'patch' as const, hunks: [{ oldStart: 1, newStart: 0, lines: Array.from({ length: 38 }, (_, line) => `-adapter ${line}`) }] },
+              { kind: 'remove' as const },
+            ],
+          },
+          { path: '/Users/you/demo-project/app/src/main/res/drawable/net_badge.png', added: 0, removed: 0, created: true, uncounted: true },
+        ],
+      }),
+      ...textReply('Moved: the nine models live in com.example.net now, the screens import them from there, and the old adapters are gone.'),
+      turnResult(48000),
     ]),
   ]),
 
@@ -1560,6 +1624,10 @@ export const scenariosCards: Scenario[] = [
 
   // It ends on a permission on purpose, as permission-waiting does: the decision is taken by a genuine
   // button of a genuine interface rather than by the scenario.
+  //
+  // The shape is the CLI's own (recorded on 2.1.293): each Task call is followed by a task_started naming
+  // the agent, and the permission names its asker by that name rather than by the call's id. The card has
+  // to stand over the field on main as well as on the back-end agent's chip, saying whose it is.
   scenario('multiple-agents-permission', 'Several agents: one awaits a permission', 'cards', [
     checkpoint('The user asks for a parallel review', [
       user('Run a review of the front end and the back end in parallel'),
@@ -1585,6 +1653,24 @@ export const scenariosCards: Scenario[] = [
           ],
         },
       }),
+      agent({
+        type: 'system',
+        subtype: 'task_started',
+        task_id: 'a13fe0c1d2e3f4a5b',
+        tool_use_id: 'c13-a',
+        description: 'A review of the front end',
+        subagent_type: 'react-architecture',
+        task_type: 'local_agent',
+      }),
+      agent({
+        type: 'system',
+        subtype: 'task_started',
+        task_id: 'a13be9f8e7d6c5b4a',
+        tool_use_id: 'c13-b',
+        description: 'A review of the back end',
+        subagent_type: 'nest-architecture',
+        task_type: 'local_agent',
+      }),
       wait(1500),
     ]),
     checkpoint('The front-end agent: looking at the components', [subagentText('c13-a', 'Looking at the components...'), wait(1200)]),
@@ -1593,7 +1679,7 @@ export const scenariosCards: Scenario[] = [
         type: 'permission',
         id: 'c13-perm',
         sessionId: SESSION,
-        agentId: 'c13-b',
+        agentId: 'a13be9f8e7d6c5b4a',
         toolName: 'Bash',
         target: 'wants to run a command',
         command: 'npm test',

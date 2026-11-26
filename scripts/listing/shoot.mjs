@@ -23,6 +23,7 @@ const HERE = new URL('./', import.meta.url).pathname
 const LOGS = join(ROOT, 'build', 'listing', 'logs')
 const MARKER = 'idea.required.plugins.id=io.github.crmapache.amazingcodex'
 const DEMO = join(process.env.HOME, 'work', 'nimbus-checkout')
+const SANDBOX = join(ROOT, 'scripts', 'agent-sandbox.sh')
 
 const PART = process.argv[2] ?? 'all'
 if (!['all', 'ide', 'phone', 'compose'].includes(PART)) {
@@ -99,23 +100,16 @@ const panelUp = async () => {
   return targets.some((target) => target.url.startsWith('http://localhost:5190/'))
 }
 
-const stopSandbox = async () => {
-  if (!sandboxRunning()) return
-  // Politely first: an IDE killed in the middle of writing its indexes reports them corrupted next time.
+/** Takes down the sandbox this run started, by the PIDs the sandbox script wrote down - and only it. */
+const stopSandbox = () => {
   try {
-    execFileSync('pkill', ['-f', MARKER])
+    execFileSync(SANDBOX, ['stop'], { cwd: ROOT, stdio: 'inherit' })
   } catch {}
-  for (let waited = 0; waited < 30 && sandboxRunning(); waited += 1) await sleep(1000)
-  if (sandboxRunning()) {
-    try {
-      execFileSync('pkill', ['-9', '-f', MARKER])
-    } catch {}
-  }
 }
 
 const cleanUp = async () => {
   say('putting everything away')
-  if (own.sandbox) await stopSandbox()
+  if (own.sandbox) stopSandbox()
   for (const { name, child } of started.reverse()) {
     try {
       process.kill(-child.pid)
@@ -154,14 +148,18 @@ const main = async () => {
     }
 
     say('the sandbox IDE (building the plugin takes a while)')
+    // Through the agent's sandbox script: the window goes to the display the person is not working on
+    // and does not take their keyboard (see scripts/agent-sandbox.sh); CDP is on 4452 as before.
     own.sandbox = true
-    launch('sandbox', './gradlew', [
-      'runIde',
-      `-PopenProject=${DEMO}`,
-      '-PwebviewDevUrl=http://localhost:5190/',
-      '-PjcefDebugPort=4452',
-      ...(PHONE ? ['-PremoteRelay=ws://localhost:4450'] : []),
-    ])
+    execFileSync(
+      SANDBOX,
+      [
+        'start',
+        '-PwebviewDevUrl=http://localhost:5190/',
+        ...(PHONE ? ['-PremoteRelay=ws://localhost:4450'] : []),
+      ],
+      { cwd: ROOT, stdio: 'inherit', env: { ...process.env, ACX_SANDBOX_PROJECT: DEMO } },
+    )
     await waitFor('the sandbox panel', panelUp, 600)
     // Indexing and the editor's first passes (inlay hints, the tree unfolding) settle after the panel does.
     await sleep(45_000)

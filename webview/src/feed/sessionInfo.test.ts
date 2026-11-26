@@ -25,10 +25,10 @@ describe('the terminal line of /status', () => {
   // The account's drawer in front of the command, as the IDE wrote it - and the caption names the account.
   it('is the IDE’s own line for a tab on an added account', () => {
     const line = 'CODEX_HOME=/u/.amazing-codex/accounts/s-1 CODEX_SQLITE_HOME=/u/.codex codex resume 019a2b3c'
-    const shown = item({ resume: line, account: 'Work' })
+    const shown = item({ command: line, account: 'Work' })
 
     expect(resumeCommand(shown)).toBe(line)
-    expect(resumeNote(shown, en.feed.session)).toBe(en.feed.session.terminalNoteOn('Work'))
+    expect(resumeNote(shown, en.feed.session)).toBe(en.feed.session.terminalNoteAccount('Work'))
   })
 
   // Windows, a phone, a drawer that would not resolve: the line is plain, and the caption says whose sign-in it runs on.
@@ -38,7 +38,7 @@ describe('the terminal line of /status', () => {
     expect(resumeCommand(shown)).toBe('codex resume 019a2b3c')
     expect(resumeNote(shown, en.feed.session)).toBe(en.feed.session.terminalNoteDefault('Work'))
     expect(resumeNote(item({ onDefault: true }), en.feed.session)).toBe(
-      en.feed.session.terminalNoteDefault(en.feed.session.unnamedAccount),
+      en.feed.session.terminalNoteDefault(''),
     )
   })
 
@@ -51,16 +51,16 @@ describe('the terminal line of /status', () => {
     expect(state.items.at(-1)).toEqual(
       expect.objectContaining({ kind: 'session', conversationId: '019a2b3c', account: 'Work', onDefault: true }),
     )
-    expect(state.items.at(-1)).not.toHaveProperty('resume')
+    expect(state.items.at(-1)).not.toHaveProperty('command')
   })
 
   // A line is about the id it names: one the feed falls back to (see the reducer) has none of its own.
   it('keeps no line for an id the IDE did not name', () => {
     const known = { ...initialPanelState, sessionId: 'known-id' }
-    const state = reducePanel(known, { kind: 'sessionInfo', resume: 'CODEX_HOME=/x codex resume other' })
+    const state = reducePanel(known, { kind: 'sessionInfo', command: 'CODEX_HOME=/x codex resume other' })
 
     expect(state.items.at(-1)).toEqual(expect.objectContaining({ conversationId: 'known-id' }))
-    expect(state.items.at(-1)).not.toHaveProperty('resume')
+    expect(state.items.at(-1)).not.toHaveProperty('command')
   })
 
   it('knows /status when it is all there is', () => {

@@ -31,6 +31,11 @@ import kotlinx.serialization.json.jsonPrimitive
  *
  * Archived conversations (`archived_sessions`) are not read: Codex compresses them with zstd, which the IDE has no
  * reader for. What a reading saw of them before they were archived stays in the book.
+ *
+ * Every request is also put down to the folder Codex was working in when it was made (ACC 0.13.50): the thread's
+ * `cwd` as its file says it - `session_meta` at the top, and each `turn_context` after it, since a turn can move the
+ * thread elsewhere. Which project a folder belongs to is the statistics' business, not the reader's (see
+ * stats/TranscriptTokens).
  */
 internal object CodexTokenUsage {
 
@@ -46,12 +51,23 @@ internal object CodexTokenUsage {
     private val THREADS = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(1, 4)
 
     /**
+     * What one reading found: the tokens by the hour, and the same tokens again by the folder Codex was working in
+     * when it spent them, in Codex's own spelling of it (a Linux path inside WSL).
+     */
+    class Reading(
+        /** Hour since the epoch -> tokens, every folder together. */
+        val hours: Map<Long, Long>,
+        /** Folder -> hour since the epoch -> tokens. A request with no folder known is in [hours] only. */
+        val directories: Map<String, Map<Long, Long>>,
+    )
+
+    /**
      * The tokens of every conversation under [root] changed at or after [since] (epoch millis, zero for all of
      * them), by the hour each request was answered in - an hour counted from the epoch, so that the figure means
-     * the same in every time zone (see stats/TokenHome). Null if the folder could not be walked at all; a single
-     * file that could not be read is left out and logged, the rest still count.
+     * the same in every time zone (see stats/TokenHome) - and by the folder it was made in. Null if the folder could
+     * not be walked at all; a single file that could not be read is left out and logged, the rest still count.
      */
-    fun read(root: File, since: Long): Map<Long, Long>? {
+    fun read(root: File, since: Long): Reading? {
         val files = runCatching {
             root.walkTopDown()
                 .maxDepth(MAX_DEPTH)
@@ -79,8 +95,13 @@ internal object CodexTokenUsage {
         }
 
         val hours = HashMap<Long, Long>()
-        for (request in requests.values) hours.merge(Math.floorDiv(request.at, HOUR_MS), request.tokens, Long::plus)
-        return hours
+        val directories = HashMap<String, HashMap<Long, Long>>()
+        for (request in requests.values) {
+            val hour = Math.floorDiv(request.at, HOUR_MS)
+            hours.merge(hour, request.tokens, Long::plus)
+            if (request.directory.isNotEmpty()) directories.getOrPut(request.directory) { HashMap() }.merge(hour, request.tokens, Long::plus)
+        }
+        return Reading(hours, directories)
     }
 
     /**
@@ -89,14 +110,20 @@ internal object CodexTokenUsage {
      */
     fun millions(tokens: Long): String = String.format(Locale.ROOT, "%.1fM", tokens / 1_000_000.0)
 
-    /** One model request: when it was answered, and what it cost. */
-    private class Request(val at: Long, val tokens: Long)
+    /** One model request: when it was answered, what it cost, and the folder Codex worked in then. */
+    private class Request(val at: Long, val tokens: Long, val directory: String)
 
     private fun scanFile(file: File, requests: ConcurrentHashMap<Long, Request>) {
         runCatching {
             var lastTotal = -1L
+            // One string per folder per file rather than one per request: nearly all of a file's requests share it.
+            var directory = ""
             file.useLines { lines ->
                 for (line in lines) {
+                    if (line.contains(SESSION_META) || line.contains(TURN_CONTEXT)) {
+                        directoryOf(line)?.let { if (it != directory) directory = it }
+                        continue
+                    }
                     if (!line.contains(TOKEN_COUNT)) continue
                     val event = eventOf(line) ?: continue
                     if (event.total == lastTotal) continue
@@ -104,10 +131,19 @@ internal object CodexTokenUsage {
                     if (event.tokens <= 0) continue
 
                     val key = (event.stamp.hashCode().toLong() shl 32) or (event.total.hashCode().toLong() and 0xffffffffL)
-                    requests.putIfAbsent(key, Request(event.at, event.tokens))
+                    requests.putIfAbsent(key, Request(event.at, event.tokens, directory))
                 }
             }
         }.onFailure { thisLogger().warn("Failed to scan $file for token usage", it) }
+    }
+
+    /**
+     * The `cwd` of a `session_meta` or `turn_context` line - read off the line rather than parsed whole: a thread's
+     * first line carries its instructions, tens of kilobytes, and the folder sits near its start.
+     */
+    internal fun directoryOf(line: String): String? {
+        val raw = CWD.find(line)?.groupValues?.get(1) ?: return null
+        return runCatching { Json.parseToJsonElement("\"$raw\"").jsonPrimitive.contentOrNull }.getOrNull()?.takeIf { it.isNotBlank() }
     }
 
     /** A `token_count` event: its time as written and as epoch millis, the thread's running total, and this request's tokens. */
@@ -129,4 +165,7 @@ internal object CodexTokenUsage {
     private fun tokensOf(usage: JsonObject): Long? = usage["total_tokens"]?.jsonPrimitive?.contentOrNull?.toLongOrNull()
 
     private const val TOKEN_COUNT = "\"token_count\""
+    private const val SESSION_META = "\"type\":\"session_meta\""
+    private const val TURN_CONTEXT = "\"type\":\"turn_context\""
+    private val CWD = Regex("\"cwd\":\"((?:[^\"\\\\]|\\\\.)*)\"")
 }

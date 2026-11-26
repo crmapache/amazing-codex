@@ -126,7 +126,7 @@ export const UsageScreen = ({
 }
 
 /**
- * The report as it would go next, whole. The same stance as the feedback form's preview (see
+ * The report as it would go next, whole. The same stance as the feedback screen's debug report (see
  * FeedbackLog): plain text, nothing left out, no prettier rendering that would invite the question of
  * what it hid.
  */

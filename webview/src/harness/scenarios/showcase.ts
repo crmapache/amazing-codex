@@ -171,7 +171,6 @@ export const showcaseBootstrap: ScenarioStep[] = [
     type: 'init',
     projectName: 'nimbus-checkout',
     workingDirectory: ROOT,
-    gitBranch: 'feature/apple-pay-sheet',
     pluginVersion: '0.8.3',
     preferences: { model: 'gpt-5.6-terra', effort: 'high', mode: 'acceptEdits' },
   }),
@@ -796,7 +795,6 @@ export const scenariosShowcase: Scenario[] = [
         ],
         pairing: { url: 'https://relay-codex.mzpizote.com/p#a7f3c2e1:kQ8xR2mV7nB4tL9cW1sD6fH3jP5yZ0aE', expiresAt: Date.now() + 106_000 },
       }),
-      shell({ type: 'clients', count: 1, clients: [{ id: 'iPhone 17 Pro', local: false }] }),
     ]),
   ]),
 
@@ -859,7 +857,6 @@ export const scenariosShowcase: Scenario[] = [
         type: 'init',
         projectName: 'nimbus-checkout',
         workingDirectory: ROOT,
-        gitBranch: 'feature/apple-pay-sheet',
         pluginVersion: '0.8.3',
         preferences: { model: 'gpt-5.6-terra', effort: 'high', mode: 'acceptEdits' },
         sounds: { muted: ['turnFinished'], volumes: { permission: 80, question: 65, rateLimit: 45 } },

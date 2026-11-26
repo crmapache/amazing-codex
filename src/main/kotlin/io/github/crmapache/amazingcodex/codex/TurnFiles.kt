@@ -284,6 +284,7 @@ internal class TurnFiles(
                             put("kind", "move")
                             put("from", edit.from)
                         }
+                        ChangeRevert.Edit.Remove -> put("kind", "remove")
                         is ChangeRevert.Edit.Patch -> {
                             put("kind", "patch")
                             putJsonArray("hunks") {

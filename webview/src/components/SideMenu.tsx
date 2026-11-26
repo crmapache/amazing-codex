@@ -20,6 +20,7 @@ export type MenuScreen =
   | 'plugins'
   | 'settings'
   | 'appearance'
+  | 'font'
   | 'sounds'
   | 'calmColors'
   | 'indicators'
@@ -180,8 +181,8 @@ const NEW_CHAT_SCREENS: MenuScreen[] = ['newChatModel', 'newChatEffort', 'newCha
 
 /**
  * Where a step back leads from each screen. Three of them stand one level deeper than the rest: the
- * preferences belong to "Settings", "what travels" to remote access, and the report's preview to the
- * feedback form it is about - coming back from any of them to the root list would lose the screen one
+ * preferences belong to "Settings", "what travels" to remote access, and the debug report to the
+ * feedback screen that offers it - coming back from any of them to the root list would lose the screen one
  * was in the middle of.
  */
 export const parentOf = (screen: MenuScreen): MenuScreen => {
@@ -193,6 +194,8 @@ export const parentOf = (screen: MenuScreen): MenuScreen => {
   // own - sixty-odd languages will not fit beside a key field, and coming back from either belongs to the
   // voice screen rather than to the settings list two steps up.
   if (screen === 'voiceLanguage' || screen === 'voiceDevice') return 'voice'
+  // The list of fonts is a step of the appearance screen, the way the microphones are of the voice one.
+  if (screen === 'font') return 'appearance'
   // The lists of "new chats" return to their own screen, one step above them.
   if (NEW_CHAT_SCREENS.includes(screen)) return 'newChat'
   if (SETTINGS_SCREENS.includes(screen)) return 'settings'
@@ -917,7 +920,7 @@ export const SettingsScreen = ({
           value={summary.language}
           onClick={() => onPick('language')}
         />
-        {/* Last: it is about the plugin rather than about working in it, the way "Send feedback" closes
+        {/* Last: it is about the plugin rather than about working in it, the way "Feedback" closes
             the root list - and like that row it takes the heart's colour, because both lead to the author. */}
         <Row
           icon="usageStats"

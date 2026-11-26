@@ -96,8 +96,11 @@ const SHARED_WITH_ENGLISH: Record<string, Locale[]> = {
   'menu.titles.menu.title': ['pt-BR', 'fr'],
   'menu.titles.plugins.title': ['es', 'pt-BR', 'de', 'fr'],
   'menu.titles.feedback.title': ['pt-BR', 'de'],
+  'menu.rows.feedback.label': ['pt-BR', 'de'],
   'menu.rows.plugins.label': ['es', 'pt-BR', 'de', 'fr'],
   'feed.session.label': ['fr'],
+  // The card over the field while a terminal holds the conversation (see TerminalCard).
+  'terminal.label': ['es', 'pt-BR', 'de', 'fr'],
   // A duration on a gauge, not a word: "5h" is how Portuguese writes it too.
   'accounts.fiveHour': ['pt-BR'],
   'improvePrompt.label': ['fr'],
@@ -144,8 +147,6 @@ const SHARED_WITH_ENGLISH: Record<string, Locale[]> = {
   'chrome.rewind.code': ['de', 'fr'],
   'chrome.rewind.conversation': ['fr'],
   'remote.relay': ['es', 'pt-BR', 'de'],
-  'feedback.kinds.bug.label': ['pt-BR', 'de', 'fr'],
-  'feedback.kinds.idea.label': ['es'],
   // "MOUSE" and "Microphone" are spelled the same way in these - one is an English loan word in
   // Brazilian Portuguese, the other simply coincides in French.
   'voice.mouse': ['pt-BR'],

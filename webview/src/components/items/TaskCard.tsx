@@ -8,6 +8,8 @@ interface TaskCardProps {
   item: TaskItem
   open: boolean
   onToggle: () => void
+  /** Whether the agent stands on a decision of its own - see agentsWaiting. */
+  waiting?: boolean
 }
 
 /**
@@ -23,7 +25,7 @@ interface TaskCardProps {
  * Opened, it shows the errand in full and then the agent's own log with its report at the end - the same
  * lines the chip's screen shows, drawn by the same component.
  */
-export const TaskCard = ({ item, open, onToggle }: TaskCardProps) => {
+export const TaskCard = ({ item, open, onToggle, waiting = false }: TaskCardProps) => {
   const t = useT()
   const hasBody = Boolean(item.prompt) || item.log.length > 0 || Boolean(item.workflow)
   // A workflow is a fleet rather than an agent, and its own report is what the card is drawn from: the
@@ -47,8 +49,11 @@ export const TaskCard = ({ item, open, onToggle }: TaskCardProps) => {
             beside it (see .toolDur.running). */}
         <span className={s.toolMeta}>{item.meta}</span>
         <div className={s.spacer} />
-        <span className={`${s.toolDur} ${item.pending ? s.running : ''}`}>
+        {/* Standing on a permission, it is not working: the pulse goes and the words say so, as on a tool
+            call waiting for one. */}
+        <span className={`${s.toolDur} ${waiting ? s.waiting : item.pending ? s.running : ''}`}>
           {item.pending ? item.duration || t.feed.tool.running : item.duration}
+          {waiting ? ` ${t.feed.tool.waitingForYou}` : null}
         </span>
       </button>
 
@@ -65,7 +70,7 @@ export const TaskCard = ({ item, open, onToggle }: TaskCardProps) => {
 
           {item.log.length > 0 || item.workflow ? (
             <div className={s.taskLog}>
-              <AgentLog item={item} />
+              <AgentLog item={item} waiting={waiting} />
             </div>
           ) : null}
         </div>

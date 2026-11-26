@@ -7,6 +7,7 @@ import { copyToClipboard } from '../../clipboard'
 import { CopyButton } from './CopyButton'
 import { Formula } from './Formula'
 import { PathLink, withPathLinks } from './PathLink'
+import { pastMenu } from '../Menu'
 import s from '../feed.module.css'
 import { useKnownFiles, useMissingFiles, useOpenFile } from '../../hooks/useOpenFile'
 import { useT } from '../../i18n'
@@ -351,6 +352,8 @@ const InlineCode = ({ text, reveal }: { text: string; reveal: boolean }) => {
     <span
       className={copied ? `${s.code} ${s.codeCopied}` : ref ? `${s.code} ${s.codeFile}` : s.code}
       data-tooltip={copied ? t.feed.copy.copied : ref ? opens : t.feed.copy.click}
+      // A path opens, and so is reached past an open menu; the copy everything else does is not asked for.
+      {...(ref ? pastMenu : {})}
       onClick={() => {
         if (window.getSelection()?.isCollapsed === false) return
 

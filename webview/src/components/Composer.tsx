@@ -12,6 +12,7 @@ import {
 import { createPortal } from 'react-dom'
 import { isBashDraft } from '../feed/bash'
 import { isAsideDraft } from '../feed/side'
+import { shownGuess } from '../feed/suggestion'
 import { isLetterKey } from '../feed/fieldEdits'
 import { useT } from '../i18n'
 import { Microphone } from './Microphone'
@@ -66,13 +67,14 @@ import {
   insertAtRange,
   needsLeadingSpace,
   needsTrailingSpace,
+  noteCaret,
   notePastedPath,
   padTrailingBreak,
   placeCaretAtEnd,
   placeCaretBefore,
   placeCaretBeside,
   rebuildDom,
-  relabelImages,
+  relabelChips,
   removeChip,
   scrollCaretIntoView,
   splitTokens,
@@ -515,6 +517,14 @@ interface ComposerProps {
    */
   placeholder?: string
   /**
+   * The CLI's guess at the next message (see PanelState.suggestion), drawn as the gray text of the empty
+   * field in place of the ordinary one. Tab puts it into the field as the person's own words, to be edited
+   * or sent with the send key; until then Enter sends nothing - nothing has been written. Not there while
+   * words are being dictated. Gone from the state with the first keystroke after the turn (App.changeDraft),
+   * so it does not come back when the field is emptied.
+   */
+  suggestion?: string
+  /**
    * Whether the words go into a conversation - the default - or to something that only reads them: a run's
    * main thread (see ScenarioRunTab). A field that is not a conversation's has nothing a conversation's field
    * offers around the words: no commands behind the slash, no shell through "!", no side question, no queue.
@@ -583,6 +593,7 @@ export const Composer = ({
   onOpenSearch,
   onOpenScenarios,
   placeholder: ownPlaceholder,
+  suggestion,
   forConversation = true,
 }: ComposerProps) => {
   const t = useT()
@@ -658,7 +669,7 @@ export const Composer = ({
     rebuildDom(root, tokens)
     // A draft may have been set aside with captions that have gone stale since - we show the numbers as
     // they are, and the state catches up with the first edit.
-    relabelImages(root, imageBaseCount)
+    relabelChips(root, imageBaseCount)
     lastReported.current = tokens
     filledLayout.current = layout
   }
@@ -766,6 +777,19 @@ export const Composer = ({
     document.addEventListener('selectionchange', syncHead)
     return () => document.removeEventListener('selectionchange', syncHead)
   }, [tokens])
+
+  /**
+   * Where the caret stood, kept for the moment the selection goes elsewhere on the page - a quote marked in
+   * the feed lands there rather than at the end of the draft (see noteCaret). The field is read at the
+   * moment of the move: a change of layout hands over a new one.
+   */
+  useEffect(() => {
+    const note = () => {
+      if (input.current) noteCaret(input.current)
+    }
+    document.addEventListener('selectionchange', note)
+    return () => document.removeEventListener('selectionchange', note)
+  }, [])
 
   const query = head === null ? null : slashQueryFromText(head)
 
@@ -937,11 +961,11 @@ export const Composer = ({
   }
 
   /**
-   * Reads the field and along the way brings the images' captions into line with their order: the number
-   * in a chip has to match the [Image #N] the agent will see.
+   * Reads the field and along the way brings the captions of images and quotes into line with their order:
+   * the number in a chip has to match the [Image #N] the agent will see (see relabelChips).
    */
   const readTokens = (root: HTMLElement): UserToken[] => {
-    relabelImages(root, imageBaseCount)
+    relabelChips(root, imageBaseCount)
     return extractTokens(root)
   }
 
@@ -952,7 +976,7 @@ export const Composer = ({
    */
   useEffect(() => {
     const root = input.current
-    if (!root || !relabelImages(root, imageBaseCount)) return
+    if (!root || !relabelChips(root, imageBaseCount)) return
 
     const next = extractTokens(root)
     lastReported.current = next
@@ -1547,13 +1571,22 @@ export const Composer = ({
     if (paths.length > 0) onDropFiles(paths)
   }
 
+  /** The guess as the field shows it, and so as Tab takes it - see shownGuess. */
+  const shownSuggestion = shownGuess(suggestion, {
+    empty: tokens.length === 0,
+    conversation: forConversation,
+    dictating: voiceGhost !== '',
+  })
+
   const placeholder = tokens.length
     ? ''
-    : ownPlaceholder
-      ? ownPlaceholder
-      : planMode
-        ? t.composer.placeholderPlan
-        : t.composer.placeholder
+    : shownSuggestion
+      ? shownSuggestion
+      : ownPlaceholder
+        ? ownPlaceholder
+        : planMode
+          ? t.composer.placeholderPlan
+          : t.composer.placeholder
 
   /**
    * The caret has run into a chip and stopped on it rather than stepped over: from there backspace
@@ -1677,6 +1710,15 @@ export const Composer = ({
     if ((event.metaKey || event.ctrlKey) && !event.shiftKey && isLetterKey(event, 'y')) {
       event.preventDefault()
       redo()
+      return
+    }
+
+    // The gray guess becomes the person's words, with the caret at their end. A bare Tab only: Shift+Tab
+    // is the panel's mode switch, and the field is empty, so no hint list can be holding the key.
+    const bareKey = !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey
+    if (event.key === 'Tab' && bareKey && shownSuggestion) {
+      event.preventDefault()
+      applyTokens([{ kind: 'text', value: shownSuggestion }])
       return
     }
 

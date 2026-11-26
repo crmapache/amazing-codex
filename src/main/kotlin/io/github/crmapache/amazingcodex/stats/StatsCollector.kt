@@ -6,6 +6,7 @@ import com.intellij.openapi.util.Disposer
 import com.intellij.util.concurrency.AppExecutorUtil
 import io.github.crmapache.amazingcodex.codex.CodexHistory
 import io.github.crmapache.amazingcodex.codex.CodexRateLimit
+import io.github.crmapache.amazingcodex.codex.ModelNames
 import io.github.crmapache.amazingcodex.usage.UsageFeatures
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
@@ -35,7 +36,7 @@ import kotlinx.serialization.json.longOrNull
  * message a person sends, every permission decided, every tab opened. What arrives here is turned into
  * the figures of a day record (see DayRecord) and nothing else is remembered - except what a figure
  * cannot be made from one event alone: the tool calls of a turn waiting for their results, the minutes
- * of a conversation that add up to its longest stretch, the ends of the last hour's turns.
+ * of a conversation that add up to its length, the ends of the last hour's turns.
  *
  * Time in the panel is marked by minute (see MinuteSet) from three sources at once: a turn running (the
  * ticker marks every half-minute while one does), a person acting (a message, a decision), and a hand on
@@ -96,34 +97,6 @@ internal class StatsCollector(
         var todoComplete = false
         /** The minutes this conversation was alive in, on one scale across days (epoch minutes). */
         val minutes = TreeSet<Long>()
-
-        /** The stretch being extended right now: where it began and where it has reached. */
-        private var start = 0L
-        private var end = 0L
-
-        /** The longest unbroken stretch this conversation has managed, in minutes. */
-        var longestStretch = 0
-            private set
-
-        /**
-         * One more minute of this conversation, and what it does to its longest stretch.
-         *
-         * Carried along as the minutes arrive rather than worked out afresh each time. It used to copy
-         * the whole set into an array and walk it from the beginning - twice a minute, for every live
-         * conversation, over a set that is never trimmed. A tab left open for a week held thousands of
-         * minutes, and every tick paid for all of them; the answer, meanwhile, changes by at most one.
-         *
-         * A minute earlier than the stretch's own end means the machine's clock moved backwards: it is
-         * counted in the total, but it cannot lengthen a stretch that is running now.
-         */
-        fun mark(minute: Long, bridge: Int) {
-            if (!minutes.add(minute)) return
-            if (minute < end) return
-
-            if (start == 0L || minute - end > bridge + 1) start = minute
-            end = minute
-            longestStretch = maxOf(longestStretch, (minute - start + 1).toInt())
-        }
     }
 
     private val conversations = ConcurrentHashMap<String, Conversation>()
@@ -194,7 +167,7 @@ internal class StatsCollector(
 
     private fun noteAssistant(conversation: Conversation, event: JsonObject) {
         val message = event["message"] as? JsonObject ?: return
-        message.string("model").takeIf { isRealModel(it) }?.let { conversation.lastModel = it }
+        message.string("model").takeIf { ModelNames.isModel(it) }?.let { conversation.lastModel = it }
 
         val blocks = message["content"] as? JsonArray ?: return
         for (element in blocks) {
@@ -628,8 +601,8 @@ internal class StatsCollector(
     }
 
     /**
-     * This minute counts for one conversation too - and with it the conversation's total and its longest
-     * unbroken stretch, which are written down as the day's high-water marks.
+     * This minute counts for one conversation too - and with it the conversation's total, which is written
+     * down as the day's high-water mark.
      *
      * [born] is what tells a conversation from a tab. Everything the agent and the person do in a chat -
      * a prompt, a turn beginning, a turn ending - brings one into being; a hand on the keyboard does not,
@@ -644,19 +617,12 @@ internal class StatsCollector(
         val conversation = (if (born) conversations.getOrPut(sessionId) { Conversation() } else conversations[sessionId]) ?: return
         countSession(sessionId)
 
-        val total: Int
-        val stretch: Int
-
-        synchronized(conversation) {
-            conversation.mark(now / MINUTE_MS, STRETCH_BRIDGE_MINUTES)
-            total = conversation.minutes.size
-            stretch = conversation.longestStretch
+        val total = synchronized(conversation) {
+            conversation.minutes.add(now / MINUTE_MS)
+            conversation.minutes.size
         }
 
-        update { day ->
-            day.longestSession = maxOf(day.longestSession, total)
-            day.longestStretch = maxOf(day.longestStretch, stretch)
-        }
+        update { day -> day.longestSession = maxOf(day.longestSession, total) }
     }
 
     // --- The payload ---------------------------------------------------------------------
@@ -702,9 +668,6 @@ internal class StatsCollector(
         /** A line taken again this soon after it dropped is the same visit, not a new one. */
         const val WATCH_GAP_MS = 30L * 60_000L
 
-        /** A pause this long between two minutes still belongs to one stretch of work. */
-        const val STRETCH_BRIDGE_MINUTES = 5
-
         /** A conversation untouched for this long counts as history when reopened. */
         const val HISTORIAN_AGE_MS = 30L * 24 * 60 * 60 * 1000
 
@@ -734,18 +697,6 @@ internal class StatsCollector(
             val name = trimmed.drop(1).takeWhile { !it.isWhitespace() }.lowercase()
             return name.takeIf { it.isNotEmpty() }
         }
-
-        /**
-         * A real model - not one of the CLI's own marks.
-         *
-         * Some answers are signed not with a model but with a name in angle brackets: "<synthetic>" is
-         * what the CLI closes a turn with when the words are its own - a turn the person interrupted, an
-         * unknown command, the text of an API error. No model of that name exists, and taking it for one
-         * gets two things wrong at once: the models card grows a row for something nobody ran, and the
-         * turn is taken away from the model that did the work up to that point. The panel's feed drops
-         * the same marks for the same reason (realModel in feed/build.ts).
-         */
-        fun isRealModel(model: String): Boolean = model.isNotEmpty() && !model.startsWith("<")
 
         /**
          * The model's name as the models card shows it: `gpt-5.6-sol` -> "GPT-5.6 Sol". Codex names its

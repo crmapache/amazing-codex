@@ -1,15 +1,19 @@
 import type { StatisticsData, StatisticsDay } from '../protocol'
 import { addDays, dayNumber, daysBetween, weekday } from './dates'
-import { WEEKDAYS, clock, longDate } from './format'
+import { WEEKDAYS, clock, longDate, shortDate, shortMonth } from './format'
 
 /**
- * The arithmetic behind the statistics tab: out of the day records the IDE keeps, everything the tiles,
- * the chart, the calendar and the lists show - for whichever range is chosen.
+ * The arithmetic behind the statistics tab: out of the day records the IDE keeps and the tokens it reads
+ * out of the CLI's transcripts, everything the tiles, the bars, the calendar and the lists show - for
+ * whichever range is chosen.
  *
  * The days are the machine's, not one project's: they arrive already folded together (see
  * StatsSnapshot.daysTogether on the plugin's side), so every figure here is about the person's work
- * wherever it was done. The one thing counted by project is where the hours went, and it reads the
- * minutes the projects carry alongside the days.
+ * wherever it was done. The one thing counted by project is where the tokens went, and it reads the
+ * tokens the projects carry alongside the days.
+ *
+ * Nothing here is about the time a panel stood open. It used to be the tab's first figure, and it said
+ * more about a window left open than about the work: the tokens a day of work took is the honest measure.
  *
  * Pure functions over the message, so the range switches without a trip to the IDE and the whole of it
  * can be checked in a test. The words go in the components; here are the numbers.
@@ -32,14 +36,18 @@ export interface Range {
 
 const RANGE_DAYS: Record<RangeKey, number> = { '1d': 1, '7d': 7, '30d': 30, all: 0 }
 
-/** The first day anything at all was recorded, across every project - where "all time" begins. */
+/**
+ * The first day anything at all was recorded - a day in the book, or a day of tokens - where "all time"
+ * begins. The tokens often reach further back than the book: the first reading of the transcripts finds
+ * the month of work before the plugin was installed.
+ */
 export const firstRecordedDay = (data: StatisticsData): string | null => {
   let first: string | null = null
   const consider = (day: string) => {
     if (first === null || day < first) first = day
   }
   for (const day of data.days) consider(day.date)
-  for (const project of data.projects) for (const day of Object.keys(project.minutes)) consider(day)
+  for (const day of Object.keys(data.tokens ?? {})) if (tokensOn(data, day) > 0) consider(day)
   return first
 }
 
@@ -84,45 +92,71 @@ const isActive = (day: StatisticsDay): boolean => day.minutes > 0 || (day.turns 
 export const daysIn = (data: StatisticsData, range: Range): StatisticsDay[] =>
   data.days.filter((day) => within(day.date, range.from, range.to))
 
-// --- Time in the panel -----------------------------------------------------------------
+// --- Tokens -----------------------------------------------------------------------------
 
-export interface TimeTile {
-  /** The minutes in the range, and the change against the stretch of equal length before it. */
-  minutes: number
+/**
+ * The tokens of one day, every hour of it added up.
+ *
+ * Out of `tokens` rather than the turns of `days`: the turns know only the main thread of a panel's own
+ * conversations, and a busy day spends most of its tokens in subagents and scenario runs (see
+ * StatisticsData.tokens).
+ */
+const tokensOn = (data: StatisticsData, date: string): number =>
+  (data.tokens?.[date] ?? []).reduce((total, value) => total + value, 0)
+
+const tokensOver = (data: StatisticsData, from: string, to: string): number =>
+  daysBetween(from, to).reduce((total, date) => total + tokensOn(data, date), 0)
+
+/** The first day the transcripts know of - before it, a day is not a day without tokens but an unknown one. */
+const firstTokenDay = (data: StatisticsData): string | null =>
+  Object.keys(data.tokens ?? {})
+    .filter((date) => tokensOn(data, date) > 0)
+    .sort()[0] ?? null
+
+export interface TokenTile {
+  tokens: number
+  /**
+   * The change against the stretch of equal length before the range. Null for all time, and when that
+   * stretch reaches back past the first day the transcripts know: a day before them is not a day without
+   * tokens - the CLI deleted its transcript - and a delta against it would be a rise that never happened.
+   */
   delta: number | null
-  /** Minutes per calendar day of the range, and how many projects those minutes were spent in. */
-  perDay: number
+  /** The hour of the day that held the most of them, added up over the range - absent when nothing was spent. */
+  busiestHour: number | null
+  /** How many projects spent tokens in the range - "across four projects" under the figure. */
   projects: number
 }
 
-/** How many projects hold a minute inside the range - "across four projects" under the figure. */
-const projectsWorked = (data: StatisticsData, from: string, to: string): number =>
-  data.projects.filter((project) =>
-    Object.entries(project.minutes).some(([day, minutes]) => minutes > 0 && within(day, from, to)),
-  ).length
-
-export const timeTile = (data: StatisticsData, range: Range): TimeTile => {
-  const days = daysIn(data, range)
-  const minutes = sum(days, (day) => day.minutes)
+export const tokenTile = (data: StatisticsData, range: Range): TokenTile => {
+  const tokens = tokensOver(data, range.from, range.to)
 
   let delta: number | null = null
-  if (range.key !== 'all') {
+  const first = firstTokenDay(data)
+  if (range.key !== 'all' && first !== null) {
     const previousTo = addDays(range.from, -1)
     const previousFrom = addDays(previousTo, -(range.days - 1))
-    const previous = sum(
-      data.days.filter((day) => within(day.date, previousFrom, previousTo)),
-      (day) => day.minutes,
-    )
-    delta = minutes - previous
+    if (previousFrom >= first) delta = tokens - tokensOver(data, previousFrom, previousTo)
   }
 
-  return {
-    minutes,
-    delta,
-    perDay: minutes / Math.max(1, range.days),
-    projects: projectsWorked(data, range.from, range.to),
+  const byHour = Array.from({ length: 24 }, () => 0)
+  for (const date of daysBetween(range.from, range.to)) {
+    ;(data.tokens?.[date] ?? []).forEach((value, hour) => {
+      if (hour < 24) byHour[hour] = (byHour[hour] ?? 0) + value
+    })
   }
+  let busiestHour: number | null = null
+  byHour.forEach((value, hour) => {
+    if (value > 0 && (busiestHour === null || value > byHour[busiestHour]!)) busiestHour = hour
+  })
+
+  return { tokens, delta, busiestHour, projects: projectsSpending(data, range) }
 }
+
+/** How many projects hold a token inside the range. */
+export const projectsSpending = (data: StatisticsData, range: Range): number =>
+  data.projects.filter((project) =>
+    Object.entries(project.tokens ?? {}).some(([day, tokens]) => tokens > 0 && within(day, range.from, range.to)),
+  ).length
 
 // --- Days at work -----------------------------------------------------------------------
 
@@ -204,54 +238,9 @@ export const outputTile = (data: StatisticsData, range: Range): OutputTile => {
   }
 }
 
-// --- Hours a day ------------------------------------------------------------------------
+// --- Tokens over the range -----------------------------------------------------------------
 
-export interface HoursSeries {
-  dates: string[]
-  /** Hours in the panel, one point a day. */
-  hours: number[]
-  /** The longest day in the range, if there was one. */
-  longest: { date: string; minutes: number } | null
-  /** Minutes a day over every calendar day of the range, quiet ones included - the time tile's "a day". */
-  average: number
-}
-
-export const hoursSeries = (data: StatisticsData, range: Range): HoursSeries => {
-  const dates = daysBetween(range.from, range.to)
-  const byDate = new Map(data.days.map((day) => [day.date, day]))
-
-  let longest: { date: string; minutes: number } | null = null
-  for (const date of dates) {
-    const minutes = byDate.get(date)?.minutes ?? 0
-    if (minutes > 0 && (longest === null || minutes > longest.minutes)) longest = { date, minutes }
-  }
-
-  const minutes = dates.reduce((total, date) => total + (byDate.get(date)?.minutes ?? 0), 0)
-
-  return {
-    dates,
-    hours: dates.map((date) => (byDate.get(date)?.minutes ?? 0) / 60),
-    longest,
-    average: minutes / Math.max(1, dates.length),
-  }
-}
-
-// --- Tokens a day -----------------------------------------------------------------------
-
-/**
- * The tokens of one day, every hour of it added up.
- *
- * Out of `tokens` rather than the turns of `days`: the turns know only the main thread of a panel's own
- * conversations, and a busy day spends most of its tokens in subagents and scenario runs (see
- * StatisticsData.tokens).
- */
-const tokensOn = (data: StatisticsData, date: string): number =>
-  (data.tokens?.[date] ?? []).reduce((total, value) => total + value, 0)
-
-export interface TokenSeries {
-  dates: string[]
-  /** Tokens spent, one point a day. */
-  tokens: number[]
+export interface TokenSummary {
   /** All of them, over the range. */
   total: number
   /** The busiest day in the range, if there was one. */
@@ -268,22 +257,19 @@ export interface TokenSeries {
   average: { tokens: number; from: string; days: number } | null
 }
 
-export const tokenSeries = (data: StatisticsData, range: Range): TokenSeries => {
+export const tokenSummary = (data: StatisticsData, range: Range): TokenSummary => {
   const dates = daysBetween(range.from, range.to)
-  const tokens = dates.map((date) => tokensOn(data, date))
 
   let busiest: { date: string; tokens: number } | null = null
-  for (const [index, date] of dates.entries()) {
-    const spent = tokens[index] ?? 0
+  let total = 0
+  for (const date of dates) {
+    const spent = tokensOn(data, date)
+    total += spent
     if (spent > 0 && (busiest === null || spent > busiest.tokens)) busiest = { date, tokens: spent }
   }
 
-  const total = tokens.reduce((sum, value) => sum + value, 0)
-
-  const firstKnown = Object.keys(data.tokens ?? {})
-    .filter((date) => tokensOn(data, date) > 0)
-    .sort()[0]
-  const known = firstKnown === undefined ? [] : dates.filter((date) => date >= firstKnown)
+  const first = firstTokenDay(data)
+  const known = first === null ? [] : dates.filter((date) => date >= first)
   const average =
     known.length === 0
       ? null
@@ -293,95 +279,195 @@ export const tokenSeries = (data: StatisticsData, range: Range): TokenSeries => 
           days: known.length,
         }
 
-  return { dates, tokens, total, busiest, average }
+  return { total, busiest, average }
 }
 
-export interface DayTokens {
-  /** All 24 hours, midnight first. */
-  hours: number[]
-  total: number
-  /** The busiest hour and what it held - absent on a quiet day. */
-  peak: { hour: number; tokens: number } | null
-}
+// --- Tokens as bars ---------------------------------------------------------------------------
 
-/** Tokens by hour of the day, added up over the days of the range - the one-day view of the card above. */
-export const dayTokens = (data: StatisticsData, range: Range): DayTokens => {
-  const hours = Array.from({ length: 24 }, () => 0)
-  for (const date of daysBetween(range.from, range.to)) {
-    ;(data.tokens?.[date] ?? []).forEach((value, hour) => {
-      if (hour < 24) hours[hour] = (hours[hour] ?? 0) + value
-    })
-  }
+/**
+ * How much time one bar holds: a number of hours that divides the day, one to three days, one or two weeks
+ * (Monday to Sunday) or a calendar month. The hours divide the day so a bar never straddles midnight; the
+ * days and weeks are counted from the epoch rather than from the range's first day, so a bar keeps the same
+ * days from one day to the next instead of every bar shifting when a day goes by; and the weeks and months
+ * follow the calendar so a bar reads as "that week" rather than as seven days from nowhere.
+ *
+ * The steps between a day and a month are there so the picture coarsens gently as the panel narrows or
+ * the history grows: from days straight to weeks, a hundred and thirty days in an ordinary panel went from
+ * too many bars to nineteen.
+ */
+export type BarSpan = 1 | 2 | 3 | 4 | 6 | 8 | 12 | 'day' | '2 days' | '3 days' | 'week' | '2 weeks' | 'month'
 
-  let peak: { hour: number; tokens: number } | null = null
-  for (const [hour, tokens] of hours.entries()) {
-    if (tokens > 0 && (peak === null || tokens > peak.tokens)) peak = { hour, tokens }
-  }
+const SPANS: BarSpan[] = [1, 2, 3, 4, 6, 8, 12, 'day', '2 days', '3 days', 'week', '2 weeks', 'month']
 
-  return { hours, total: hours.reduce((total, value) => total + value, 0), peak }
-}
+/**
+ * The narrowest a bar may be before the next span up is taken - the thirty days and all time only. About
+ * as wide as the week's hourly bars come out in a panel of ordinary width, so the three ranges read as
+ * one family of pictures.
+ */
+export const BAR_MIN_PX = 5
 
-// --- The hours of one day ---------------------------------------------------------------
+/** The room one name under the axis needs: "Sep 30" in the tick font, and a gap to the next. */
+export const BAR_LABEL_PX = 52
 
-export interface HourBar {
+export interface TokenBar {
+  /** The first and the last day the bar holds - one and the same for a bar of hours or of a day. */
+  from: string
+  to: string
+  /** For a bar of hours, the hour it begins at and the hour it ends at (exclusive); 0 and 24 otherwise. */
   hour: number
-  minutes: number
+  end: number
+  tokens: number
+  /** Whether the bar lies wholly after the present hour - the rest of today, drawn as nothing at all. */
+  ahead: boolean
+  /**
+   * Whether every day the bar holds is a Saturday or a Sunday - a faint band behind it, so a week of bars
+   * shows where the weekend fell. A bar that mixes a Friday in, or the single day of today, is not marked.
+   */
+  weekend: boolean
 }
 
-export interface DayHours {
-  /** All 24 hours, midnight first - the quiet ones included, so the day keeps its shape. */
-  bars: HourBar[]
-  minutes: number
-  /** The busiest hour, and the first and the last hour with anything in them. Absent on a quiet day. */
-  peak: HourBar | null
-  /**
-   * Every hour that reaches that same figure, not just the first of them.
-   *
-   * The bar chart lights the busiest hour up, and a day of real work ties for it constantly: the scale is
-   * a whole hour, so every hour spent end to end sits at sixty and they are all the busiest there was.
-   * Lighting the earliest of them and leaving its twins dark says the light means something about that
-   * one hour, when the truth is that they are equal - so all of them are lit, and the note names all of
-   * them too.
-   */
-  peaks: number[]
-  first: number | null
-  last: number | null
+/** A name under the axis, and the bars it stands under: [start, start + count). */
+export interface BarTick {
+  start: number
+  count: number
+  label: string
+}
+
+export interface TokenBars {
+  span: BarSpan
+  bars: TokenBar[]
+  /** The bar that held the most, or null when the range spent nothing. */
+  peak: number | null
+  ticks: BarTick[]
+}
+
+/** Which bar of a span longer than a day a date falls in - the same number for every day of one bar. */
+const barOf = (span: Exclude<BarSpan, number>, date: string): number => {
+  const day = dayNumber(date)
+  // Weeks from the Monday the epoch's week began with: day 0 was a Thursday.
+  const week = Math.floor((day + 3) / 7)
+  switch (span) {
+    case 'day':
+      return day
+    case '2 days':
+      return Math.floor(day / 2)
+    case '3 days':
+      return Math.floor(day / 3)
+    case 'week':
+      return week
+    case '2 weeks':
+      return Math.floor(week / 2)
+    case 'month':
+      return Number(date.slice(0, 4)) * 12 + Number(date.slice(5, 7)) - 1
+  }
+}
+
+/** How many bars the range comes to at a span. */
+export const barCount = (range: Range, span: BarSpan): number => {
+  if (typeof span === 'number') return (range.days * 24) / span
+  return barOf(span, range.to) - barOf(span, range.from) + 1
 }
 
 /**
- * Minutes by hour of the day, added up over the days of the range.
+ * The span of a bar for the range, given the width the bars have to share.
  *
- * This is what the chart shows when the range is a single day: a line of dots one day wide says
- * nothing, whereas the hours of that day say when the work happened.
+ * Today and the week are by the hour whatever the width: the day's rhythm - the mornings, the nights the
+ * agents ran on their own - is what they are looked at for, and a week's 168 bars still fit a narrow
+ * panel once the bars give up their gaps (see .barFill). Thirty days and all time take the finest span
+ * whose bars stay at least [BAR_MIN_PX] wide, so a wider panel shows more of the rhythm rather than
+ * fatter bars.
  */
-export const dayHours = (data: StatisticsData, range: Range): DayHours => {
-  const minutes = Array.from({ length: 24 }, () => 0)
-  for (const day of daysIn(data, range)) {
-    ;(day.hours ?? []).forEach((value, hour) => {
-      if (hour < 24) minutes[hour] = (minutes[hour] ?? 0) + value
+export const barSpan = (range: Range, plotWidth: number): BarSpan => {
+  if (range.key === '1d' || range.key === '7d') return 1
+  const fits = Math.floor(plotWidth / BAR_MIN_PX)
+  return SPANS.find((span) => barCount(range, span) <= fits) ?? 'month'
+}
+
+export const tokenBars = (data: StatisticsData, range: Range, plotWidth: number): TokenBars => {
+  const span = barSpan(range, plotWidth)
+  const hourNow = new Date(data.now).getHours()
+  const dates = daysBetween(range.from, range.to)
+  const bars: TokenBar[] = []
+
+  const sumHours = (date: string, from: number, to: number): number => {
+    const hours = data.tokens?.[date] ?? []
+    let total = 0
+    for (let hour = from; hour < to; hour++) total += hours[hour] ?? 0
+    return total
+  }
+
+  if (typeof span === 'number') {
+    for (const date of dates) {
+      for (let hour = 0; hour < 24; hour += span) {
+        bars.push({
+          from: date,
+          to: date,
+          hour,
+          end: hour + span,
+          tokens: sumHours(date, hour, hour + span),
+          ahead: date > data.today || (date === data.today && hour > hourNow),
+          weekend: false,
+        })
+      }
+    }
+  } else {
+    let key: number | null = null
+    for (const date of dates) {
+      const tokens = sumHours(date, 0, 24)
+      const last = bars[bars.length - 1]
+      if (last && key === barOf(span, date)) {
+        last.to = date
+        last.tokens += tokens
+      } else {
+        key = barOf(span, date)
+        bars.push({ from: date, to: date, hour: 0, end: 24, tokens, ahead: false, weekend: false })
+      }
+    }
+  }
+
+  if (range.days > 1) {
+    for (const bar of bars) bar.weekend = daysBetween(bar.from, bar.to).every((date) => weekday(date) >= 5)
+  }
+
+  let peak: number | null = null
+  bars.forEach((bar, index) => {
+    if (bar.tokens > 0 && (peak === null || bar.tokens > bars[peak]!.tokens)) peak = index
+  })
+
+  return { span, bars, peak, ticks: barTicks(bars, span, range, plotWidth) }
+}
+
+/**
+ * The names under the bars: the hours of a single day; the days, for the bars of hours across several; a
+ * bar's first day; the month. As many as fit at [BAR_LABEL_PX] apiece - every second or
+ * third one when they do not - and each stands centred under what it names.
+ */
+const barTicks = (bars: TokenBar[], span: BarSpan, range: Range, plotWidth: number): BarTick[] => {
+  if (typeof span === 'number' && range.days === 1) {
+    return bars.flatMap((bar, index) => (bar.hour % 6 === 0 ? [{ start: index, count: 1, label: clock(bar.hour) }] : []))
+  }
+
+  const groups: BarTick[] = []
+  if (typeof span === 'number') {
+    const perDay = 24 / span
+    for (let start = 0; start < bars.length; start += perDay) {
+      groups.push({ start, count: perDay, label: shortDate(bars[start]!.from) })
+    }
+  } else {
+    bars.forEach((bar, index) => {
+      groups.push({ start: index, count: 1, label: span === 'month' ? shortMonth(bar.from) : shortDate(bar.from) })
     })
   }
 
-  const bars = minutes.map((value, hour) => ({ hour, minutes: value }))
-  const worked = bars.filter((bar) => bar.minutes > 0)
-  let peak: HourBar | null = null
-  for (const bar of worked) if (peak === null || bar.minutes > peak.minutes) peak = bar
-
-  return {
-    bars,
-    minutes: minutes.reduce((total, value) => total + value, 0),
-    peak,
-    peaks: peak === null ? [] : worked.filter((bar) => bar.minutes === peak.minutes).map((bar) => bar.hour),
-    first: worked[0]?.hour ?? null,
-    last: worked[worked.length - 1]?.hour ?? null,
-  }
+  const every = Math.max(1, Math.ceil((groups.length * BAR_LABEL_PX) / Math.max(1, plotWidth)))
+  return groups.filter((_, index) => index % every === 0)
 }
 
 // --- When you work ----------------------------------------------------------------------
 
 export interface HeatCell {
   date: string
-  minutes: number
+  tokens: number
   /** 0 is quiet, 4 is the busiest a day gets. */
   level: number
   /** Whether the day lies in the future - the rest of this week, drawn empty. */
@@ -391,7 +477,7 @@ export interface HeatCell {
 export interface HeatMap {
   /** Weeks, newest first; each week Monday to Sunday. */
   weeks: HeatCell[][]
-  /** "Most of your work lands Tue–Thu, between 10:00 and 13:00." */
+  /** "Most of your work lands Tue–Thu, between 10:00 and 13:00." - by the tokens it took. */
   sentence: string
 }
 
@@ -405,9 +491,9 @@ export const HEAT_WEEKS = 53
 export const HEAT_WEEKS_MAX = 53 * 10
 
 /** The busiest quarter of days is the top level; the rest are spread evenly below it. */
-export const heatLevel = (minutes: number, busiest: number): number => {
-  if (minutes <= 0 || busiest <= 0) return 0
-  const share = minutes / busiest
+export const heatLevel = (tokens: number, busiest: number): number => {
+  if (tokens <= 0 || busiest <= 0) return 0
+  const share = tokens / busiest
   if (share <= 0.25) return 1
   if (share <= 0.5) return 2
   if (share <= 0.75) return 3
@@ -416,44 +502,40 @@ export const heatLevel = (minutes: number, busiest: number): number => {
 
 export const heatMap = (data: StatisticsData, weeks: number = HEAT_WEEKS): HeatMap => {
   const columns = Math.min(HEAT_WEEKS_MAX, Math.max(1, Math.round(weeks)))
-  const byDate = new Map(data.days.map((day) => [day.date, day]))
   const today = data.today
   // The newest week ends on the coming Sunday, so today always sits in the last column.
   const end = addDays(today, 6 - weekday(today))
   const start = addDays(end, -(columns * 7 - 1))
   const dates = daysBetween(start, end)
 
-  const busiest = max(
-    data.days.filter((day) => within(day.date, start, today)),
-    (day) => day.minutes,
-  )
+  const busiest = dates.reduce((best, date) => (date > today ? best : Math.max(best, tokensOn(data, date))), 0)
 
   const cells = dates.map((date) => {
-    const minutes = byDate.get(date)?.minutes ?? 0
-    return { date, minutes, level: heatLevel(minutes, busiest), ahead: date > today }
+    const tokens = tokensOn(data, date)
+    return { date, tokens, level: heatLevel(tokens, busiest), ahead: date > today }
   })
 
   const grid: HeatCell[][] = []
   for (let index = 0; index < cells.length; index += 7) grid.push(cells.slice(index, index + 7))
 
-  return { weeks: grid.reverse(), sentence: workSentence(data.days) }
+  return { weeks: grid.reverse(), sentence: workSentence(data.tokens ?? {}) }
 }
 
 /**
  * The days of the week and the hours of the day the work lands in - the run of three weekdays and the
- * run of three hours that hold the most minutes.
+ * run of three hours that hold the most tokens.
  */
-export const workSentence = (days: StatisticsDay[]): string => {
+export const workSentence = (tokens: Record<string, number[]>): string => {
   const byWeekday = Array.from({ length: 7 }, () => 0)
   const byHour = Array.from({ length: 24 }, () => 0)
   let total = 0
 
-  for (const day of days) {
-    if (day.minutes <= 0) continue
-    total += day.minutes
-    byWeekday[weekday(day.date)] = (byWeekday[weekday(day.date)] ?? 0) + day.minutes
-    day.hours.forEach((minutes, hour) => {
-      byHour[hour] = (byHour[hour] ?? 0) + minutes
+  for (const [date, hours] of Object.entries(tokens)) {
+    hours.forEach((spent, hour) => {
+      if (spent <= 0 || hour >= 24) return
+      total += spent
+      byWeekday[weekday(date)] = (byWeekday[weekday(date)] ?? 0) + spent
+      byHour[hour] = (byHour[hour] ?? 0) + spent
     })
   }
 
@@ -545,12 +627,12 @@ export const toolRows = (data: StatisticsData, range: Range, limit = TOOL_ROWS):
   }))
 }
 
-// --- Where the hours went ------------------------------------------------------------------
+// --- Where the tokens went ------------------------------------------------------------------
 
 export interface ProjectRow {
   key: string
   name: string
-  minutes: number
+  tokens: number
   share: number
   current: boolean
 }
@@ -560,22 +642,19 @@ export const PROJECT_ROWS = 5
 export const projectRows = (data: StatisticsData, range: Range, limit = PROJECT_ROWS): ProjectRow[] => {
   const rows = data.projects
     .map((project) => {
-      let minutes = 0
-      for (const [day, value] of Object.entries(project.minutes)) {
-        if (within(day, range.from, range.to)) minutes += value
+      let tokens = 0
+      for (const [day, value] of Object.entries(project.tokens ?? {})) {
+        if (within(day, range.from, range.to)) tokens += value
       }
-      return { key: project.key, name: project.name || 'unnamed', minutes, share: 0, current: project.key === data.project.key }
+      return { key: project.key, name: project.name || 'unnamed', tokens, share: 0, current: project.key === data.project.key }
     })
-    .filter((row) => row.minutes > 0)
-    .sort((a, b) => b.minutes - a.minutes || a.name.localeCompare(b.name))
+    .filter((row) => row.tokens > 0)
+    .sort((a, b) => b.tokens - a.tokens || a.name.localeCompare(b.name))
     .slice(0, limit)
 
-  const top = rows[0]?.minutes ?? 0
-  return rows.map((row) => ({ ...row, share: top > 0 ? row.minutes / top : 0 }))
+  const top = rows[0]?.tokens ?? 0
+  return rows.map((row) => ({ ...row, share: top > 0 ? row.tokens / top : 0 }))
 }
-
-/** How many projects the ledger knows at all - what the tab says it is counting together. */
-export const projectCount = (data: StatisticsData): number => data.projects.length
 
 // --- Files -----------------------------------------------------------------------------------
 
@@ -604,9 +683,6 @@ export const filesTile = (data: StatisticsData, range: Range): FilesTile => {
 export interface FactsTile {
   sessions: number
   turns: number
-  /** The mean turn, in milliseconds - null without a single turn. */
-  averageTurnMs: number | null
-  longestSessionMinutes: number
   forks: number
   deepestChain: number
   /** Turns by model family, the busiest first, as shares of all turns. */
@@ -616,8 +692,6 @@ export interface FactsTile {
 
 export const factsTile = (data: StatisticsData, range: Range): FactsTile => {
   const days = daysIn(data, range)
-  const turns = sum(days, (day) => day.turns)
-  const turnMillis = sum(days, (day) => day.turnMillis)
 
   const modelTurns = new Map<string, number>()
   for (const day of days) {
@@ -630,9 +704,7 @@ export const factsTile = (data: StatisticsData, range: Range): FactsTile => {
 
   return {
     sessions: sum(days, (day) => day.sessions),
-    turns,
-    averageTurnMs: turns > 0 ? turnMillis / turns : null,
-    longestSessionMinutes: max(days, (day) => day.longestSession),
+    turns: sum(days, (day) => day.turns),
     forks: sum(days, (day) => day.forks),
     deepestChain: max(days, (day) => day.maxDepth),
     models,

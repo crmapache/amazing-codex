@@ -25,7 +25,8 @@ export const es: Dict = {
       mcp: { title: 'SERVIDORES MCP', hint: 'estado · iniciar sesión · reconectar' },
       plugins: { title: 'PLUGINS', hint: 'instalados · explorar · marketplaces' },
       settings: { title: 'AJUSTES', hint: 'cómo se comporta y cómo suena el panel' },
-      appearance: { title: 'APARIENCIA', hint: 'tema y tamaño del texto' },
+      appearance: { title: 'APARIENCIA', hint: 'tema, tamaño del texto y fuente' },
+      font: { title: 'FUENTE', hint: 'la letra del panel' },
       sounds: { title: 'AVISOS SONOROS', hint: 'cuándo te llama el panel' },
       calmColors: { title: 'COLORES TRANQUILOS', hint: 'cómo se pintan los medidores' },
       indicators: { title: 'INDICADORES', hint: 'qué queda alrededor del campo' },
@@ -51,8 +52,8 @@ export const es: Dict = {
       customModels: { title: 'MODELOS PROPIOS', hint: 'los que Codex no ofrece' },
       language: { title: 'IDIOMA', hint: 'en qué idioma habla el panel' },
       accounts: { title: 'CUENTAS DE CODEX', hint: 'qué suscripción paga el trabajo' },
-      feedback: { title: 'COMENTARIOS', hint: 'un fallo, una idea o simplemente un hola' },
-      feedbackLog: { title: 'QUÉ SE ADJUNTA', hint: 'el informe entero, antes de enviarlo' },
+      feedback: { title: 'COMENTARIOS', hint: 'cómo pedir un cambio' },
+      feedbackLog: { title: 'INFORME DE DEPURACIÓN', hint: 'el informe entero, para copiar' },
       usageStats: { title: 'ESTADÍSTICAS DE USO', hint: 'contadores anónimos, solo si lo permites' },
       usageStatsReport: { title: 'QUÉ SE ENVÍA', hint: 'el informe entero, tal como saldría' },
     },
@@ -65,7 +66,7 @@ export const es: Dict = {
       remote: { label: 'Acceso remoto', sub: 'Estado, relay, dispositivos vinculados' },
       accounts: { label: 'Cuentas de Codex', sub: 'Cambia sin cerrar sesión' },
       settings: { label: 'Ajustes', sub: 'Tema, sonidos, chats nuevos, idioma' },
-      feedback: { label: 'Enviar comentarios', sub: 'Un fallo, una idea o simplemente un hola' },
+      feedback: { label: 'Comentarios', sub: 'Cómo pedir un cambio' },
     },
 
     author: {
@@ -165,6 +166,13 @@ export const es: Dict = {
     darkWord: 'oscuro',
     lightWord: 'claro',
     auto: 'Automático',
+    font: 'FUENTE',
+    followConsoleFont: 'Como en la consola',
+    followConsoleFontSub: (font) => `Seguir la fuente de la consola del IDE - ahora ${font}`,
+    ownFont: 'Fuente propia',
+    ownFontSub: 'Solo el panel - el editor y la terminal quedan como están',
+    ownFontChosen: (font) => `${font}, solo en el panel`,
+    fontsNote: 'Fuentes monoespaciadas de esta computadora. El panel se compone como una terminal, así el código y las tablas conservan sus columnas.',
   },
 
   restoreTabs: {
@@ -257,7 +265,7 @@ export const es: Dict = {
       hint: 'El anillo del tope mensual de gasto de un puesto Business - solo en un puesto que lo tenga',
     },
     tokens: { label: 'Tokens de hoy', hint: 'Gastados hoy, en todos los proyectos' },
-    feedback: { label: 'Botón de comentarios', hint: 'La burbuja que abre el formulario - el menú conserva su propio acceso' },
+    feedback: { label: 'Botón de comentarios', hint: 'La burbuja que abre la pantalla de comentarios - el menú conserva su propio acceso' },
     thanks: { label: 'Corazón', hint: 'Una estrella, una reseña, una palabra a un amigo o una propina' },
   },
 
@@ -269,6 +277,11 @@ export const es: Dict = {
     reopen: (key) => (key ? `Volver a abrir en su sitio · ${key}` : 'Volver a abrir en su sitio'),
     fork: 'bifurcación',
     messages: (n) => (n === 1 ? `${n} mensaje` : `${n} mensajes`),
+    delete: 'Eliminar',
+    deleteTitle: '¿Eliminar esta conversación?',
+    deleteNote: 'Codex la elimina para siempre, junto con los agentes que lanzó. No se puede recuperar.',
+    deleteOpen: (title) => `«${title}» está abierta en una pestaña. Cierra la pestaña para eliminarla.`,
+    deleteRefused: (title) => `Codex no pudo eliminar «${title}», así que sigue aquí.`,
   },
 
   search: {
@@ -783,6 +796,8 @@ export const es: Dict = {
       search: 'Buscar en conversaciones',
       fork: 'Fork desde la selección',
       forkWhen: 'con texto seleccionado en el feed',
+      terminal: 'Continuar en la terminal',
+      terminalWhen: 'una acción del IDE, sin tecla hasta que le asignes una',
     },
   },
 
@@ -845,6 +860,9 @@ export const es: Dict = {
     deviceDefault: 'El del sistema',
     deviceDefaultHint: 'Sigue lo que tenga configurado el sistema',
     deviceNote: 'El cambio se aplica en el próximo dictado.',
+
+    trainingOptOut: 'Excluir del entrenamiento de modelos',
+    trainingOptOutHint: 'Pide a Deepgram que no guarde tus dictados ni los use para mejorar sus modelos. En los planes Pay as you go y Growth el precio es el mismo.',
 
     promo: {
       title: '¿Te gusta dictar aquí?',
@@ -1006,8 +1024,31 @@ export const es: Dict = {
     fork: 'Bifurcar esta conversación: una pestaña nueva que sigue desde aquí, mientras esta queda como está',
     forkEmpty: 'Todavía no hay nada que bifurcar: esta pestaña no tiene conversación',
     renameTab: 'Renombrar conversación',
+    tabMenu: 'ESTA CONVERSACIÓN',
     menu: 'Menú',
-    watchers: (n) => `Hay ${n} ${n === 1 ? 'cliente más viendo' : 'clientes más viendo'} este proyecto`,
+  },
+
+  terminal: {
+    label: 'TERMINAL',
+    continue: 'Continuar en la terminal',
+    show: 'Mostrar la terminal',
+    back: 'Volver al chat',
+    here: 'Esta conversación sigue en la terminal',
+    hereBody:
+      'Lo que escribas aquí espera en la cola y se envía cuando la conversación vuelva. «Volver al chat» cierra la terminal, y lo que Codex esté haciendo allí se detiene.',
+    elsewhere: 'Esta conversación está abierta en otra terminal',
+    elsewhereBody: 'Ciérrala allí para seguir aquí. Hasta entonces, lo que escribas aquí espera en la cola.',
+    atDesk: 'La conversación está en una terminal del escritorio. Lo que escribas aquí espera en la cola y se envía cuando vuelva al chat.',
+    refused: 'No se pudo continuar en la terminal',
+    reasons: {
+      noConversation: 'Esta pestaña aún no tiene conversación: envía primero un mensaje.',
+      busy: 'Codex está trabajando o esperando tu respuesta. Inténtalo de nuevo cuando termine el turno.',
+      background: 'En esta conversación aún hay agentes o comandos en segundo plano, y se detendrían con ella.',
+      notFound: 'No se encontró Codex en esta máquina.',
+      account: 'No se pudo usar la cuenta de esta pestaña. Revísala en la pantalla de cuentas.',
+      noTerminal: 'No se pudo abrir la terminal del IDE.',
+    },
+    dismiss: 'Cerrar',
   },
 
   side: {
@@ -1112,6 +1153,7 @@ export const es: Dict = {
     copyBlock: 'Copiar este bloque',
     copyReply: 'Copiar toda la respuesta',
     moreActions: 'Más',
+    messageMenu: 'ESTE MENSAJE',
     copyMessage: 'Copiar este mensaje, con las rutas de lo adjunto',
     editor: {
       selected: (n, name) => (n === 1 ? `1 línea de ${name}` : `${n} líneas de ${name}`),
@@ -1120,7 +1162,6 @@ export const es: Dict = {
     },
     reuse: {
       label: 'Editar y enviar de nuevo',
-      hint: 'Devolver este mensaje al campo de entrada, para editarlo y enviarlo de nuevo',
       lostImages: (n: number): string =>
         n === 1
           ? 'Vuelve al campo de entrada, pero la imagen pegada no: adjúntala otra vez'
@@ -1128,7 +1169,7 @@ export const es: Dict = {
     },
     rewind: {
       label: 'Retroceder hasta aquí',
-      hint: 'Retroceder hasta aquí: este mensaje y todo lo que vino después salen de la conversación',
+      hint: 'Este mensaje y todo lo que vino después salen de la conversación',
       steering: 'Escrito mientras Codex trabajaba - retrocede hasta el mensaje que empezó ese turno',
     },
     forkWhole: 'Esta bifurcación no se pudo cortar en el mensaje elegido, así que lleva la conversación entera.',
@@ -1176,7 +1217,7 @@ export const es: Dict = {
       matches: (n) => (n > 0 ? `· ${n} ${n === 1 ? 'coincidencia' : 'coincidencias'}` : '· sin coincidencias'),
       output: (empty) => (empty ? '· sin salida' : '· con salida'),
       diff: (added, removed) => `· +${added} −${removed}`,
-      moreLines: (n) => `… ${n} líneas más`,
+      moreLines: (n) => `… ${n} ${n === 1 ? 'línea más' : 'líneas más'}`,
       fewerLines: '… plegar',
       count: (n) => `${n} ${n === 1 ? 'herramienta' : 'herramientas'}`,
       closed: {
@@ -1277,11 +1318,12 @@ export const es: Dict = {
       terminal: 'En una terminal',
       copyId: 'Copiar ID de sesión',
       terminalNote: 'Continúa esta conversación en una terminal abierta en la carpeta del proyecto',
-      terminalNoteOn: (account: string): string =>
-        `Continúa esta conversación en la cuenta ${account} en una terminal abierta en la carpeta del proyecto`,
-      terminalNoteDefault: (account: string): string =>
-        `Continúa esta conversación en una terminal abierta en la carpeta del proyecto, con el inicio de sesión predeterminado de Codex y no en la cuenta ${account}`,
-      unnamedAccount: 'de esta pestaña',
+      terminalNoteAccount: (name: string): string =>
+        name
+          ? `Continúa esta conversación en la cuenta ${name}, en una terminal abierta en la carpeta del proyecto`
+          : 'Continúa esta conversación en la cuenta de esta pestaña, en una terminal abierta en la carpeta del proyecto',
+      terminalNoteDefault: (name: string): string =>
+        `Continúa con el inicio de sesión normal de Codex, no en la cuenta ${name || 'de esta pestaña'}. «Continuar en la terminal» mantiene la cuenta`,
       none: 'Aún no hay ID: la conversación recibe uno con su primer mensaje',
     },
     outranked: {
@@ -1352,6 +1394,7 @@ export const es: Dict = {
     changes: {
       all: (n) => `Mostrar todos (${n})`,
       fewer: 'Mostrar menos',
+      files: (n) => (n === 1 ? '1 archivo' : `${n} archivos`),
       revert: 'Revertir este archivo',
       revertAll: 'Revertir todo',
       reverting: 'Revirtiendo…',
@@ -1379,6 +1422,7 @@ export const es: Dict = {
       label: 'EN COLA',
       hint: (n) => `${n} saldrán en orden cuando termine la ejecución · arrastra para reordenar`,
       held: (n) => `${n} saldrán en orden tras tu próximo mensaje - la ejecución que esperaban se detuvo · arrastra para reordenar`,
+      terminal: (n) => `${n} saldrán en orden cuando la conversación vuelva de la terminal · arrastra para reordenar`,
       edit: 'Editar en el campo',
       editing: (key, button) => `Se está editando en el campo · ${key} o «${button}» lo devuelve aquí`,
     },
@@ -1465,6 +1509,7 @@ export const es: Dict = {
     logout: 'Cerrar sesión',
     logoutConfirm: '¿Cerrar sesión en Codex?',
     forget: 'Olvidar',
+    signInAgain: 'Volver a iniciar sesión',
     add: 'Añadir una cuenta',
     adding: 'Esperando al inicio de sesión…',
     cancel: 'Cancelar',
@@ -1495,6 +1540,7 @@ export const es: Dict = {
       'already-here': 'Esa cuenta ya está aquí: es el inicio de sesión del propio Codex (codex login), así que no se añadió nada.',
       'logout-failed': 'No se pudo cerrar la sesión. Prueba en una terminal.',
       'already-running': 'Ya hay un inicio de sesión en marcha.',
+      'no-drawer': 'Desde este proyecto no se llega a esta cuenta, así que no se inició la sesión.',
       unknown: 'Eso no ha funcionado.',
     } as Record<string, string>,
   },
@@ -1557,41 +1603,26 @@ export const es: Dict = {
   },
 
   feedback: {
-    button: 'Reportar un fallo o mandar una idea',
-    kinds: {
-      bug: { label: 'Fallo', placeholder: '¿Qué pasó, y qué esperabas en su lugar?' },
-      idea: { label: 'Idea', placeholder: '¿Qué te gustaría que hiciera el panel?' },
-      hello: { label: 'Hola', placeholder: 'Lo que sea - llega a una persona, no a una cola.' },
+    button: '¿Quieres cambiar algo?',
+    lead:
+      'Hago este plugin yo solo, y se lleva una buena parte de mi suscripción de Codex y mucho de mi tiempo. Por eso ya no recibo peticiones ni reportes de fallos aquí. Si quieres que algo cambie, hay dos caminos:',
+    ways: {
+      tip: {
+        title: 'Apoya y pide',
+        body: 'Deja una propina en Ko-fi y escribe en el mensaje lo que te gustaría. Yo lo hago.',
+      },
+      code: {
+        title: 'Hazlo tú',
+        body: 'El código está abierto: haz el cambio y abre un pull request. Lo reviso y quizá lo fusione.',
+      },
     },
-    email: 'CORREO',
-    emailOptional: 'opcional',
-    attachments: 'ADJUNTOS',
-    addFiles: 'Añadir archivos',
-    removeFile: (name) => `Quitar: ${name}`,
-    attachTotal: (count, max, size, budget) => `${count} de ${max} · ${size} de ${budget}`,
-    logs: 'Adjuntar registros de depuración',
-    logsFromTab: (tab) => `De la pestaña ${tab} - `,
-    logsFromOpenTab: 'De la pestaña que tienes abierta ahora: ',
-    logsWhat:
-      'versiones, tiempos y lo que falló. Ni tu conversación, ni tus nombres de archivo, ni tus rutas - y puedes leerlo entero antes de que salga.',
-    logsOnlyBug:
-      'Solo con un fallo: el informe es el relato de algo que salió mal, y aquí no hay nada que contar.',
-    seeWhat: 'Ver exactamente qué se adjunta',
-    send: 'Enviar',
-    sending: 'Enviando…',
-    sentPartly: (note) => `Enviado, pero no todo. ${note}`,
-    sent: 'Enviado. Gracias ❤️ - me llega directamente.',
-    notSent: 'No se pudo enviar. No se perdió nada - inténtalo otra vez.',
+    thanks: 'Gracias por usar el plugin',
+    report: 'Informe de depuración de esta pestaña',
     reportNote: (tab) =>
-      `Este es el adjunto entero, palabra por palabra${tab ? `, para la pestaña ${tab}` : ''}. Se construye aquí, en tu IDE, con lo que el propio plugin vio: versiones, la forma de esa conversación y todo lo que falló. Los nombres de archivo aparecen como hashes cortos, así que el mismo archivo se lee como el mismo sin decir cuál es.`,
+      `Para un pull request sobre un fallo, o para cuando te lo pida. Es el informe entero${tab ? ` de la pestaña ${tab}` : ''}, hecho aquí, en tu IDE, con lo que vio el propio plugin: versiones, la forma de la conversación y lo que falló - ni una palabra de lo que se dijo. Los nombres de archivo aparecen como hashes cortos.`,
     building: 'Construyéndolo…',
     copy: 'Copiar',
-    problems: {
-      empty: 'Escribe unas palabras primero.',
-      tooLong: (max) => `Eso pasa de ${max} caracteres.`,
-      tooMany: (max) => `No más de ${max} archivos.`,
-      tooHeavy: (budget) => `Los archivos suman más de ${budget}.`,
-    },
+    copied: 'Copiado',
   },
 
   mcp: {
@@ -1703,6 +1734,7 @@ export const es: Dict = {
         waitingQuestion: 'te espera · pregunta',
         waitingPlan: 'te espera · plan',
         working: 'trabajando',
+        agents: (n) => (n === 1 ? 'un subagente trabajando' : `${n} subagentes trabajando`),
         done: 'lista',
       },
       reach: {
@@ -1871,6 +1903,9 @@ export const es: Dict = {
       addNote: 'Añadir una cuenta se queda en el escritorio: abre una terminal y un inicio de sesión en el navegador de esa máquina.',
       forgetAsk: (name) => `¿Olvidar ${name}? Su credencial se quita de esa máquina; la cuenta en sí no se toca y volver a entrar la recupera.`,
       logoutAsk: '¿Cerrar la sesión de Codex? Esto revoca la credencial en OpenAI: se cierra en todas tus máquinas.',
+      signInAtDesk: 'No hay credencial guardada. Volver a iniciar sesión necesita una terminal y un navegador en esa máquina, así que se hace en el escritorio.',
+      forgetSignedOutAsk: (name) =>
+        `¿Quitar ${name} de la lista? Ya no tiene la sesión iniciada, así que no se revoca nada; volver a entrar en el escritorio la recupera.`,
     },
 
     newSession: {
@@ -1953,8 +1988,6 @@ export const es: Dict = {
 
   status: {
     todayTokens: 'Tokens gastados hoy, en todos los proyectos',
-    openPr: 'Abrir el pull request en el navegador',
-    noPr: 'sin PR',
     effortHint: (effort) => `Esfuerzo de razonamiento: ${effort}`,
     modelHint: (model) => `Modelo: ${model}`,
     modelHintSwitched: (model, from) => `Modelo: ${model} - Codex cambió a él por su cuenta, desde ${from}`,
@@ -1989,6 +2022,7 @@ export const es: Dict = {
     label: 'PERMISO',
     decisions: { once: 'Permitir una vez', always: 'Permitir siempre', deny: 'Denegar' },
     underMode: (mode) => `Modo: ${mode}`,
+    askedBy: (agent) => `Lo pide ${agent}`,
   },
 
   selectors: {
@@ -2066,6 +2100,7 @@ export const es: Dict = {
     btwArgument: '<pregunta>',
     fast: 'activar o desactivar el modo rápido - respuestas más rápidas que gastan antes tus límites',
     status: 'el ID de esta conversación y el comando para seguirla en una terminal',
+    terminal: 'continuar esta conversación en la terminal del IDE y luego volver al chat',
     model: 'cambiar el modelo de esta sesión',
     effort: 'ajustar cuánto piensa Codex antes de actuar',
     codeReview: 'revisar los cambios con el revisor propio de Codex',

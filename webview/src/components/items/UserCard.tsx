@@ -1,14 +1,16 @@
-import { memo, useCallback, useMemo } from 'react'
+import { memo, useCallback, useMemo, type ReactNode } from 'react'
 import { LinkedText } from './LinkedText'
 import { Caret } from './Caret'
 import { CopyButton } from './CopyButton'
-import { PinButton } from './PinButton'
+import { PinButton, PinIcon } from './PinButton'
 import { MoreButton } from './MoreButton'
+import { CardMenu } from './CardMenu'
 import { chipFile, chipLabel, chipTitle, pasteBlockPreview, pasteBody, pasteLineCount } from '../../feed/reference'
 import { COPY_ATTRIBUTE } from '../../feed/copy'
 import { clipboardMessage, clipboardText } from '../../feed/tokens'
 import { reusableMessage } from '../../feed/reuse'
 import { rewindable } from '../../feed/rewind'
+import { messageMenu, type MessageAction } from '../../feed/messageMenu'
 import type { Chip, ChipKind, UserItem } from '../../feed/types'
 import type { CardState } from '../../hooks/useCardState'
 import { useOpenFile, useOpenPicture } from '../../hooks/useOpenFile'
@@ -17,6 +19,7 @@ import { chipOpening, chipPreview, markPreview, pastedOrdinals } from '../../ima
 import { editorLabel } from '../../feed/editorContext'
 import type { EditorRef, PreviewPlace } from '../../protocol'
 import { EditorIcon } from '../EditorChip'
+import { pastMenu } from '../Menu'
 import s from '../feed.module.css'
 import { useT } from '../../i18n'
 
@@ -64,19 +67,32 @@ interface UserCardProps {
   onRewind?: (item: UserItem) => void
   /**
    * Pin this message over the conversation, or unpin it (see feed/pins.ts). Absent where there is no
-   * strip to pin it to - the phone, the same way the reuse button is absent there.
+   * strip to pin it to - the phone, the same way putting the message back is absent there.
    */
   onPin?: () => void
   pinned: boolean
   /** Whether the strip is already full - the hint says so before the press (see PinButton). */
   pinsFull: boolean
   /**
-   * Everything else this message can do - quoting it, forking from it - behind three dots (see
-   * MoreButton). Handed in by the phone alone: at the desk a quote is a selection and a fork is a
-   * command, and neither of those exists under a thumb.
+   * Everything else this message can do - quoting it, forking from it - in the phone's sheet behind the
+   * three dots (see MessageSheet). Handed in by the phone alone: at the desk a quote is a selection and a
+   * fork is a command, and neither of those exists under a thumb. At the desk the same dots open the
+   * card's own menu instead (see feed/messageMenu.ts).
    */
   onActions?: () => void
 }
+
+/**
+ * The drawings the menu's entries wear - the very ones these actions wore as buttons in the head. The pin is
+ * filled while the message is pinned: the one drawing says both what the entry does and how things stand.
+ * Shared with an answer's menu (see TextCard), which holds the pin alone.
+ */
+export const messageActionIcon: Record<MessageAction, (pinned: boolean) => ReactNode> = {
+  reuse: () => <ReuseArrow />,
+  pin: (pinned) => <PinIcon filled={pinned} />,
+  rewind: () => <RewindArrow />,
+}
+
 
 export const UserCard = ({
   item,
@@ -92,13 +108,18 @@ export const UserCard = ({
 }: UserCardProps) => {
   const t = useT()
   /*
-   * What the copy and reuse buttons do, worked out here rather than on the press: the tooltip has to
-   * say beforehand that a picture cannot come back (its bytes are not in a conversation read off the
-   * disk), and a person who learns that after pressing has already lost the field they were typing in.
+   * What copying and putting back do, worked out here rather than on the press: the menu has to say
+   * beforehand that a picture cannot come back (its bytes are not in a conversation read off the disk),
+   * and a person who learns that after pressing has already lost the field they were typing in.
    */
   const reuse = useMemo(() => reusableMessage(item), [item])
   const copied = useMemo(() => clipboardMessage(item), [item])
   const rewind = rewindable(item)
+  const menu = messageMenu(t, {
+    reuse: onReuse ? reuse.lostImages : null,
+    pin: onPin ? { pinned, full: pinsFull } : null,
+    rewind: onRewind ? rewind : null,
+  }).map((option) => ({ ...option, icon: messageActionIcon[option.id](pinned) }))
 
   return (
   <div className={s.user}>
@@ -111,53 +132,39 @@ export const UserCard = ({
       <span className={s.time}>{item.time}</span>
       <div className={s.spacer} />
 
-      {/* The three of them in a box of their own rather than as three more children of the head: the head
-          spaces its children out for a label and a time standing apart, and little squares set that
-          far from each other read as unrelated buttons. The gap is the group's own, the same one the
-          bubble and the heart stand at down by the field (see .endPair). */}
+      {/* A box of their own rather than more children of the head: the head spaces its children out for a
+          label and a time standing apart, and little squares set that far from each other read as unrelated
+          buttons. The gap is the group's own, the same one the bubble and the heart stand at down by the
+          field (see .endPair). */}
       <div className={s.userActions}>
-        {/* First of the three, because it is the one that changes what is on screen above rather than
-            taking this message somewhere: a pin puts a line over the whole conversation. */}
-        {onPin ? <PinButton pinned={pinned} full={pinsFull} className={s.userAction} onPin={onPin} /> : null}
+        {/* The pin stays out here while the message is pinned, lit, and a press takes it off: the strip is at
+            the top of the feed and this card may be a screen away from it, so the lit pin is the one thing
+            that answers "is this the one up there?" without opening anything (see .pinOn). Unpinned, it
+            lives in the menu with the rest. */}
+        {onPin && pinned ? <PinButton pinned full={pinsFull} className={s.userAction} onPin={onPin} /> : null}
 
         {/* The message itself, and the paths of what was attached to it rather than the captions the
             chips wear: a caption means something inside this panel and nothing in a terminal or a task
-            (see clipboardText). This is the button the feedback asked for by name. */}
+            (see clipboardText). This is the button the feedback asked for by name, and the one action left
+            standing in the head - everything else is behind the dots beside it. */}
         <CopyButton text={copied} className={s.userAction} title={t.feed.copyMessage} />
 
-        {onReuse ? (
-          <button
-            type="button"
+        {onActions ? (
+          <MoreButton className={s.userAction} label={t.feed.moreActions} onClick={onActions} />
+        ) : menu.length > 0 ? (
+          <CardMenu
             className={s.userAction}
-            aria-label={t.feed.reuse.label}
-            data-tooltip={reuse.lostImages > 0 ? t.feed.reuse.lostImages(reuse.lostImages) : t.feed.reuse.hint}
-            onClick={() => onReuse(item)}
-          >
-            <ReuseArrow />
-          </button>
+            label={t.feed.moreActions}
+            title={t.feed.messageMenu}
+            width={272}
+            options={menu}
+            onPick={(id) => {
+              if (id === 'reuse') onReuse?.(item)
+              if (id === 'pin') onPin?.()
+              if (id === 'rewind') onRewind?.(item)
+            }}
+          />
         ) : null}
-
-        {/* Last, because it is the one that takes something away: this message and everything after it
-            leave the conversation (the dialog asks first, and says what else goes). A message written
-            into a running turn shows the button dead and says why, rather than hiding it - a missing
-            button on one card of many reads as a broken one. A message the panel never named (sent before
-            it named them) has nothing to rewind by, and no button. */}
-        {onRewind && rewind !== 'unnamed' ? (
-          <button
-            type="button"
-            // Dead the way a full strip's pin is dead (see PinButton): `aria-disabled` and no handler, so
-            // the hover hint - the one line that says why - still appears.
-            className={`${s.userAction} ${rewind === 'steering' ? s.pinDead : ''}`}
-            aria-label={t.feed.rewind.label}
-            aria-disabled={rewind === 'steering' || undefined}
-            data-tooltip={rewind === 'steering' ? t.feed.rewind.steering : t.feed.rewind.hint}
-            onClick={rewind === 'steering' ? undefined : () => onRewind(item)}
-          >
-            <RewindArrow />
-          </button>
-        ) : null}
-
-        {onActions ? <MoreButton className={s.userAction} label={t.feed.moreActions} onClick={onActions} /> : null}
       </div>
     </div>
 
@@ -271,6 +278,7 @@ const EditorLine = memo(({ editor }: { editor: EditorRef }) => {
       type="button"
       className={`${s.userEditor} ${s.userEditorOpens}`}
       data-tooltip={t.feed.editor.open(place)}
+      {...pastMenu}
       onClick={() =>
         openFile({
           path: editor.path,
@@ -301,7 +309,7 @@ export const ReuseArrow = () => (
 
 /**
  * An arrow turning back round a circle - "go back to how it was here". The circle is what tells it from the
- * reuse arrow beside it, which takes a message somewhere rather than taking time back.
+ * reuse arrow above it in the card's menu, which takes a message somewhere rather than taking time back.
  */
 const RewindArrow = () => (
   <svg viewBox="0 0 16 16" aria-hidden="true" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
@@ -391,6 +399,7 @@ export const ChipView = memo(({ chip, elsewhere }: { chip: Chip; elsewhere?: Pre
         aria-label={`${t.feed.copy.openFile}: ${chip.value}`}
         data-tooltip={preview ? undefined : title || t.feed.copy.openFile}
         {...copy}
+        {...pastMenu}
         onClick={(event) => {
           if (file && openFile) openFile(file)
           else if (picture && openPicture) openPicture(picture, event.currentTarget)
@@ -459,6 +468,7 @@ const PasteView = memo(({
     <button
       type="button"
       className={`${s.chip} ${s.chipPaste} ${s.chipPasteBlock} ${s.chipPasteOpens}`}
+      {...pastMenu}
       onClick={onToggle}
     >
       <span className={s.chipPasteHead}>
@@ -472,6 +482,7 @@ const PasteView = memo(({
     <button
       type="button"
       className={`${s.chip} ${s.chipPaste} ${s.chipPasteOpens}`}
+      {...pastMenu}
       onClick={onToggle}
     >
       {chipLabel(chip)}
@@ -493,6 +504,7 @@ const PasteView = memo(({
             type="button"
             className={s.chipPasteToggle}
             data-tooltip={t.feed.pasteClose}
+            {...pastMenu}
             onClick={onToggle}
           >
             <Caret open />

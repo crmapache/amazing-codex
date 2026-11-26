@@ -1,15 +1,16 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { isSideComposerLayout, type ComposerLayout } from '../composerLayout'
-import { BranchChip, SPARK_PATH } from './StatusBar'
+import { SPARK_PATH } from './StatusBar'
 import s from './shell.module.css'
 import { useT } from '../i18n'
 import type { Dict } from '../i18n/en'
-import { useFieldHistory } from '../hooks/useFieldHistory'
 import { useResting } from '../hooks/useResting'
-import type { TitleSource } from '../protocol'
+import type { TerminalHoldState, TitleSource } from '../protocol'
 import { splitTabTitle } from '../feed/title'
 import type { TabCall } from '../sounds'
 import { beforeOf, placeOn, rowFor, shotOf, SWAP_GAP_PX, type Point, type Shot, type TabRect } from '../tabDrag'
+import { ContextMenu } from './ContextMenu'
+import { NameField } from './NameField'
 
 /**
  * What is happening in a tab: nothing, work under way, work finished, or someone being waited for. The
@@ -84,13 +85,14 @@ interface HeaderProps {
   onCloseSession: (id: string) => void
   onNewSession: () => void
   /**
-   * Fork a tab's conversation, whole - the button on every conversation's tab, beside the cross (see
-   * App.fork). The panel's own tabs (the statistics, a scenario's run) hold no conversation and have none.
+   * Fork the open tab's conversation, whole (see App.fork) - the button on the right of the header, beside
+   * the menu, the way Amazing IDE has it. The tabs carry none of their own: one on every tab
+   * stood beside the one up here, and the strip is the place for names (2026-10-21).
    */
   onFork?: (sessionId: string) => void
   /**
-   * The tabs with a conversation to fork. The others keep the button, dimmed and saying why: it stands on
-   * every tab so that a tab's width never depends on it (see sessionTab).
+   * The tabs with a conversation to fork. With any other open - one nobody has written into, the statistics,
+   * the scenarios - the header's button goes dead and says why.
    */
   forkable?: ReadonlySet<string>
   /**
@@ -117,7 +119,7 @@ interface HeaderProps {
   onReorderTabs: (sessionId: string, beforeSessionId: string | null) => void
   /**
    * The name the person typed into a conversation's tab - a double click on it opens the field (see
-   * TabNameField). Only when it changed: a name confirmed as it stood is not a new one, and it would
+   * NameField). Only when it changed: a name confirmed as it stood is not a new one, and it would
    * otherwise pin whatever the model had called the conversation as the person's own.
    */
   onNameSession: (id: string, title: string) => void
@@ -128,6 +130,16 @@ interface HeaderProps {
    */
   naming: string | null
   onNaming: (id: string | null) => void
+  /**
+   * The conversation a tab holds, if one has been born in it - for "Copy Session ID" in the tab's right-click
+   * menu (see tabMenu). Asked when the menu opens: the strip itself knows tabs, not conversations.
+   */
+  conversationOf?: (tabId: string) => string | undefined
+  onCopySessionId?: (tabId: string) => void
+  /** Whether a terminal holds a tab's conversation - the menu offers to show it rather than to open one. */
+  terminalOf?: (tabId: string) => TerminalHoldState | undefined
+  /** Continue in terminal for a tab under the pointer - see App.continueInTerminal. */
+  onContinueInTerminal?: (tabId: string) => void
   /**
    * Enter or Escape has ended a naming, and the keyboard goes back to the input field. Left to itself the
    * focus went nowhere - the field it was in is gone - and the next word typed after naming a tab needed a
@@ -150,20 +162,6 @@ interface HeaderProps {
    * than a dozen places here.
    */
   layout: ComposerLayout
-  /**
-   * The branch and its PR live in one and the same place in every layout: on the right of the header,
-   * before the burger. They used to live in three different places depending on the layout (the status
-   * line, the task line, the composer itself) - now there is one source of truth rather than three copies
-   * that would have to be kept in agreement.
-   */
-  gitBranch?: string
-  pullRequest?: string
-  onOpenPullRequest?: () => void
-  /**
-   * How many others are watching this project - a browser page beside the IDE, later a phone. Zero
-   * hides the mark entirely: the ordinary case is nobody, and a permanent "0" would be noise.
-   */
-  watchers?: number
   /**
    * The tabs of the strip that hold no conversation: the statistics, the scenarios, a run being watched.
    *
@@ -213,95 +211,6 @@ export interface PanelTab {
   state?: SessionState
   /** The word under the pointer for that dot. Empty leaves the dot without a hint at all. */
   hint?: string
-}
-
-/**
- * The longest name the field takes. The IDE holds the same line (SessionTitle.OWN_MAX_LENGTH): the strip
- * cuts a name long before this, and a pasted paragraph has no business in every list of tabs.
- */
-const TAB_NAME_MAX = 100
-
-/**
- * The field a conversation's name is typed into, standing where the name stood (see naming in Header).
- *
- * A component of its own rather than a piece of sessionTab, for the reason OwnAnswer is one: the keys
- * the embedded browser does not give a plain field come from a hook (see useFieldHistory), and a hook
- * cannot be called inside the strip's loop.
- *
- * Enter keeps the name, Escape keeps the old one, and the focus leaving keeps what was typed - the way
- * a rename field behaves in the IDE around it and everywhere else.
- */
-const TabNameField = ({
-  title,
-  label,
-  onDone,
-}: {
-  title: string
-  label: string
-  /**
-   * The name typed, or null when the naming was called off, and whether a key ended it (Enter or Escape)
-   * rather than the focus leaving - see onReturnToInput in Header.
-   */
-  onDone: (name: string | null, byKey: boolean) => void
-}) => {
-  const [value, setValue] = useState(title)
-  const field = useFieldHistory(value, setValue)
-  const input = useRef<HTMLInputElement>(null)
-  /** Enter unmounts the field, and the blur that follows must not count as a second answer. */
-  const done = useRef(false)
-
-  const finish = (name: string | null, byKey: boolean) => {
-    if (done.current) return
-    done.current = true
-    onDone(name, byKey)
-  }
-
-  // The whole name selected, as every rename field opens: typing replaces it, an arrow keeps it.
-  useLayoutEffect(() => {
-    input.current?.focus()
-    input.current?.select()
-  }, [])
-
-  return (
-    <input
-      ref={input}
-      className={s.tabNameField}
-      value={value}
-      maxLength={TAB_NAME_MAX}
-      aria-label={label}
-      spellCheck={false}
-      onChange={field.onChange}
-      onKeyDown={(event) => {
-        // Every key here is the field's own. The tab around it opens on Enter and Space - Space would
-        // never reach the name at all - and the panel stops the agent on Escape and changes the mode on
-        // Shift+Tab (see App).
-        event.stopPropagation()
-        // Enter confirms an input method's candidate and Escape throws its half-typed character away:
-        // neither is an answer to the naming (see composer-field in the rules).
-        if (event.nativeEvent.isComposing) return
-
-        if (event.key === 'Enter') {
-          event.preventDefault()
-          finish(value, true)
-          return
-        }
-
-        if (event.key === 'Escape') {
-          event.preventDefault()
-          finish(null, true)
-          return
-        }
-
-        field.onKeyDown(event)
-      }}
-      onBlur={() => finish(value, false)}
-      // A press inside the field places the caret rather than starting a drag of the tab, a click does not
-      // pick the tab again, and a double click selects a word rather than opening the field anew.
-      onMouseDown={(event) => event.stopPropagation()}
-      onClick={(event) => event.stopPropagation()}
-      onDoubleClick={(event) => event.stopPropagation()}
-    />
-  )
 }
 
 const ELLIPSIS = '…'
@@ -539,6 +448,13 @@ const unitIdOf = (node: HTMLElement, drag: Drag): string | undefined => {
  */
 const keyOf = (node: HTMLElement): string | undefined => node.dataset.tab ?? node.dataset.group ?? node.dataset.strip
 
+/**
+ * The class of the strip's last tab, the one that keeps the room the "+" stands in (see .tabTail). Read once
+ * and checked: a gesture hands it from tab to tab by hand (see projectionFor), and classList refuses an
+ * empty name with an exception.
+ */
+const TAIL_CLASS = s.tabTail ?? ''
+
 /** How long a dropped tab's landing lasts. The same as the transition in shell.module.css. */
 const LANDING_MS = 160
 
@@ -562,10 +478,10 @@ const dotTitle = (t: Dict): Record<SessionState, string> => ({
 /**
  * A branch: one line splitting in two - what a fork is. Drawn rather than typed: the fork glyph a fork's
  * tab wears before its name comes out of the system's fallback font at a size of its own, and as a button
- * beside the cross it read as a speck.
+ * it read as a speck.
  */
 const ForkIcon = () => (
-  <svg className={s.forkIcon} viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+  <svg className={s.menuIcon} viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
     <circle cx="4.5" cy="3.5" r="1.6" />
     <circle cx="11.5" cy="3.5" r="1.6" />
     <circle cx="8" cy="12.5" r="1.6" />
@@ -575,10 +491,20 @@ const ForkIcon = () => (
 )
 
 /**
+ * A new tab - drawn for the same reason as the burger (see below): "+" in the font sits off its centre, and
+ * as the strip's own button it is the same drawing it wore in the header.
+ */
+const PlusIcon = () => (
+  <svg className={s.menuIcon} viewBox="0 0 16 16" aria-hidden="true">
+    <path d="M8 2.5v11M2.5 8h11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+  </svg>
+)
+
+/**
  * Three lines as a drawing rather than the "☰" character: the typographic version has a seat of its own
- * in the font and sits below the middle of its line - next to the branch (see BranchChip), whose centre
- * is honest, the difference read to the eye as an unpainted row. Drawn, the lines stand strictly in the
- * centre of the viewBox, and with it of the button.
+ * in the font and sits below the middle of its line, and beside the drawn button next to it the
+ * difference read to the eye as an unpainted row. Drawn, the lines stand strictly in the centre of the
+ * viewBox, and with it of the button.
  */
 const HamburgerIcon = () => (
   <svg className={s.menuIcon} viewBox="0 0 16 16" aria-hidden="true">
@@ -599,13 +525,13 @@ export const Header = ({
   onNameSession,
   naming,
   onNaming,
+  conversationOf,
+  onCopySessionId,
+  terminalOf,
+  onContinueInTerminal,
   onReturnToInput,
   onOpenMenu,
   layout,
-  gitBranch,
-  watchers = 0,
-  pullRequest,
-  onOpenPullRequest,
   panelTabs = EMPTY_PANEL_TABS,
   onPickPanelTab,
   onClosePanelTab,
@@ -663,6 +589,14 @@ export const Header = ({
    * now (see projectionFor) - otherwise nothing, and the strip is as tall as its tabs.
    */
   const [reach, setReach] = useState<number | null>(null)
+  /**
+   * The right-click menu of a conversation's tab and the tab it was opened on (see ContextMenu). Renaming
+   * there opens the same field a double click does - the menu is the door that can be seen, a double click
+   * on a tab is one nobody guesses.
+   */
+  const [tabMenu, setTabMenu] = useState<{ sessionId: string; x: number; y: number } | null>(null)
+  // Steady across renders: the menu listens for Escape and the pointer with it (see Menu).
+  const closeTabMenu = useCallback(() => setTabMenu(null), [])
 
   /**
    * The two reorder callbacks as they stand when the tab is dropped rather than when it was pressed. A
@@ -742,7 +676,10 @@ export const Header = ({
    *
    * By the flex `order` of the strip's own children rather than by moving nodes: React owns those nodes,
    * and the "+" at the end gets its number like everybody else and stays at the end. It moves with the
-   * rest, too: left where it stood, it lay over the tab that came to the end of its row.
+   * rest, too: left where it stood, it lay over the tab that came to the end of its row. The room it
+   * stands in belongs to the last tab (see .tabTail), and that rule goes by the markup as well - so it is
+   * handed to the tab the drop puts last, or the "+" would be measured inside a tab that has moved on and
+   * the row it ends would come out a button too long.
    *
    * The height comes along: a drop that folds the strip onto one more row pushes a tab onto a row that is
    * not there yet, and that tab hid under the panel until the hand let go. The strip grows for it while
@@ -791,12 +728,24 @@ export const Header = ({
       leader.style.marginLeft = '0px'
       marked.style.marginLeft = 'var(--acc-group-gap)'
     }
+    // The same at the other end: the room the "+" stands in goes to the tab the drop puts last.
+    const tail = sequence.filter((node) => node.dataset.group).at(-1)
+    const tailed = TAIL_CLASS ? children.find((node) => node.classList.contains(TAIL_CLASS)) : undefined
+    const handTail = tail !== undefined && tailed !== undefined && tail !== tailed
+    if (handTail) {
+      tailed.classList.remove(TAIL_CLASS)
+      tail.classList.add(TAIL_CLASS)
+    }
     const projected = layoutOf()
     const projectedHeight = root.offsetHeight
     for (const node of sequence) node.style.order = ''
     if (handOver) {
       leader.style.marginLeft = ''
       marked.style.marginLeft = ''
+    }
+    if (handTail) {
+      tail.classList.remove(TAIL_CLASS)
+      tailed.classList.add(TAIL_CLASS)
     }
     root.style.minHeight = asked
 
@@ -857,7 +806,7 @@ export const Header = ({
 
     // The preventDefault below keeps the focus where it was, and a name being typed into a tab would
     // stay open under a press that picks or drags another. So the field is put down first, keeping what
-    // was typed - the way a press anywhere else in the panel puts it down (see TabNameField).
+    // was typed - the way a press anywhere else in the panel puts it down (see NameField).
     const focused = document.activeElement
     if (focused instanceof HTMLInputElement && tabs.current?.contains(focused)) focused.blur()
 
@@ -1089,6 +1038,19 @@ export const Header = ({
   }
   /** Every such tab clamped to the strip it is actually in - a stale place must not point past its end. */
   const panels = panelTabs.map((tab) => ({ ...tab, at: Math.min(Math.max(tab.at, 0), groups.length) }))
+  /**
+   * Whether the header's fork has a conversation to carry: the open tab's own, by the same set the tabs'
+   * buttons read. A panel tab open (the statistics, the scenarios) is not in it, and neither is a tab nobody
+   * has written into yet.
+   */
+  const openForkable = forkable.has(activeSession)
+  /** The panel's own tabs standing after the last conversation, in the order they are drawn. */
+  const trailing = panels.filter((tab) => tab.at >= groups.length)
+  /**
+   * The strip's last tab, the one the "+" is glued to: it keeps the room the "+" stands in (see .tabTail), so
+   * the two wrap as one and the "+" never goes down a row by itself.
+   */
+  const tailId = trailing.at(-1)?.id ?? groups.at(-1)?.tabs.at(-1)?.id
 
   const sessionTab = (session: Session, startsGroup: boolean, groupSize: number) => {
     const color = colorForGroup(session.groupId)
@@ -1113,6 +1075,7 @@ export const Header = ({
           s.tab,
           session.id === activeSession ? s.tabActive : '',
           startsGroup ? s.tabGroupStart : '',
+          session.id === tailId ? TAIL_CLASS : '',
           // Everything the gesture carries is lifted, not only the tab under the hand: a group travels
           // whole, so all its tabs rise with it, while a fork moved inside its group rises alone.
           (dragging?.kind === 'tab' ? dragging.id === session.id : dragging?.id === session.groupId)
@@ -1142,6 +1105,12 @@ export const Header = ({
           if ((event.target as HTMLElement).closest('button') || dragged.current) return
           onNaming(session.id)
         }}
+        onContextMenu={(event) => {
+          // The cross keeps the browser's menu, and so does the name field: cut and paste live there.
+          if ((event.target as HTMLElement).closest('button, input') || dragged.current) return
+          event.preventDefault()
+          setTabMenu({ sessionId: session.id, x: event.clientX, y: event.clientY })
+        }}
         onKeyDown={(event) => {
           if (event.key !== 'Enter' && event.key !== ' ') return
           // Space scrolls the strip otherwise, and the tab under the finger never opens.
@@ -1154,33 +1123,15 @@ export const Header = ({
         <span className={`${s.dot} ${DOT_CLASS[session.state]}`} data-tooltip={dotTitle(t)[session.state]} />
         {session.depth > 0 ? <span className={s.tabFork}>⑂</span> : null}
         {naming === session.id ? (
-          <TabNameField
+          <NameField
             title={session.title}
             label={t.header.renameTab}
+            className={s.tabNameField}
             onDone={(name, byKey) => finishNaming(session, name, byKey)}
           />
         ) : (
           <TabTitle title={session.title} hint={!dragging} />
         )}
-        {/* On the tab it forks, beside the cross: both are things done to this conversation. On every tab and
-            always: shown on the open tab alone, it widened the tab it came to and narrowed the one it left,
-            and a narrow strip jumped on every switch. A tab with nothing to fork keeps it dimmed, with a
-            hint saying why - aria-disabled rather than disabled, or the hint would never come up. */}
-        {onFork ? (
-          <button
-            type="button"
-            className={`${s.tabForkButton} ${forkable.has(session.id) ? '' : s.tabForkButtonOff}`}
-            aria-label={t.header.fork}
-            aria-disabled={forkable.has(session.id) ? undefined : true}
-            data-tooltip={forkable.has(session.id) ? t.header.fork : t.header.forkEmpty}
-            onClick={(event) => {
-              event.stopPropagation()
-              if (forkable.has(session.id)) onFork(session.id)
-            }}
-          >
-            <ForkIcon />
-          </button>
-        ) : null}
         <button
           type="button"
           className={s.tabClose}
@@ -1213,6 +1164,7 @@ export const Header = ({
         s.tabStatistics,
         s.tabGroupStart,
         tab.active ? s.tabActive : '',
+        tab.id === tailId ? TAIL_CLASS : '',
         dragging?.id === tab.id ? s.tabDragging : '',
       ]
         .filter(Boolean)
@@ -1277,34 +1229,47 @@ export const Header = ({
             {group.tabs.map((session, place) => sessionTab(session, place === 0, group.tabs.length))}
           </Fragment>
         ))}
-        {panels.filter((tab) => tab.at >= groups.length).map(panelTab)}
+        {trailing.map(panelTab)}
 
-        {/* Named for the strip's drag arithmetic (see keyOf): it goes where the drop is going to put it. */}
+        {/* Right after the last tab and glued to it: the tab keeps the room this stands in (see .tabTail),
+            so when the row runs out the two go down together, and the "+" never stands on a row alone. It
+            was in the header beside the menu for a release, and the hand looking for it went to the end of
+            the tabs first. Named for the strip's drag arithmetic (see keyOf): it goes where the drop is
+            going to put it. */}
         <button
           type="button"
-          className={s.tabAdd}
+          className={`${s.historyButton} ${s.tabAdd}`}
           data-strip="add"
           style={dragStyle('add')}
+          aria-label={t.header.newSession}
           data-tooltip={newTabKey ? `${t.header.newSession} (${newTabKey})` : t.header.newSession}
           onClick={onNewSession}
         >
-          +
+          <PlusIcon />
         </button>
       </div>
 
       <div className={s.spacer} />
 
+      {/* Two of the panel's own, in a place that does not move: a fork of the open tab and the menu - the way
+          Amazing IDE has them. The branch and its PR stood here once, and gave way: the IDE shows the branch
+          already, and the phone, which has no IDE around it, keeps both on its project card. */}
       <div className={s.headerTools}>
-        {watchers > 0 && (
-          <span
-            className={s.watchers}
-            data-tooltip={t.header.watchers(watchers)}
+        {onFork ? (
+          <button
+            type="button"
+            className={s.historyButton}
+            aria-label={t.header.fork}
+            // Dead with aria-disabled rather than disabled, or the hint saying why would never come up.
+            aria-disabled={openForkable ? undefined : true}
+            data-tooltip={openForkable ? t.header.fork : t.header.forkEmpty}
+            onClick={() => {
+              if (openForkable) onFork(activeSession)
+            }}
           >
-            ◉ {watchers}
-          </span>
-        )}
-
-        <BranchChip gitBranch={gitBranch} pullRequest={pullRequest} onOpenPullRequest={onOpenPullRequest} />
+            <ForkIcon />
+          </button>
+        ) : null}
 
         <button
           type="button"
@@ -1316,6 +1281,36 @@ export const Header = ({
           <HamburgerIcon />
         </button>
       </div>
+
+      {tabMenu ? (
+        <ContextMenu
+          x={tabMenu.x}
+          y={tabMenu.y}
+          title={t.header.tabMenu}
+          options={[
+            { id: 'rename', label: t.header.renameTab },
+            ...(onCopySessionId && conversationOf?.(tabMenu.sessionId)
+              ? [{ id: 'copyId', label: t.feed.session.copyId }]
+              : []),
+            // Only a conversation that exists can go on in a terminal, and one somebody else's terminal holds
+            // has nothing here to offer (see TerminalCard).
+            ...(onContinueInTerminal && conversationOf?.(tabMenu.sessionId) && terminalOf?.(tabMenu.sessionId) !== 'elsewhere'
+              ? [
+                  {
+                    id: 'terminal',
+                    label: terminalOf?.(tabMenu.sessionId) === 'here' ? t.terminal.show : t.terminal.continue,
+                  },
+                ]
+              : []),
+          ]}
+          onPick={(id) => {
+            if (id === 'rename') onNaming(tabMenu.sessionId)
+            if (id === 'copyId') onCopySessionId?.(tabMenu.sessionId)
+            if (id === 'terminal') onContinueInTerminal?.(tabMenu.sessionId)
+          }}
+          onClose={closeTabMenu}
+        />
+      ) : null}
     </header>
   )
 }

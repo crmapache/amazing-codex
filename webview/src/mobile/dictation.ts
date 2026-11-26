@@ -18,11 +18,49 @@
 
 export interface Dictation {
   /** The token came back - open the socket and hand it everything recorded so far. */
-  authorise: (grant: { token: string; language: string; model: string }) => void
+  authorise: (grant: DictationGrant) => void
   /** Speech is over: ask Deepgram for the tail, then close. */
   finish: () => void
   /** Thrown away - no words wanted, nothing waited for. */
   cancel: () => void
+}
+
+/** What the IDE's answer to `voiceToken` says about the socket to open - see VoiceGrant. */
+export interface DictationGrant {
+  token: string
+  language: string
+  model: string
+  /** Keep this dictation out of Deepgram's model training - the setting at the desk. */
+  trainingOptOut: boolean
+}
+
+/**
+ * The address a dictation opens - the desk builds the same one (`DeepgramStream.listenUrl`), and the tests
+ * on both sides expect the same string.
+ */
+export const listenUrl = ({
+  model,
+  language,
+  sampleRate,
+  trainingOptOut,
+}: {
+  model: string
+  language: string
+  sampleRate: number
+  trainingOptOut: boolean
+}): string => {
+  const url = new URL('wss://api.deepgram.com/v1/listen')
+  url.searchParams.set('model', model)
+  url.searchParams.set('language', language)
+  url.searchParams.set('encoding', 'linear16')
+  url.searchParams.set('sample_rate', String(sampleRate))
+  url.searchParams.set('channels', '1')
+  url.searchParams.set('smart_format', 'true')
+  url.searchParams.set('interim_results', 'true')
+  // Written only when asked for: absent is Deepgram's default, and any value but `true` fails the handshake.
+  if (trainingOptOut) url.searchParams.set('mip_opt_out', 'true')
+
+  return url.toString()
 }
 
 export interface DictationHandlers {
@@ -437,7 +475,7 @@ export const startDictation = async (handlers: DictationHandlers): Promise<Dicta
   const outRate = Math.min(context.sampleRate, TARGET_RATE)
 
   return {
-    authorise: ({ token, language, model }) => {
+    authorise: ({ token, language, model, trainingOptOut }) => {
       // A second grant for the same dictation is an answer to a request that has already been
       // answered - a press let go and made again while the first token was in flight. Opening a
       // socket for it would leave the first one orphaned on Deepgram's side with the opening of the
@@ -446,18 +484,16 @@ export const startDictation = async (handlers: DictationHandlers): Promise<Dicta
 
       clearTimeout(grantTimer)
 
-      const url = new URL('wss://api.deepgram.com/v1/listen')
-      url.searchParams.set('model', model)
-      url.searchParams.set('language', language)
-      url.searchParams.set('encoding', 'linear16')
-      // The rate the words actually go out at: claiming one we are not sending is chipmunk noise.
-      url.searchParams.set('sample_rate', String(Math.round(outRate)))
-      url.searchParams.set('channels', '1')
-      url.searchParams.set('smart_format', 'true')
-      url.searchParams.set('interim_results', 'true')
+      const url = listenUrl({
+        model,
+        language,
+        // The rate the words actually go out at: claiming one we are not sending is chipmunk noise.
+        sampleRate: Math.round(outRate),
+        trainingOptOut,
+      })
 
       try {
-        socket = new WebSocket(url.toString(), ['bearer', token])
+        socket = new WebSocket(url, ['bearer', token])
       } catch {
         die('network')
         return

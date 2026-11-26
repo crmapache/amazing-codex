@@ -181,11 +181,10 @@ intellijPlatform {
               <li><b>Everything runs on your machine.</b> No proxy, no server of ours in the middle.
               Your Codex sign-in belongs to the CLI - the plugin never sends it anywhere and never hunts
               for API keys on your disk.</li>
-              <li><b>Nothing leaves without your say.</b> No account and no analytics behind your back.
-              Anonymous usage statistics stay off until you press Allow on a card that asks once -
-              counts only, never code, messages or file names. With them off and remote access off, the
-              only thing that ever leaves is a feedback report you write and send yourself - and one
-              button shows its exact text first.</li>
+              <li><b>No account, and no analytics unless you allow them.</b> The panel asks once whether
+              it may send anonymous daily counts of how it is used - counts only, never code, messages or
+              file names - and shows the whole report first. Apart from that, with remote access off,
+              nothing leaves the machine.</li>
               <li><b>Your rules stay yours.</b> Codex applies your config, its sandbox and its approval
               policy; the mode on screen is exactly the policy the thread runs with, and the plugin
               never starts a thread in a laxer one.</li>
@@ -445,18 +444,6 @@ tasks.withType<RunIdeTask>().configureEach {
     // without clicking through the panel first; an ordinary IDE never sees it.
     providers.gradleProperty("remoteRelay").orNull?.let { url ->
         systemProperty("acx.remote.relay", url)
-    }
-
-    // -PfeedbackUrl=http://localhost:4451 points the feedback screen at a receiver running on this
-    // machine instead of the published one, and -PfeedbackKey overrides the shared secret it sends with
-    // it. The whole chain - screen, report, service, Telegram - has to be checkable end to end, and the
-    // address people's real reports go to is not the thing to test against.
-    providers.gradleProperty("feedbackUrl").orNull?.let { url ->
-        systemProperty("acx.feedback.url", url)
-    }
-
-    providers.gradleProperty("feedbackKey").orNull?.let { key ->
-        systemProperty("acx.feedback.key", key)
     }
 
     // The anonymous usage report never goes to the published service from here: a sandbox's days are

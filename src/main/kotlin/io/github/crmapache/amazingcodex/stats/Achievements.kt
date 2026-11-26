@@ -8,7 +8,7 @@ import java.time.temporal.ChronoUnit
 import java.time.temporal.WeekFields
 
 /**
- * The fifty-two achievements, five tiers each, and the figures they are measured by.
+ * The achievements, five tiers for most of them, and the figures they are measured by.
  *
  * The rules live here, on the IDE's side, rather than in the interface: a tier is earned at the moment
  * the figure crosses the line, and that moment has to be written down whether or not a panel happens to
@@ -114,20 +114,10 @@ internal object Achievements {
         "a-year-in" to ladder(7, 30, 90, 180, 365) { it.daysSinceFirst },
         // The one achievement earned by staying away: Christmas Eve to New Year's Day with the panel shut.
         "home-for-the-holidays" to ladder(1, 2, 5, 9, 18) { it.holidayDaysOff },
-        // --- Hours: time the agent carried instead of you ---
-        /*
-         * The time spent in the panel: one card, five lines, each ten times the one below it - an hour,
-         * ten hours, a hundred, a thousand, ten thousand.
-         *
-         * Four cards for one figure asked a person to work out what told them apart, exactly as the lines
-         * written did. The first line still comes on the first day, and the last is the ten thousand hours
-         * that are supposed to make a master of anybody - years of it, which is what a top tier is for.
-         * In minutes, because that is what a day record counts.
-         */
-        "hours-in-panel" to ladder(60, 600, 6_000, 60_000, 600_000) { it.minutes },
-        "deep-work" to ladder(15, 30, 60, 120, 240) { it.longestStretch },
-        "marathon" to ladder(30, 60, 120, 240, 480) { it.longestSession },
-        "full-day" to ladder(60, 120, 240, 480, 720) { it.longestDay },
+        // --- Pace: how the replies ran ---
+        // The time in the panel had four ladders here - the hours, the longest stretch, the longest chat,
+        // the longest day - and they went with the time itself (see RULES_VERSION 5): a panel left open
+        // all day is not a day of work, and the screen measures the work.
         "sprint" to ladder(5, 10, 20, 35, 60) { it.maxTurnsInHour },
         "quick-turn" to ladder(25, 150, 600, 1500, 3000) { it.quickTurns },
         "long-haul" to ladder(5, 50, 250, 800, 2000) { it.longTurns },
@@ -185,7 +175,7 @@ internal object Achievements {
      * Raised whenever a threshold moves. Nothing else in the book is versioned, and nothing else needs to
      * be: every other figure means the same thing it always did.
      */
-    const val RULES_VERSION = 4
+    const val RULES_VERSION = 5
 
     /**
      * What [RULES_VERSION] 2 forgets, once: the achievements whose lines moved, and the ones whose figure
@@ -229,6 +219,12 @@ internal object Achievements {
             "thousand-lines", "ten-thousand", "hundred-thousand", "million-lines",
             "first-hour", "ten-hours", "hundred-hours", "five-hundred",
         ),
+        /*
+         * The time in the panel is no longer counted on the screen at all, and its four ladders are gone
+         * with it: the tab measures the work by the tokens it took, and the hours a panel stood open said
+         * more about the window than about the work.
+         */
+        5 to setOf("hours-in-panel", "deep-work", "marathon", "full-day"),
     )
 
     /** The achievements whose lines have moved since a book was last measured, at [version]. */
@@ -289,10 +285,6 @@ internal object Achievements {
         var sessions = 0L
         var daysSinceFirst = 0L
         var holidayDaysOff = 0L
-        var minutes = 0L
-        var longestStretch = 0L
-        var longestSession = 0L
-        var longestDay = 0L
         var maxTurnsInHour = 0L
         var quickTurns = 0L
         var longTurns = 0L
@@ -332,20 +324,16 @@ internal object Achievements {
                 val slash = HashSet<String>()
                 val thanks = HashSet<String>()
 
-                // The machine's days rather than each project's own: an hour with two projects working at
-                // once is an hour of a person's life, and the ladders of hours are about the person. See
+                // The machine's days rather than each project's own: a day with two projects working is one
+                // day of a person's life, and the ladders of days are about the person. See
                 // StatsSnapshot.daysTogether - the minutes are joined there rather than added.
                 for ((day, record) in snapshot.daysTogether()) {
                     val date = runCatching { LocalDate.parse(day) }.getOrNull() ?: continue
                     if (record.isActive()) activeDates.add(date)
-                    metrics.longestDay = maxOf(metrics.longestDay, record.minutes.count().toLong())
 
                     metrics.earlyPrompts += record.earlyPrompts
                     metrics.latePrompts += record.latePrompts
                     metrics.sessions += record.sessions
-                    metrics.minutes += record.minutes.count()
-                    metrics.longestStretch = maxOf(metrics.longestStretch, record.longestStretch.toLong())
-                    metrics.longestSession = maxOf(metrics.longestSession, record.longestSession.toLong())
                     metrics.maxTurnsInHour = maxOf(metrics.maxTurnsInHour, record.maxTurnsInHour.toLong())
                     metrics.quickTurns += record.quickTurns
                     metrics.longTurns += record.longTurns

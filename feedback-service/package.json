@@ -1,7 +1,7 @@
 {
   "name": "amazing-codex-feedback",
-  "version": "0.1.0",
-  "description": "A tiny service that takes a piece of feedback from the plugin's panel and hands it to the author's Telegram.",
+  "version": "0.2.0",
+  "description": "What is left of the feedback receiver: it answers the old plugin's feedback form with where a change can be asked for, and forwards nothing.",
   "private": true,
   "license": "Elastic-2.0",
   "type": "module",

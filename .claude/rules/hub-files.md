@@ -41,15 +41,18 @@ paths:
 - `reuseMessage`, `intoField` - message-reuse
 - `queueEdits`, `takeBackQueued`, `case 'queuedTaken'`, `before` в `intoTheQueue` - queue-edit
 - `pickTab`, `focusToken` (фокус в `startSession`, `resume`, `closeSession`) - composer-field
+- `onQuote` у `SelectionMenu` и `addToDraft` (вставка снаружи встаёт в каретку) - composer-field
 - `spellcheck`, `setSpellcheck`, `case 'spellcheck'`, атрибут на корне документа - composer-field
 - `shareEditor`, `editorContext`, `editorOnce`, `editorShown`, `openEditorMenu`, `pickEditor`, `withEditor` в `submit`, `case 'editorContext'` - editor-context
 - `menuConversation` (сообщение `sessionMenu` для меню правой кнопки), `status` в `runLocal`, `case 'sessionInfo'` - session-info
+- `continueInTerminal`, `terminalHere`, `panel.terminal` в `submit` (отправка в очередь), `terminal` в `runLocal` и `pressPanelKey`, `case 'terminal'`/`'terminalRefused'`, `TerminalCard` в `dockCards`, `terminalOf`/`onContinueInTerminal` у `Header` - terminal-handoff
 - `improveSources`, `restoreDraft`, `registerApply` - prompt-improver
 - `feedPlaces`, `key={active}`, `forgetFeedFocus` - reading-place
 - `hiddenTaskIds` - subagents
 - `sendAnswers`, `dismissAsk` - permissions
 - `latestTodo` (список задач из реплея не всплывает) - history
 - выбор из истории, какую вкладку занять - history
+- `historyCanDelete`, `historyRefusal`, `deletingHistory`, `case 'historyDeleted'`, `onDelete`/`refusal` у `History` - history (удаление в корзину)
 - `branchFrom` / форк и шкала контекста форка - fork-tabs
 - `fork(quote, point)`, `forkWhole`, `forkable`, разрез из выделения (`forkPointAfter`), `openOriginal` - fork-tabs
 - `openRewind`, `confirmRewind`, `rewindOutcome`, `rewindInFork`, `rewinding`, `case 'rewindPreview'`/`'rewound'`, `uuid` в `submit` - rewind
@@ -60,12 +63,13 @@ paths:
 - `settingSources`, `settingSourcesFacts`, `openSettingSources` - setting-sources
 - `openLink` - side-menu
 - `mcpLoading` - idle-sleep
-- состояние формы обратной связи - feedback
+- экран обратной связи и его отладочный отчёт (`feedbackReport`) - feedback
 - новогодние украшения - holiday
 - экран без вкладок (`sessions.length === 0`, `Welcome`), `markPanelReady` на первый `auth` - welcome
 - голосовая вставка в черновик - voice
 - `hiddenIndicators`, `indicatorsSent`, `case 'indicators'`, `metersNode` - indicators
-- `theme`, `setTheme`, `textSize`, `textSizeSent`, `case 'typography'`, `case 'theme'` - appearance
+- `suggestion` у поля разговора, `editDeclines` и `suggestionDismissed` в `changeDraft` - prompt-suggestions
+- `theme`, `setTheme`, `textSize`, `textSizeSent`, `case 'typography'`, `case 'theme'`, `fontInfo`, `fontFamilies`, `setFontFamily`, экран `font` - appearance
 - `calls`/`setCalls`, свечение в `alert`, эффект с `callsStanding`, `activeCalling`, `case 'calledAway'` - tab-calls
 - `draftsKnown`, `draftsSent`, `draftSaves`, `shellNamedTab`, `case 'drafts'`, `case 'activeTab'`, `restoreTabs` - restore-tabs
 - `nameSession`, `case 'sessionTitle'`, `resumedTitle`/`searchHitTitleSource` при открытии из истории и поиска - tab-names
@@ -78,7 +82,8 @@ paths:
 - `ImagePreview` рядом с `Tooltips`, `case 'imagePreview'`, `SaidImagesContext` вокруг `Feed`, `openPicture` и `OpenPictureContext`, `sessionId` у `Queue` - image-preview
 - `missingFiles`, `case 'fileMissing'`, очистка в `openFile` - open-in-editor
 - `sideThreads`, `askAside`, `forgetSide`, `case 'sideAnswer'`/`'sideProgress'`, Esc над карточкой вопроса сбоку, `SideQuestionCard` в `dockCards` - btw
-- только в `mobile/App.tsx`: `PhoneRewind`, `refills`, `RewindSheet` - rewind; `forkFrom`/`forkWhole` (`kind: 'branch'`, `before`) - fork-tabs;
+- только в `mobile/App.tsx`: `onQuote` у `Thread` (цитата выделением) и `isWorking` в `counting` - remote-access;
+  `PhoneRewind`, `refills`, `RewindSheet` - rewind; `forkFrom`/`forkWhole` (`kind: 'branch'`, `before`) - fork-tabs;
   `openMachineScreen`, `openRepository`, `Door`/`from`, `edit.home`/`edit.origin` -
   remote-access и scenarios; `vividOf` - calm-colors; `case 'effort'` в `mobile/feed.ts` - models
 
@@ -99,6 +104,7 @@ paths:
 - `activeTab`, `drafts`, `restoreTabs`, `saveDraft`, `tabShown`, `setRestoreTabs` - restore-tabs
 - `ClosedTab`, `closedTabs`, `tabReopened`, `reopenTab`, `panelTabClosed`, `TabPlace` (одно описание, `tabs.ts` его переэкспортирует), `held` у `queue` - reopen-tabs
 - `takeQueued`, `queuedTaken`, `before` у `queuePrompt` - queue-edit
+- `PromptSuggestionEvent` (`prompt_suggestion`) - prompt-suggestions
 - `previewImage`, `imagePreview`, `openPicture`, `PreviewPlace`, `tokens` у `QueuedMessage` - image-preview
 - `tool_use_result`, `ToolUseResult` (дифф правки и `type: 'create'`), `FileEdit`, `RevertOutcome`, `revertChanges`,
   `changesReverted`, `FilesSettledEvent` - changed-files; `fileMissing` - open-in-editor
@@ -110,7 +116,8 @@ paths:
   `carryOnWait`, `cancelCarryOn` - accounts
 
 **`webview/src/feed/build.ts`** (редьюсер ленты):
-- `case 'sessionInfo'` (строка `/status`) - session-info
+- `case 'sessionInfo'` (строка `/status`) - session-info; её `command`/`account`/`onDefault` - terminal-handoff
+- `case 'terminal'`, `case 'terminalRefused'` - terminal-handoff
 - `TodoWrite`/`TaskCreate`/`TaskUpdate`, `tasksCarried`, `pendingTasks` - task-list
 - `stintElapsed`, `stintOver`, `workGoesOn`, `pendingAgents`, подпись под ответом в `case 'result'` - turn-lifecycle
 - контекст из реплея в `case 'result'`, `historyPage`, `windowModel`, `resumed`, `SERVICE_BLOCK`,
@@ -132,10 +139,13 @@ paths:
 - `case 'changesReverted'` (итог отката файлов хода) - changed-files
 - `case 'files_settled'` (сверка файлов хода с диском, `settleChanges`) - changed-files
 - `queueHeld` в `case 'queue'` - reopen-tabs
+- `case 'prompt_suggestion'`, `withoutSuggestion` и сброс `suggestion`/`suggestionDeclined` в `prompt`, `status`, `/clear`, откате и смерти процесса, `suggestionDismissed` - prompt-suggestions (правила в `feed/suggestion.ts`)
 
 **`webview/src/feed/types.ts`** и **`webview/src/feed/panelState.ts`**:
 - `DraftEdit` - prompt-improver; `ErrorItem.signIn` - expired-sign-in; `ErrorItem.sampling` - setting-sources;
-  `ModelStuckItem` - models; `UserItem.auto` (подпись PANEL), `PanelState.carryOn` - accounts; `SessionInfoItem` - session-info
+  `ModelStuckItem` - models; `UserItem.auto` (подпись PANEL), `PanelState.carryOn` - accounts; `SessionInfoItem` - session-info;
+  `PanelState.terminal`, `terminalRefused`, `SessionInfoItem.command`/`account`/`onDefault` - terminal-handoff;
+  `PanelState.suggestion`, `suggestionDeclined`, действие `suggestionDismissed` - prompt-suggestions
 - `ClosedReason`, `ToolMeta`, `CompactOutcome`, `DetailNote`, `PermItem.mode`, `LimitItem.window`,
   `MetaItem.stats` («Stopped by you» не переводится) - i18n; `movedAccount` - accounts
 - `CompactItem.startedAt`, `stintStartedAt`, `pausedMs` - turn-lifecycle; `TodoItem.replayed` - history
@@ -152,10 +162,11 @@ paths:
 `droppable` - editor-context; `registerApply`, `fillField` - prompt-improver; хвост диктовки
 `data-voice` - voice; `ContextMeter` - composer-field, calm-colors и indicators (`bar`/`figure`); проп
 `indicators` и пустые контейнеры на рельсе и в compact - indicators; сворачивание вставки - paste;
-`queueToken`, `queueKey`, `pressQueueKey`, `seenQueueToken` - panel-keys.
+`queueToken`, `queueKey`, `pressQueueKey`, `seenQueueToken` - panel-keys; проп `suggestion`, `shownSuggestion` (`shownGuess`) в
+заглушке и Tab в `handleKeyDown` - prompt-suggestions.
 
-**`webview/src/components/feed.module.css`**: `.userActions` - message-reuse; `.taskLog` - subagents;
-`.toolHead` и его распорка `::before` - tool-cards; `.pins`, `.pinOn`, `.textPinnable` - pins;
+**`webview/src/components/feed.module.css`**: `.userActions`, `.moreOpen` - message-reuse; `.taskLog` - subagents;
+`.toolHead` и его распорка `::before` - tool-cards; `.pins`, `.pinOn`, `.textWithMenu`, `.textPinned` - pins;
 `.chipPasteCopy` - paste; `.rowLit` - search; `.changes`, `.change*` - changed-files.
 
 **Слои (z-index)**: лестница записана в `holiday.module.css`. Полка пинов 19, кнопка «вниз» 20, вуаль 21,
@@ -166,7 +177,7 @@ paths:
 шрифтовой стек CJK - i18n; ступени `--acc-gauge-*` - calm-colors; светлая тема, `--acc-scrim`/`--acc-drop`,
 `color-scheme` - appearance; `--acc-group-deep`/`--acc-group-depth` - active-tab.
 
-**`webview/src/catalog.ts`**: `panelCommands` (`/design-login`) - accounts; `/status` - session-info.
+**`webview/src/catalog.ts`**: `panelCommands` (`/design-login`) - accounts; `/status` - session-info; `/terminal` - terminal-handoff.
 
 **`webview/src/harness/events.ts`**: `toolResult` со структурной половиной - changed-files.
 
@@ -174,7 +185,7 @@ paths:
 `answerModel` (ответ обязан быть отложенным) и `setEffort` - models; переписывание - prompt-improver;
 диктовка - voice; `savePastedFile`, `clipboardWrite`/`clipboardRead` - clipboard; `saveImage` - stats; `sessionInfo` - session-info;
 фидбэк - feedback; поиск - search; вход в аккаунт - expired-sign-in и accounts; транскрипт агента - subagents;
-`answerFork` (история и шов нового форка) - fork-tabs; `answerPanelKeys` (раскладка и перехват клавиш панели) -
+`answerFork` (история и шов нового форка) - fork-tabs; `answerToTerminal`/`answerFromTerminal` (удержание, отказ, хвост из терминала) - terminal-handoff; `answerPanelKeys` (раскладка и перехват клавиш панели) -
 panel-keys; `answerClosedTabs` (зеркало полосы и закрытые вкладки), `drafts` на `ready` - reopen-tabs; `answerPreview`,
 `rowTokens` в `sayQueue` - image-preview.
 
@@ -191,6 +202,7 @@ panel-keys; `answerClosedTabs` (зеркало полосы и закрытые 
   `carryOnChanged`, `carryOnWhatIsDue`, `cancelCarryOn`, `RESTART` в `onProcessDropping` - accounts (работа, остановленная не человеком)
 - `settingSources` у `conversations`, `sendAccountOutranked` - setting-sources
 - `resumeConversation`, сообщение `conversation` в `attach`/`resetJournal` - history
+- `holdsConversation`, `tabHolding`, `forgetClosedConversation`, `renameClosedConversation`, `emitToDesk` - history (удаление в корзину, переименование) и reopen-tabs
 - `PROJECT_ORDER`, `broadcastProject` - remote-access и calm-colors; `indicators` в нём - indicators;
   `refreshCommandHints` - slash-hints
 - `stats` - stats; круг сна простаивающих - idle-sleep; прогрев `CodexHome` - claude-home
@@ -216,7 +228,7 @@ editor-context; `rewind`, `previewRewind`, `rewindNow`, `stopForRewind`, `turnOf
 `releasedRole` и рамка в `prompt` - scenarios; `branchFrom(before)`, `originOf`, `restoreFork`, `forkOrigin` в `moveTo` - fork-tabs; `rewind`, `previewRewind` - rewind;
 `putBacks`, `notePutBack`, `settlements` (у вкладки, переживают переезд) - changed-files.
 
-**`ProjectCatalog.kt`**: `sendCalmColors` - calm-colors; `runShellCommand` - editor-sync; `sendCustomModels` -
+**`ProjectCatalog.kt`**: `deleteConversation`, `renameConversation`, `historyMessage` (с `canDelete`) - history; `sendCalmColors` - calm-colors; `runShellCommand` - editor-sync; `sendCustomModels` -
 models; `pasteCollapse` в `sendInit` - paste; `authenticateMcp`, `sayProject` - remote-access;
 `installedPlugins`, `refreshCommandHints` - slash-hints; список `files` - open-in-editor; страницы нерождённого
 форка в `sendHistoryPage` - fork-tabs; `sendIndicators` и
@@ -227,7 +239,7 @@ remote-access; остальное - по заметке фичи, которой
 
 **`toolwindow/CodexPanel.kt`**: сообщения аккаунтов у двери окна - accounts; `setCustomModels` -
 models; `openFile` - open-in-editor; фидбэк и лог незнакомого сообщения (только тип и длина) - feedback;
-`setHiddenIndicators` - indicators; `setTheme`, `setTextSize`, `sendTheme`, `appearanceChanged` - appearance;
+`setHiddenIndicators` - indicators; `setTheme`, `setTextSize`, `setFontFamily`, `fontFamilies`, `sendTheme`, `appearanceChanged` - appearance;
 `saveDraft`, `tabShown`, `setRestoreTabs`, `sendDrafts` - restore-tabs; `reopenTab`, `panelTabClosed` - reopen-tabs; `watchEditor`, `sendEditorContext`,
 `setShareEditor` - editor-context; `sessionMenu`, `sendSessionInfo`, `onSessionIdCopied` - session-info; `setSpellcheck`, `spellcheckChanged` - composer-field; счёт фич `UsageFeatures.ofMessage` у двери окна, `setUsageStats`,
 `usageStatsPreview`, `usageChanged` - usage-stats; `PanelKeys.install`, `pressPanelKey`, `sendPanelKeys`,
@@ -243,7 +255,7 @@ models; `openFile` - open-in-editor; фидбэк и лог незнакомог
 
 **`CodexPreferences.kt`** (подгружает models): `gaugeVivid` - calm-colors; `language` - i18n;
 `improveInstructions` - prompt-improver; стартовая модель новой вкладки переехала в `StartingChoice.kt` -
-models; `hiddenIndicators` - indicators; `theme`, `textSize` - appearance; `restoreTabs` - restore-tabs;
+models; `hiddenIndicators` - indicators; `theme`, `textSize`, `fontFamily` - appearance; `restoreTabs` - restore-tabs;
 `shareEditor` - editor-context; `spellcheck` - composer-field.
 
 **`RemoteCommands.kt`** (подгружает remote-access): почему телефону разрешено или запрещено конкретное

@@ -85,11 +85,10 @@ personalizados vêm junto. Sem proxy no meio e sem nenhuma conta nossa.
 - **Tudo roda na sua máquina.** Sem proxy e sem nenhum servidor nosso no meio. Seu login no Codex
   pertence ao CLI: o plugin nunca o envia para lugar nenhum nem sai procurando chaves de API no seu
   disco.
-- **Nada sai sem a sua permissão.** Sem conta e sem analytics escondido. As estatísticas de
-  uso anônimas ficam desligadas até você tocar em Permitir no cartão que pergunta uma única vez:
-  só contagens, nunca código, mensagens ou nomes de arquivos. Com elas e o acesso remoto
-  desligados, a única coisa que sai é um relato que você escreve e envia - e um botão mostra o
-  texto exato antes.
+- **Sem conta, e sem analytics se você não permitir.** O painel pergunta uma vez se pode enviar
+  contadores diários anônimos de uso e não envia nada até você clicar em Permitir: as configurações
+  mostram antes o relatório inteiro, e desligar apaga o que foi enviado. Fora isso, com o acesso
+  remoto desligado, nada sai da máquina.
 - **Suas regras continuam suas.** O Codex aplica a sua configuração, o próprio sandbox dele e a
   própria política de aprovação dele; o modo na tela é exatamente a política com que a conversa
   roda, e o plugin nunca inicia uma conversa em um modo mais frouxo.

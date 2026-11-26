@@ -363,8 +363,9 @@
 }
 
 /*
- * The pair of them, in the card's top right corner - at the very same 7px from the edges as the copy
- * buttons on a reply (see .textActions).
+ * The copy button and the three dots beside it (and the pin, lit, while the message is pinned), in the
+ * card's top right corner - at the very same 7px from the edges as the buttons on a reply (see
+ * .textActions).
  *
  * Absolute rather than a child of the head, and that is what makes the two kinds of card agree: in the
  * flow they sat at the head's own padding, 11px in, so the buttons jumped sideways as the pointer went
@@ -372,7 +373,7 @@
  * jump was the most visible thing about them. Out of the flow they take no room from the head either,
  * so nothing about the label and the time depends on how many buttons there are.
  *
- * The gap is 4px rather than the head's own 8: they are one pair doing one kind of thing, and that is
+ * The gap is 4px rather than the head's own 8: they are one group doing one kind of thing, and that is
  * the distance the bubble and the heart keep down by the input field (see .endPair in shell.module.css).
  */
 .userActions {
@@ -385,7 +386,10 @@
 }
 
 /*
- * The two buttons in a sent message's head: copy it out, and take it back into the input field.
+ * The buttons in a sent message's head: copy it out, and the three dots with everything else (putting it
+ * back into the input field, pinning it, rewinding to it - see CardMenu). They were four buttons in a
+ * row once, and four little squares over every message of one's own read as a toolbar rather than as a
+ * message; copying is what is reached for most, so it alone stays out.
  *
  * Always visible rather than appearing on hover, unlike the one on a code block. Two reasons, and the
  * second is the stronger: there is no hover on a phone, where the copy button is the only way to get a
@@ -393,8 +397,8 @@
  * their own message that the panel already had (the up arrow in the field, a selection copied with the
  * chips resolved) - a button that hides until the pointer finds it would keep that problem.
  *
- * Faint, and lit only under the pointer: the head is a label and a time, and two bright squares beside
- * them would read as the loudest thing in a message the person wrote themselves.
+ * Faint, and lit only under the pointer: the head is a label and a time, and bright squares beside them
+ * would read as the loudest thing in a message the person wrote themselves.
  */
 .userAction {
   /* Auto on a desktop, a fingertip on a touchscreen - see --acc-hit in tokens.css. */
@@ -748,18 +752,28 @@
   overflow-wrap: anywhere;
 }
 
-/* Two buttons in the corner instead of one, so the room they stand in is that much wider. */
-.textPinnable {
+/* Two buttons in the corner instead of one - the copy and the dots (see TextCard) - so the room they stand
+   in is that much wider. */
+.textWithMenu {
   padding-right: calc(58px + var(--acc-card-grow, 0px));
 }
 
 /*
- * The buttons in an answer's top right corner - copy it out, and pin it over the conversation.
+ * And three while the answer is pinned: the lit pin comes out of the menu to stand before the copy (see
+ * .pinOn). The text is narrowed only on the pinned answers rather than on every one: an answer is read far
+ * more often than it is pinned, and a column 24px narrower on every one of them is paid on every line.
+ */
+.textPinned {
+  padding-right: calc(82px + var(--acc-card-grow, 0px));
+}
+
+/*
+ * The buttons in an answer's top right corner - copy it out, and the dots with the pin behind them.
  *
  * An answer has no head to hang them off the way a message of one's own does (see .userActions), so the
- * room they stand in is the card's own right padding. That is why the second one is paid for only where
- * it exists: .textPinnable widens the padding, and an answer on a screen with no pinning (the phone) is
- * laid out exactly as it always was.
+ * room they stand in is the card's own right padding. That is why each one past the copy is paid for only
+ * where it exists: .textWithMenu and .textPinned widen the padding, and an answer on a screen with no
+ * pinning (the phone) is laid out exactly as it always was.
  */
 .textActions {
   position: absolute;
@@ -818,6 +832,17 @@
   color: var(--acc-fg-faint);
   opacity: 0.4;
   cursor: default;
+}
+
+/*
+ * The three dots while the menu they opened is up (see CardMenu): lit the way they are under the pointer,
+ * so it stays plain which card the menu belongs to once the pointer is in it. After .userAction and
+ * .textAction for the same reason .pinOn is - single classes, and the last one written decides.
+ */
+.moreOpen,
+.moreOpen:hover {
+  background: var(--acc-bg-control);
+  color: var(--acc-fg);
 }
 
 /*
@@ -1384,10 +1409,9 @@
 
 /* The chip stands in the row on the baseline - like everything else in the head. But the baseline aligns
    by letters, while beside the text what is seen is not the chip's letters but its fill: the rectangle
-   whole. That box is symmetrical around the metrics of its own, smaller font, and its middle ends up above
-   the middle of the neighbouring word - to the eye the chip hangs above the row. We drop it by a pixel so
-   that the middles meet; the shift is a painted one, does not meddle with the flow, does not touch the
-   row's height and leaves the caption inside the chip exactly at its centre. */
+   whole. Its middle meets the middle of the lowercase letters beside it only while the caption stands at
+   the middle of the fill, and that holds at any zoom only with the font's own leading - see
+   --acc-chip-leading in tokens.css. */
 .toolChip {
   flex: none;
   /* The same three numbers the strut is built from (see .toolHead::before): they are one measurement,
@@ -1451,6 +1475,14 @@
   color: var(--acc-fg-faint);
 }
 
+/* "… 3 more lines" at the end of a command's caption (see ToolCard): in the quiet words of the meta, but
+   inside the caption, so its ellipsis takes them before it takes a letter of the command. */
+.toolMore {
+  margin-left: var(--acc-head-gap);
+  font: var(--acc-fs-meta, 11px) var(--acc-mono);
+  color: var(--acc-fg-faint);
+}
+
 .toolDur {
   flex: none;
   font: var(--acc-fs-label, 10px) var(--acc-mono);
@@ -1470,8 +1502,9 @@
 }
 
 /* Deliberately not pulsing: the agent is doing nothing, it stands and waits for you - it should not look
-   as brisk as genuine work. */
-.toolMeta.waiting {
+   as brisk as genuine work. The same for a subagent's card standing on a permission (see TaskCard). */
+.toolMeta.waiting,
+.toolDur.waiting {
   color: var(--acc-warn);
 }
 
@@ -1516,6 +1549,19 @@
   color: var(--acc-fg-body);
   max-height: 220px;
   overflow-y: auto;
+}
+
+/* The whole command of a call whose head shows only its first line (see ToolCard). The same block as the
+   errand above, for the same reasons: it is what was asked, so it is brighter than what came back under it,
+   and it is capped - a script written out in a heredoc runs to a hundred lines, and the output a card is
+   usually opened for would otherwise sit below all of them. Parted from that output by a gap, not a rule
+   (see taskLog for why). */
+.toolCommand {
+  composes: taskPrompt;
+}
+
+.toolCommand:not(:last-child) {
+  margin-bottom: 8px;
 }
 
 /* The agent's own log under the errand - what is above is what it was asked, what is below is what it
@@ -2444,6 +2490,23 @@
   color: var(--acc-fg-soft);
 }
 
+/* The turn's whole change over its rows (see ChangesRow): how many files, and the lines added and removed across
+   all of them, the figures in the rows' own column. A rule under it keeps it from reading as one more file. */
+.changesHead {
+  margin-bottom: 2px;
+  padding-bottom: 2px;
+  border-bottom: 1px solid var(--acc-line);
+}
+
+.changesCount {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--acc-fg-faint);
+}
+
 /* A row and its revert button side by side; the button stays out of the row so a click on it never opens
    the file. */
 .changeLine {
@@ -2994,6 +3057,14 @@
   font-size: 11.5px;
   line-height: 1.45;
   color: var(--acc-fg-dim);
+}
+
+/* Continue in terminal under the line it does the same as: the line is for a terminal of one's own, the button
+   for the IDE's, on the tab's account and back to the chat afterwards. */
+.sessionInfoActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
 }
 
 .outranked {

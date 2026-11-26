@@ -343,6 +343,13 @@ internal object RemoteCommands {
          */
         "agentTranscript",
         "bash",
+        /**
+         * Deleting a past conversation from the history (see ProjectCatalog.deleteConversation). It goes to
+         * the trash of the machine the IDE stands on, where nobody holding the phone can take it back out -
+         * so it is a press for the desk only, like closing a tab.
+         */
+        "deleteConversation",
+        "renameConversation",
         "closeSession",
         "reorderGroups",
         // The same list, one step finer: the order the tabs at the desk are drawn in, which a phone has
@@ -438,6 +445,9 @@ internal object RemoteCommands {
          */
         "setTheme",
         "setTextSize",
+        "setFontFamily",
+        // The machine's font families, for the desk's own font screen.
+        "fontFamilies",
         /**
          * The tabs coming back after a restart: the desk's drafts, the tab on the desk's screen, and the
          * switch for the whole thing. A phone has an input field and a screen of its own, and reporting
@@ -525,6 +535,12 @@ internal object RemoteCommands {
         "accountAdd",
         "accountCancel",
         /*
+         * Signing a row in again when its drawer has lost the credential, and stopping the wait for it. The
+         * same terminal and browser on the work machine as adding one, into that row's own drawer.
+         */
+        "accountSignIn",
+        "accountSignInStop",
+        /*
          * Authorizing Claude Design. A terminal and a browser sign-in on somebody's machine, in that
          * account's credential drawer - the same thing `accountAdd` above is denied for, and the phone
          * has no terminal to finish it in either.
@@ -557,6 +573,15 @@ internal object RemoteCommands {
         // `/status` arrives as a message instead, and is answered at that door (see SessionCommands.statusAsked).
         "sessionMenu",
         "sessionInfo",
+        /*
+         * A conversation into a terminal of the IDE, the terminal brought to the front, and the terminal closed to
+         * give it back (see TerminalDesk). All three act on THIS machine's screen: a terminal opened over somebody's
+         * desk is work nobody on a sofa can do, and closing one ends whatever its CLI was doing. The phone sees the
+         * state - the tab waits, and says why - and writes into the queue as before.
+         */
+        "toTerminal",
+        "showTerminal",
+        "fromTerminal",
         // Writing a file onto the machine at the asking of whoever is on the line. The picture itself is
         // harmless; a message that makes the IDE write files is not, and the statistics tab it comes from
         // is the panel's alone anyway.
@@ -572,22 +597,15 @@ internal object RemoteCommands {
         // phone's editor is not this one, as with openFile.
         "openPicture",
         /*
-         * Feedback. Every one of these is refused, and for a different reason each:
-         *
-         * - feedbackAttach opens a file dialog on the work machine and reads what is chosen;
-         * - feedbackSend posts those files, and a report about this machine, to a server;
-         * - feedbackReport builds that report out of a conversation's journal, which is the conversation;
-         * - feedbackOpen and feedbackDetach are harmless on their own and are refused with the rest, so
-         *   that the screen is one thing rather than a screen with a reachable edge.
+         * The feedback screen. feedbackReport builds a report out of a conversation's journal, which is the
+         * conversation; feedbackOpen is harmless on its own and is refused with it, so that the screen is
+         * one thing rather than a screen with a reachable edge.
          *
          * They are handled by the panel's own window in any case (see CodexPanel), which a remote client
          * never reaches - this list says so out loud rather than relying on that.
          */
         "feedbackOpen",
         "feedbackReport",
-        "feedbackAttach",
-        "feedbackDetach",
-        "feedbackSend",
         /*
          * Voice input, refused whole (see VoiceDesk).
          *
@@ -606,6 +624,7 @@ internal object RemoteCommands {
         "voiceEnabled",
         "voiceLanguage",
         "voiceDevice",
+        "voiceTrainingOptOut",
         "voiceKey",
         "voiceBalance",
         "voiceCaptureHotkey",

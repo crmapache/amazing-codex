@@ -38,6 +38,15 @@ class TranscriptTokensTest {
             """"last_token_usage":{"input_tokens":${tokens - 10},"cached_input_tokens":0,"output_tokens":10,"total_tokens":$tokens},""" +
             """"model_context_window":258400},"rate_limits":null}}"""
 
+    /** The first line of a thread's file: where Codex works, among its instructions. */
+    private fun meta(cwd: String): String =
+        """{"timestamp":"2026-10-16T08:00:00Z","type":"session_meta","payload":{"id":"t","cwd":"${cwd.replace("\\", "\\\\")}",""" +
+            """"base_instructions":{"text":"You are Codex"}}}"""
+
+    /** A turn's context: a turn may move the thread to another folder. */
+    private fun context(cwd: String): String =
+        """{"timestamp":"2026-10-16T08:00:01Z","type":"turn_context","payload":{"turn_id":"x","cwd":"${cwd.replace("\\", "\\\\")}"}}"""
+
     /** A conversation's file with these lines, last changed at [changed]. */
     private fun transcript(path: String, changed: Long, vararg lines: String): File {
         val file = File(root, path)
@@ -139,5 +148,84 @@ class TranscriptTokensTest {
 
         assertEquals(0L, TranscriptTokens.refresh(missing, ledger, zone, now))
         assertNull(ledger.read { it.tokens[TranscriptTokens.keyOf(missing)] })
+    }
+
+    private fun projects(): Map<String, TokenProject> =
+        ledger.read { HashMap(it.tokens[TranscriptTokens.keyOf(root)]?.projects ?: emptyMap()) }
+
+    @Test
+    fun `the tokens go to the project the directory lies in`() {
+        val work = directory.resolve("work").toFile()
+        // Opened in the IDE: the book knows it under the key StatsCollector gives its path.
+        val app = File(work, "app").apply { mkdirs() }
+        ledger.update { it.project(StatsCollector.keyOf(app.path), "app") }
+        // Never opened, but a repository - a worktree's .git is a file, and that counts the same.
+        val tool = File(work, "tool").apply { mkdirs() }
+        File(tool, ".git").writeText("gitdir: elsewhere")
+        File(tool, "scripts").mkdirs()
+        // Neither: a folder of its own.
+        val scratch = File(work, "scratch").apply { mkdirs() }
+
+        transcript(
+            "2026/10/16/rollout-a.jsonl",
+            now,
+            meta(app.path),
+            request("2026-10-16T09:05:00Z", total = 400, tokens = 400),
+            // The next turn ran in a folder inside the project: still the project's.
+            context("${app.path}/webview/src"),
+            request("2026-10-16T09:10:00Z", total = 440, tokens = 40),
+        )
+        transcript(
+            "2026/10/16/rollout-b.jsonl",
+            now,
+            meta("${tool.path}/scripts"),
+            request("2026-10-16T10:05:00Z", total = 80, tokens = 80),
+        )
+        transcript("2026/10/16/rollout-c.jsonl", now, meta(scratch.path), request("2026-10-16T11:05:00Z", total = 8, tokens = 8))
+        // A file with no folder said still counts in the day, just not for any project.
+        transcript("2026/10/16/rollout-d.jsonl", now, request("2026-10-16T11:20:00Z", total = 4, tokens = 4))
+
+        TranscriptTokens.refresh(root, ledger, zone, now)
+
+        val projects = projects()
+        val appTokens = projects[StatsCollector.keyOf(app.path)]
+        assertEquals("app", appTokens?.name)
+        assertEquals(mapOf(hourOf("2026-10-16T09:00:00Z") to 440L), appTokens?.hours?.toMap())
+        assertEquals("tool", projects[StatsCollector.keyOf(tool.path)]?.name)
+        assertEquals(80L, projects[StatsCollector.keyOf(tool.path)]?.hours?.values?.sum())
+        assertEquals("scratch", projects[StatsCollector.keyOf(scratch.path)]?.name)
+        assertEquals(3, projects.size)
+        assertEquals(532L, hours().values.sum())
+    }
+
+    @Test
+    fun `a book kept before the projects reads every thread again`() {
+        val app = directory.resolve("app").toFile().apply { mkdirs() }
+        transcript("2026/09/26/rollout-old.jsonl", now - 20 * 24 * hour, meta(app.path), request("2026-09-26T10:00:00Z", total = 100))
+        transcript("2026/10/16/rollout-new.jsonl", now, meta(app.path), request("2026-10-16T10:00:00Z", total = 100))
+        // Read through yesterday by a plugin that knew nothing of projects: the totals are there, the
+        // projects are not - and the reading time says nothing about them.
+        ledger.update { book ->
+            book.tokens[TranscriptTokens.keyOf(root)] = TokenHome().apply {
+                record(mapOf(hourOf("2026-09-26T10:00:00Z") to 100L), now - 24 * hour)
+            }
+        }
+
+        TranscriptTokens.refresh(root, ledger, zone, now)
+
+        val tokens = projects()[StatsCollector.keyOf(app.path)]
+        assertEquals(
+            mapOf(hourOf("2026-09-26T10:00:00Z") to 100L, hourOf("2026-10-16T10:00:00Z") to 100L),
+            tokens?.hours?.toMap(),
+        )
+        assertEquals(now, ledger.read { it.tokens[TranscriptTokens.keyOf(root)]!!.projectsReadAt })
+
+        // From then on only what changed: the old file rewritten behind the reading's back is not opened.
+        File(root, "2026/09/26/rollout-old.jsonl").apply {
+            writeText(meta(app.path) + "\n" + request("2026-09-26T10:00:00Z", total = 900, tokens = 900) + "\n")
+            setLastModified(now - 20 * 24 * hour)
+        }
+        TranscriptTokens.refresh(root, ledger, zone, now + hour)
+        assertEquals(100L, projects()[StatsCollector.keyOf(app.path)]?.hours?.get(hourOf("2026-09-26T10:00:00Z")))
     }
 }

@@ -25,6 +25,12 @@ const DECISIONS: {
 interface PermissionPanelProps {
   /** The call currently waiting for a permission decision - or nothing. */
   item: PermItem | undefined
+  /**
+   * The subagent whose call it is, as its chip names it, and its errand - unset for the conversation's
+   * own turn. The card stands over the field on every screen of the conversation (see pendingPermission),
+   * so without this a subagent's `rm` read as the main agent's.
+   */
+  asker?: { label: string; meta: string }
   /** Whether the message field is empty: who gets a pressed digit depends on it. */
   composerEmpty: boolean
   onDecide: (itemId: string, decision: Decision) => void
@@ -35,7 +41,7 @@ interface PermissionPanelProps {
  * irreversible: the agent gets it at once and carries on working, so the panel disappears right after
  * the click rather than hanging there inactive.
  */
-export const PermissionPanel = ({ item, composerEmpty, onDecide }: PermissionPanelProps) => {
+export const PermissionPanel = ({ item, asker, composerEmpty, onDecide }: PermissionPanelProps) => {
   const t = useT()
   const itemId = item?.id
   /**
@@ -72,6 +78,13 @@ export const PermissionPanel = ({ item, composerEmpty, onDecide }: PermissionPan
         <div className={s.spacer} />
         <span className={s.askMeta}>{t.permission.underMode(modeShortLabel(t, item.mode))}</span>
       </div>
+
+      {asker && (
+        <div className={s.permAsker}>
+          <span className={s.permAskerName}>{t.permission.askedBy(asker.label)}</span>
+          {asker.meta && <span className={s.permAskerMeta}>{asker.meta}</span>}
+        </div>
+      )}
 
       <div className={s.permCmd}>{item.command}</div>
 

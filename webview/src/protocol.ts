@@ -218,6 +218,12 @@ export interface HistoryEntry {
   titleSource?: TitleSource
 }
 
+/**
+ * How deleting a past conversation went: into the trash (or it was not on disk any more), refused because a tab
+ * holds it, or refused by the trash.
+ */
+export type HistoryDeleteOutcome = 'trashed' | 'open' | 'refused'
+
 /** Where a typed search looks: the conversation in the tab, or every conversation of the project. */
 export type SearchScope = 'chat' | 'project'
 
@@ -347,6 +353,14 @@ export interface AccountInfo {
    * spending it proves anything, which is what the figures beside the row do.
    */
   health?: 'present' | 'absent' | 'unknown'
+  /**
+   * Signed in again from the accounts screen and not landed yet: a terminal is open for it, and the IDE
+   * is asking its drawer every few seconds (see AccountDesk.signInAgain).
+   *
+   * A row the CLI lost by itself stays on the list for exactly this - the ordinary sign-in included, which
+   * used to vanish from the screen once a refused refresh had wiped it.
+   */
+  signingIn?: boolean
 }
 
 /** An installed plugin: the id already holds the marketplace - "name@marketplace". */
@@ -455,6 +469,12 @@ export interface EditorRef {
   from?: number
   to?: number
 }
+
+/** Who holds a tab's conversation in a terminal - see the `terminal` message. */
+export type TerminalHoldState = 'here' | 'elsewhere'
+
+/** Why a conversation did not go into the terminal - TerminalDesk.Refusal's codes. */
+export type TerminalRefusal = 'noConversation' | 'busy' | 'background' | 'notFound' | 'account' | 'noTerminal'
 
 export interface QueuedMessage {
   id: string
@@ -1033,7 +1053,6 @@ type ShellMessageBody =
       type: 'init'
       projectName: string
       workingDirectory: string
-      gitBranch?: string
       /** The panel's own version, shown at the foot of the menu (see SideMenu). */
       pluginVersion?: string
       /** The choice of model, effort and mode: it outlives both tabs and IDE restarts. */
@@ -1490,15 +1509,6 @@ type ShellMessageBody =
    */
   | { type: 'sessionReset'; sessionId: string }
   /**
-   * Who else is watching this project right now.
-   *
-   * The panel itself is not in the list - a person needs no telling that the window in front of them is
-   * open. What matters is everyone else: a browser page beside the IDE today, a phone tomorrow. "It is
-   * always visible in the IDE that someone is connected remotely" is a requirement of the remote access
-   * plan (§3.4), not a nicety, and it is far cheaper to build now than to bolt on later.
-   */
-  | { type: 'clients'; count: number; clients: { id: string; local: boolean }[] }
-  /**
    * Whether this IDE can be reached from outside, and how that is going.
    *
    * `state` is the connection's own word for itself: idle, connecting, connected, reconnecting,
@@ -1639,7 +1649,20 @@ type ShellMessageBody =
    */
   | { type: 'project'; gitBranch?: string; pullRequest?: string; pullRequestUrl?: string }
   /** This project's past conversations: Claude Code keeps them itself. */
-  | { type: 'history'; conversations: HistoryEntry[] }
+  | {
+      type: 'history'
+      conversations: HistoryEntry[]
+      /**
+       * Whether a row may be deleted - only where the IDE's trash takes this project's conversations (see
+       * CodexHistory.canTrash).
+       */
+      canDelete?: boolean
+    }
+  /**
+   * How deleting a past conversation went, to whoever pressed (see ProjectCatalog.deleteConversation). The
+   * list itself follows as a `history` of its own, to every window at the desk.
+   */
+  | { type: 'historyDeleted'; id: string; outcome: HistoryDeleteOutcome }
   /**
    * A page of one conversation's messages, older than what the client already has - read off the
    * transcript on disk rather than the journal's own catch-up, which forgets its own beginning long
@@ -1759,17 +1782,31 @@ type ShellMessageBody =
   | { type: 'fastMode'; sessionId: string; on: boolean }
   /**
    * The answer to `/status` (see the `sessionInfo` request, and a phone's `/status` typed into a message): the tab's
-   * conversation id, absent until its first message, and the IDE's word on the terminal line (see SessionInfoItem) -
-   * `resume` only to this IDE's own panel, since it names the machine's paths.
+   * conversation id, absent until its first message.
+   *
+   * `command` is the line to paste into a terminal, built by the IDE on the tab's own account (see ResumeLine.kt):
+   * on an added account it names that account's credential drawer, without which the conversation would carry on
+   * as whoever the ordinary sign-in is - only to this IDE's own panel, since it names the machine's paths.
+   * `account` names that account for the row's note, and `onDefault` says the line carries on on the ordinary
+   * sign-in after all (Windows, where no one form fits every shell, and a phone).
    */
   | {
       type: 'sessionInfo'
       sessionId: string
       conversationId?: string
-      resume?: string
+      command?: string
       account?: string
       onDefault?: boolean
     }
+  /**
+   * Whether a terminal holds this tab's conversation (see TerminalDesk.kt): `here` - one the panel opened, Continue
+   * in terminal; `elsewhere` - a live process somebody else started over the same transcript. No state - the tab
+   * is its own again. Live, never journalled: a state of the tab, like its queue. Nothing raises a process for a
+   * held tab, and what is written into it waits in the queue until it comes back.
+   */
+  | { type: 'terminal'; sessionId: string; state?: TerminalHoldState }
+  /** The conversation did not go into the terminal, and why - the answer to a `toTerminal` (see TerminalDesk.Refusal). */
+  | { type: 'terminalRefused'; sessionId: string; reason: TerminalRefusal }
   /**
    * Which Claude account a conversation runs on - said at its birth, like the effort and the model.
    *
@@ -2100,13 +2137,23 @@ type ShellMessageBody =
    */
   | {
       type: 'typography'
+      /** What the feed is set in: the panel's own font if one is chosen, the console's otherwise. */
       monoFamily: string
+      /** The IDE console's font, whatever the panel is set in - what "As the console font" names. */
+      consoleMonoFamily?: string
+      /** The panel's own font, or empty while it follows the console's (see CodexPreferences.fontFamily). */
+      fontFamily?: string
       uiFamily: string
       lineHeight: number
       consoleSize?: number
       textSize?: number
       size?: number
     }
+  /**
+   * Every font family the machine has, for the font screen to pick the panel's from - asked when the screen
+   * opens rather than sent with every typography: a few hundred names nobody needs until then.
+   */
+  | { type: 'fontFamilies'; families: string[] }
   /**
    * The panel's theme: the choice made in its settings ('dark', 'light', or '' for the IDE's) and whether
    * the IDE is dark right now. Sent as the two rather than as the theme they amount to - the settings
@@ -2121,24 +2168,11 @@ type ShellMessageBody =
    */
   | ({ type: 'statistics' } & StatisticsData)
   /**
-   * The feedback screen's own state: the address a person left last time, and the files they have picked
-   * for this one. The files are named by an id rather than by a path - the path stays in the IDE (see
-   * FeedbackAttachments on the plugin's side), so the panel cannot name a file the person did not pick,
-   * and a path cannot leak out of a screen that sends things to a stranger's server.
-   */
-  | { type: 'feedbackState'; email: string; attachments: FeedbackAttachment[]; note?: string }
-  /**
-   * The debug report, as text, in answer to `feedbackReport`. This is the whole of what the "attach
-   * debug logs" switch attaches - what is shown here and what is sent are the same string, which is the
-   * only way "nothing private travels" can be checked rather than believed.
+   * The debug report, as text, in answer to `feedbackReport`. Shown whole and copied whole - what is on
+   * the screen and what lands in the clipboard are the same string, which is the only way "nothing
+   * private in it" can be checked rather than believed.
    */
   | { type: 'feedbackLog'; text: string }
-  /**
-   * How the sending went. `error` is a sentence for a person, not a status code; `note` is what went with
-   * it but should not have gone silently - a file that grew past the limit between being picked and being
-   * sent, which is precisely the file a bug report is usually about.
-   */
-  | { type: 'feedbackSent'; ok: boolean; error?: string; note?: string }
   /**
    * The draft rewritten - the answer to a press of the sparkle button (see `improvePrompt` below).
    *
@@ -2197,6 +2231,8 @@ type ShellMessageBody =
       /** The chosen input device by its name; empty means the system's own default. */
       device: string
       devices: VoiceDevice[]
+      /** Whether Deepgram is asked to keep dictations out of its model training (`mip_opt_out`). */
+      trainingOptOut: boolean
       keyHint: string
       hotkeys: Record<VoiceHotkeySlot, VoiceHotkey>
     }
@@ -2247,6 +2283,8 @@ type ShellMessageBody =
       /** The language chosen at the desk: the same person is speaking, and two places to set it drift. */
       language?: string
       model?: string
+      /** The desk's answer to Deepgram's model training, for the same reason. Absent from older plugins. */
+      trainingOptOut?: boolean
       error?: string
     }
 
@@ -2258,9 +2296,11 @@ type ShellMessageBody =
 export interface StatisticsDay {
   /** "2026-08-26" - the calendar day in the IDE's own time zone. */
   date: string
-  /** Minutes with something going on in the panel, and how they fall by hour of the day. */
+  /**
+   * Minutes with something going on in the panel. Not shown as time any more (the tab measures the work in
+   * tokens), but a day with any of them is a day at work.
+   */
   minutes: number
-  hours: number[]
   turns?: number
   prompts?: number
   sessions?: number
@@ -2303,7 +2343,6 @@ export interface StatisticsDay {
   mcpConnected?: number
   plugins?: number
   longestSession?: number
-  longestStretch?: number
   maxForksInTree?: number
   maxDepth?: number
 }
@@ -2345,8 +2384,12 @@ export interface StatisticsData {
   ide: string
   devicesPaired: number
   project: { key: string; name: string }
-  /** Every project the ledger knows, this one included: its name and its minutes by day. */
-  projects: { key: string; name: string; minutes: Record<string, number> }[]
+  /**
+   * Every project the ledger knows, this one included, and every other place the CLI spent tokens in (a
+   * repository only ever worked on from a terminal): its name and its tokens by day, out of the transcripts
+   * like `tokens` below (see TranscriptTokens.projectOf).
+   */
+  projects: { key: string; name: string; tokens: Record<string, number> }[]
   /**
    * The days, in full, with every project's own day of that date folded into one.
    *
@@ -2734,6 +2777,10 @@ export type WebviewMessage =
    */
   | { type: 'setTheme'; theme: string }
   | { type: 'setTextSize'; size: number }
+  /** The panel's own font family; empty follows the IDE console's again. */
+  | { type: 'setFontFamily'; font: string }
+  /** The font screen opened: name the machine's families (see the shell message of the same name). */
+  | { type: 'fontFamilies' }
   /**
    * The tabs coming back after a restart, the panel's two halves of it: what is being written in a tab's
    * input field (null when it is empty - the message went, or the words were deleted), and which tab is
@@ -2856,7 +2903,31 @@ export type WebviewMessage =
   | { type: 'sessionMenu'; conversationId: string | null; label: string }
   /** `/status` - what the IDE knows of this tab's conversation, answered by a `sessionInfo` of its own. */
   | { type: 'sessionInfo'; sessionId: string }
+  /**
+   * Carry this tab's conversation on in a terminal of the IDE (see TerminalDesk.kt): the panel's process goes, the
+   * CLI comes up in a terminal tab on the same account with the tab's model, effort and mode, and the tab is held
+   * until that process ends. Answered by `terminal`, or by `terminalRefused`. The desk's alone, like the two below.
+   */
+  | { type: 'toTerminal'; sessionId: string }
+  /** The terminal holding this tab's conversation, brought to the front - one the panel opened. */
+  | { type: 'showTerminal'; sessionId: string }
+  /**
+   * Give the conversation back to the tab: the terminal the panel opened for it is closed, which ends the CLI in it,
+   * and its end is what gives the conversation back. Somebody else's process is not ended from here.
+   */
+  | { type: 'fromTerminal'; sessionId: string }
   | { type: 'history' }
+  /**
+   * A past conversation into the trash. The IDE answers `historyDeleted` to the asker and the list again to every
+   * window at the desk (see ProjectCatalog.deleteConversation).
+   */
+  | { type: 'deleteConversation'; id: string }
+  /**
+   * A past conversation named from its row in the history. The IDE decides where the name goes - to the tab
+   * holding the conversation, or into its transcript and its closed tab - and after a write sends the list
+   * to every window at the desk (see ProjectCatalog.renameConversation).
+   */
+  | { type: 'renameConversation'; id: string; title: string }
   /** A page further back than the journal's own catch-up reaches - see ShellMessageBody's historyPage. */
   | { type: 'historyPage'; sessionId: string; before?: string }
   /**
@@ -2921,6 +2992,18 @@ export type WebviewMessage =
    * person's window to close.
    */
   | { type: 'accountCancel' }
+  /**
+   * Sign a row in again: a terminal opens with `claude auth login` in THAT row's own drawer, for a row
+   * whose credential is gone - the ordinary sign-in wiped by a refused refresh, or an added account whose
+   * drawer reads empty. The row says `signingIn` until the credential lands or the wait runs out.
+   */
+  | { type: 'accountSignIn'; id: string }
+  /** Stop waiting for that sign-in. The terminal stays where it is: it is the person's. */
+  | { type: 'accountSignInStop'; id: string }
+  /**
+   * Drop an added account from this machine. On the ordinary sign-in (empty id) it only takes its
+   * signed-out row off the screen: there is no drawer to drop, and nothing left in it to revoke.
+   */
   | { type: 'accountForget'; id: string }
   /**
    * Sign out of Claude Code entirely, and move to another account if one is signed in here.
@@ -3009,34 +3092,22 @@ export type WebviewMessage =
   /** Build the report as it would go next and answer with `usageStatsReport`. */
   | { type: 'usageStatsPreview' }
   /**
-   * Feedback: a message to the plugin's author, with files and a debug report beside it.
+   * The feedback screen: opened (the IDE starts reading the CLI's version for the report), and the debug
+   * report it offers.
    *
-   * All of it is handled by the panel's own window rather than by the conversation's commands (see
-   * ClaudePanel on the plugin's side): it belongs to no conversation, and a message that makes the IDE
-   * read files off the disk and post them to a server is exactly the kind a remote client must never be
-   * able to send. It is refused for them twice over - by the list in RemoteCommands, and by never
-   * reaching the place that handles it.
+   * Both are handled by the panel's own window rather than by the conversation's commands (see
+   * CodexPanel on the plugin's side): they belong to no conversation, and the report is built out of a
+   * conversation's journal - which is the conversation - so a remote client must never be able to ask for
+   * it. It is refused for them twice over - by the list in RemoteCommands, and by never reaching the place
+   * that handles it.
    */
   | { type: 'feedbackOpen' }
   /**
    * Build the debug report and answer with `feedbackLog` - asked for when the preview is opened. The
    * conversation is named because the report describes one: the tab being looked at is the one the
-   * complaint is about, and the IDE has several open.
+   * bug is about, and the IDE has several open.
    */
   | { type: 'feedbackReport'; sessionId: string }
-  /** Open the IDE's file dialog and add whatever is chosen; answered with a fresh `feedbackState`. */
-  | { type: 'feedbackAttach' }
-  | { type: 'feedbackDetach'; id: string }
-  | {
-      type: 'feedbackSend'
-      kind: FeedbackKind
-      sessionId: string
-      text: string
-      /** May be empty: an answer is offered, not required. */
-      email: string
-      /** Whether the report goes with it. The panel sends the flag; the text itself is built here. */
-      logs: boolean
-    }
   /**
    * Rewrite what stands in the input field (see feed/improve.ts here and PromptImprover on the IDE's
    * side).
@@ -3237,7 +3308,7 @@ export type WebviewMessage =
   /**
    * Voice input (see VoiceDesk on the IDE's side).
    *
-   * Handled by the panel's own window like the feedback messages above, and refused to a remote client
+   * Handled by the panel's own window like the feedback screen's messages above, and refused to a remote client
    * twice over - by the list in RemoteCommands and by never reaching the place that handles them. The
    * microphone belongs to the machine the IDE runs on, and a message that opens it from across the
    * network is a listening device whatever it was meant for.
@@ -3252,6 +3323,7 @@ export type WebviewMessage =
   | { type: 'voiceEnabled'; enabled: boolean }
   | { type: 'voiceLanguage'; language: string }
   | { type: 'voiceDevice'; device: string }
+  | { type: 'voiceTrainingOptOut'; optOut: boolean }
   /**
    * The Deepgram key, on its way to the system keychain (see VoiceKeys). Empty forgets it.
    *
@@ -3327,7 +3399,7 @@ export type VoiceHotkeyGlyph = '' | 'option' | 'command' | 'win' | 'mouse' | 'le
  * The panel's own keys (see PanelKeys.kt): the IDE's actions, named the way the page is told about them.
  * The ids are the wire's - the Kotlin enum spells them the same.
  */
-export type PanelKeyCommand = 'nextTab' | 'previousTab' | 'newTab' | 'closeTab' | 'reopenTab' | 'queue'
+export type PanelKeyCommand = 'nextTab' | 'previousTab' | 'newTab' | 'closeTab' | 'reopenTab' | 'queue' | 'terminal'
 
 /**
  * Every key the IDE names for the page: the commands above, and the IDE's own action that brings the panel
@@ -3366,21 +3438,8 @@ export type VoiceBalance =
   | { state: 'rejected' }
   | { state: 'failed' }
 
-/** What a piece of feedback is about. The words on the screen differ; these are what travel. */
-export type FeedbackKind = 'bug' | 'idea' | 'hello'
-
 /** Where the usage question stands on this machine: never answered, allowed, declined. */
 export type UsageStatsConsent = 'unknown' | 'granted' | 'declined'
-
-/**
- * A file picked for a piece of feedback, as the panel is allowed to know it: enough to draw a row and
- * to take it back off the list, and nothing that says where on the disk it came from.
- */
-export interface FeedbackAttachment {
-  id: string
-  name: string
-  bytes: number
-}
 
 export type AgentStatus = 'idle' | 'running'
 
@@ -3631,6 +3690,8 @@ export interface AgentUserEvent {
    * short (see JournalTrim: the history cut every one over eight kilobytes until it learned to spare the
    * conversation's own messages, and a phone's frame still cuts what does not fit it), and what was cut
    * off is exactly the end tag everything else recognised it by.
+   *
+   * `human` is the one origin that is the person: the CLI's own interface files every typed message under it.
    */
   origin?: { kind?: string } | null
   timestamp?: string
@@ -3652,14 +3713,16 @@ export interface AgentUserEvent {
 /**
  * One change a turn made to a file, as the IDE needs it to put the change back: the text a Write created the
  * file with, the hunks the CLI applied (starts 1-based, lines marked `+`, `-` or ` `, a `\ No newline at end of
- * file` note kept where it stood), the text a patch deleted the file with, or the path a patch moved it from - the
- * file stands at the row's path after the move (see ChangeRevert in the IDE).
+ * file` note kept where it stood), the text a patch deleted the file with, the path a patch moved it from - the
+ * file stands at the row's path after the move (see ChangeRevert in the IDE) - or, after hunks that emptied it,
+ * the file taken away (see TurnFootprint in the plugin).
  */
 export type FileEdit =
   | { kind: 'create'; content: string }
   | { kind: 'patch'; hunks: { oldStart: number; newStart: number; lines: string[] }[] }
   | { kind: 'delete'; content: string }
   | { kind: 'move'; from: string }
+  | { kind: 'remove' }
 
 /**
  * What putting a file back - or bringing it back after that - came to: done either way, refused because the
@@ -3804,15 +3867,39 @@ export interface ForkSeamEvent {
 }
 
 /**
- * What a turn really did to the files whose diffs do not say it - a line of the panel's own, sent by the IDE right
- * before the turn's result (see TurnFiles.settle in the plugin). A formatter run after each edit, the agent's
- * own script, the CLI itself adding to a memory file: each leaves a file other than its edits say. The figures and
- * the edits are the file's whole change in the turn, from what the turn found to what it left. The phone gets the
- * figures alone when the edits would not fit its frame.
+ * What a turn really did to its files - a line of the panel's own, sent by the IDE right before the turn's result
+ * (see TurnFiles.settle and TurnFootprint in the plugin). The IDE holds the whole project against the moment the
+ * turn began, so this names every file the turn changed: the ones its patches named, whose diffs a formatter or
+ * the agent's own script may have outrun, and the ones nothing reported at all - changed by a shell command, by a
+ * subagent. The figures and the edits are the file's whole change in the turn, from what the turn found to what it
+ * left. The phone gets the figures alone when the edits would not fit its frame.
  */
 export interface FilesSettledEvent {
   type: 'files_settled'
-  files: { path: string; added: number; removed: number; edits?: FileEdit[] }[]
+  /** Names the event - and the turn's list, when no edit call of the turn named a file (see closeChanges). */
+  turn?: string
+  files: {
+    path: string
+    added: number
+    removed: number
+    edits?: FileEdit[]
+    /** The turn brought the file into being. */
+    created?: boolean
+    /** The turn took the file away. */
+    deleted?: boolean
+    /** Not text, or too big to diff: changed, by an amount nobody counted. */
+    uncounted?: boolean
+  }[]
+}
+
+/**
+ * The CLI's guess at the person's next message, a second or two after a turn's result - asked for at launch
+ * (see CodexLaunch.PROMPT_SUGGESTIONS_FLAG in the plugin). At most one per turn, often none. Drawn as the
+ * gray text of an empty input field (see PanelState.suggestion).
+ */
+export interface PromptSuggestionEvent {
+  type: 'prompt_suggestion'
+  suggestion: string
 }
 
 export type AgentEvent =
@@ -3824,6 +3911,7 @@ export type AgentEvent =
   | AgentResultEvent
   | AgentStreamEvent
   | AgentRateLimitEvent
+  | PromptSuggestionEvent
   /** Arrives from /clear - the conversation has started afresh, without its old history. */
   | { type: 'conversation_reset'; new_conversation_id?: string }
   | { type: 'unknown' }

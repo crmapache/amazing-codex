@@ -16,15 +16,45 @@ export const awaitsYou = (item: FeedItem, cards: CardState): boolean =>
   (item.kind === 'ask' && !item.historic && !cards.answeredAsks.includes(item.id)) ||
   (item.kind === 'plan' && !item.historic && cards.planDecisions[item.id] === undefined)
 
-/** The main stream rather than a separate subagent: that one has a tab and a status of its own. */
-export const ownStream = (item: FeedItem): boolean => !('taskId' in item) || item.taskId === undefined
+/**
+ * The subagent that raised a decision, or nothing when the conversation's own turn did.
+ *
+ * The CLI names the asker by the agent's own id - `agent_id` of `can_use_tool` is the very string its
+ * `task_started` calls `task_id` (checked by a live run on CLI 2.1.293). A card raised by a Task call goes
+ * by the call's id, though, and learns the task's name only later (see TaskItem.taskId), so both are looked
+ * at. Matched by the card's id alone, the question of every ordinary subagent belonged to no card: its chip
+ * never turned to "needs input", and on the agent's own screen, where the person sat watching it work, the
+ * question never showed - the agent read as running forever (report from macOS, 0.13.20).
+ *
+ * A name no card answers to is counted as the main stream's: a decision hidden for good would be worse
+ * than one shown without its asker.
+ */
+export const askerOf = (item: FeedItem, items: FeedItem[]): TaskItem | undefined => {
+  if (item.kind !== 'perm' && item.kind !== 'ask') return undefined
+  const named = item.taskId
+  if (named === undefined) return undefined
+  return items.find((one): one is TaskItem => one.kind === 'task' && (one.id === named || one.taskId === named))
+}
+
+/** Which stream a decision belongs to: the card of the agent that raised it, or main. */
+const ownerStream = (item: FeedItem, items: FeedItem[]): string => askerOf(item, items)?.id ?? 'main'
+
+/** What the chip of an agent says - and the card of a decision it raised, so that the two can be matched by eye. */
+export const agentLabel = (task: TaskItem): string =>
+  // A workflow's chip counts its fleet instead: "agent:agent" said nothing, and how many agents are
+  // running at once is the one thing worth having on a chip that small.
+  task.workflow ? `workflow:${task.workflow.total}` : `agent:${task.target}`
 
 /**
- * The one thing the main stream is standing on, or nothing at all.
+ * The one thing the conversation is standing on, or nothing at all.
  *
  * A permission before a plan before a question: a permission holds a call that is happening this second,
  * while a plan and a question hold a turn that is prepared to wait. Within a kind, the most recent - the
  * older ones are answered, replayed, or belong to a conversation that has since restarted.
+ *
+ * A subagent's decision counts as much as the main stream's: the work does not move until somebody answers
+ * it, and the phone has nowhere else to offer it - the desk shows it over the input field on every screen
+ * of the conversation (see pendingPermission).
  *
  * One function rather than the same three lines written wherever it is needed. A phone asks it twice -
  * once for the strip that says something is waiting, once for the screen that shows what - and when
@@ -33,7 +63,7 @@ export const ownStream = (item: FeedItem): boolean => !('taskId' in item) || ite
  * either (the panel pins it over the input field instead).
  */
 export const awaiting = (items: FeedItem[], cards: CardState): PermItem | PlanItem | AskItem | undefined => {
-  const pending = items.filter((item) => ownStream(item) && awaitsYou(item, cards))
+  const pending = items.filter((item) => awaitsYou(item, cards))
   const latest = <T extends FeedItem>(kind: FeedItem['kind']) =>
     [...pending].reverse().find((item): item is T => item.kind === kind)
 
@@ -41,11 +71,12 @@ export const awaiting = (items: FeedItem[], cards: CardState): PermItem | PlanIt
 }
 
 /**
- * While an unanswered permission request or a question from the MAIN stream hangs there, the turn is not
- * genuinely thinking - it stands and waits for the person's decision. A "Claude is thinking" at that moment
- * would be untrue. A particular agent's decision does not count here: the status in the dropdown and the
- * agent's own tab answer for that - if the main status line reacted to them too, it would itself become the
- * very dishonest caption the whole redesign was undertaken to get away from.
+ * While an unanswered permission request or a question hangs there, the turn is not genuinely thinking -
+ * it stands and waits for the person's decision. A "Claude is thinking" at that moment would be untrue.
+ * A subagent's decision counts too: the card stands over the input field right under this line on every
+ * screen of the conversation (see pendingPermission), and the main turn waits for its agent, which waits
+ * for the person. Left to the agent's chip alone, it read as "Claude is thinking - 4m" above a card asking
+ * for an answer, and as an agent that never ends to whoever was not looking at that chip.
  *
  * The elapsed time is written right here rather than waiting for the turn's outcome: the "Worked Ns" under a
  * finished answer arrives only with its end, and until then how much had already passed was not visible at
@@ -88,7 +119,7 @@ export const streamStatus = (
   // there must be no second caption about the same thing right under it.
   if (panel.compacting) return ''
 
-  const awaitingDecision = panel.items.some((item) => ownStream(item) && awaitsYou(item, cards))
+  const awaitingDecision = panel.items.some((item) => awaitsYou(item, cards))
   if (awaitingDecision) return t.stream.waitingForYou
 
   /**
@@ -122,24 +153,40 @@ export const streamStatus = (
   return t.stream.withElapsed(label, elapsed)
 }
 
-const statusOf = (task: TaskItem, items: FeedItem[], answeredAsks: string[]): AgentStatus => {
+/** A permission or a question nobody has answered yet - the two a chip turns to "needs input" for. */
+const undecided = (item: FeedItem, answeredAsks: string[]): boolean =>
+  (item.kind === 'perm' && item.decision === null) ||
+  (item.kind === 'ask' && !item.historic && !answeredAsks.includes(item.id))
+
+/**
+ * The cards of the agents standing on a decision of theirs right now: their chip turns to "needs input",
+ * and their screen and their card in the feed say "waiting for you" rather than "working" (an agent on a
+ * permission was drawn as working for as long as nobody answered, which read as an agent that never ends).
+ */
+export const agentsWaiting = (items: FeedItem[], answeredAsks: string[]): ReadonlySet<string> => {
+  const waiting = new Set<string>()
+  for (const item of items) {
+    if (!undecided(item, answeredAsks)) continue
+    const asker = askerOf(item, items)
+    if (asker) waiting.add(asker.id)
+  }
+  return waiting
+}
+
+const statusOf = (task: TaskItem, waiting: ReadonlySet<string>): AgentStatus => {
   // An agent cut short is not the same as one that ran its course: a killed and a crashed one used to get
   // the same green dot as one that made it to the end.
   if (!task.pending) return task.outcome === 'failed' ? 'failed' : task.outcome === 'stopped' ? 'stopped' : 'done'
-
-  const blocked = items.some(
-    (item) =>
-      (item.kind === 'perm' && item.taskId === task.id && item.decision === null) ||
-      (item.kind === 'ask' && item.taskId === task.id && !item.historic && !answeredAsks.includes(item.id)),
-  )
-  return blocked ? 'needs-input' : 'running'
+  return waiting.has(task.id) ? 'needs-input' : 'running'
 }
 
+/**
+ * The main chip goes by its own stream's decisions only: the chips answer "whose", and an agent's question
+ * already turns that agent's chip.
+ */
 export const mainStatusOf = (panel: PanelState, answeredAsks: string[]): AgentStatus => {
   const blocked = panel.items.some(
-    (item) =>
-      (item.kind === 'perm' && item.taskId === undefined && item.decision === null) ||
-      (item.kind === 'ask' && item.taskId === undefined && !item.historic && !answeredAsks.includes(item.id)),
+    (item) => undecided(item, answeredAsks) && ownerStream(item, panel.items) === 'main',
   )
   if (blocked) return 'needs-input'
   return panel.status === 'running' ? 'running' : 'idle'
@@ -150,56 +197,59 @@ export const buildAgentTabs = (
   panel: PanelState,
   answeredAsks: string[],
   hiddenTaskIds: ReadonlySet<string>,
-): AgentTab[] =>
-  panel.items
+): AgentTab[] => {
+  const waiting = agentsWaiting(panel.items, answeredAsks)
+  return panel.items
     .filter((item): item is TaskItem => item.kind === 'task' && !hiddenTaskIds.has(item.id))
     .map((task) => ({
       id: task.id,
-      // A workflow's chip counts its fleet instead: "agent:agent" said nothing, and how many agents are
-      // running at once is the one thing worth having on a chip that small.
-      label: task.workflow ? `workflow:${task.workflow.total}` : `agent:${task.target}`,
+      label: agentLabel(task),
       meta: task.meta,
-      status: statusOf(task, panel.items, answeredAsks),
+      status: statusOf(task, waiting),
       percent: task.percent,
       duration: task.duration,
       // There is nothing to kill in one that has already finished, and nothing to kill it with until the
       // CLI has named the task (see TaskItem.taskId).
       stopId: task.pending ? task.taskId : undefined,
     }))
-
-/**
- * Whose stream this actually is. A taskId without the task it refers to (if the agent_id / task_id match
- * one day stops holding on a new version of the CLI, say) is no reason to hide a decision for good: without
- * this it would show up nowhere and quietly expire on a timeout. We count such a case as the main stream
- * rather than as a separate stream that does not exist.
- */
-const ownerStream = (taskId: string | undefined, items: FeedItem[]): string => {
-  if (taskId === undefined) return 'main'
-  const known = items.some((item) => item.kind === 'task' && item.id === taskId)
-  return known ? taskId : 'main'
 }
 
-/** The last question the agent asked in the current stream that has not been answered yet. */
-export const pendingAsk = (items: FeedItem[], answered: string[], stream: string): AskItem | undefined =>
-  [...items]
-    .reverse()
-    .find(
-      (item): item is AskItem =>
-        item.kind === 'ask' &&
-        // A question from a past conversation's replay is not shown as a card - see AskItem.historic.
-        !item.historic &&
-        !answered.includes(item.id) &&
-        ownerStream(item.taskId, items) === stream,
-    )
+/**
+ * The open stream's own decision first, and failing that the most recent one of any other stream.
+ *
+ * Any other, because a decision holds the work wherever the person happens to be looking. Shown only on
+ * the screen of the stream that raised it, a subagent's question never reached the main screen, where a
+ * person spends the turn, and the main stream's never reached an agent's screen, where a person sits
+ * watching that agent: either way the work stood still with nothing on screen saying why (report from
+ * macOS, 0.13.20). The card names its asker when that is an agent (see askerOf), and the terminal does
+ * the same - it has one screen, and a subagent's question takes it like any other.
+ */
+const firstFor = <T extends FeedItem>(open: T[], items: FeedItem[], stream: string): T | undefined =>
+  open.find((item) => ownerStream(item, items) === stream) ?? open[0]
 
-/** The current stream's last call that is still waiting for a permission decision. */
+/** The last question nobody has answered yet - see firstFor for whose. */
+export const pendingAsk = (items: FeedItem[], answered: string[], stream: string): AskItem | undefined =>
+  firstFor(
+    [...items]
+      .reverse()
+      .filter(
+        (item): item is AskItem =>
+          item.kind === 'ask' &&
+          // A question from a past conversation's replay is not shown as a card - see AskItem.historic.
+          !item.historic &&
+          !answered.includes(item.id),
+      ),
+    items,
+    stream,
+  )
+
+/** The last call still waiting for a permission decision - see firstFor for whose. */
 export const pendingPermission = (items: FeedItem[], stream: string): PermItem | undefined =>
-  [...items]
-    .reverse()
-    .find(
-      (item): item is PermItem =>
-        item.kind === 'perm' && item.decision === null && ownerStream(item.taskId, items) === stream,
-    )
+  firstFor(
+    [...items].reverse().filter((item): item is PermItem => item.kind === 'perm' && item.decision === null),
+    items,
+    stream,
+  )
 
 /**
  * A shown plan with no decision on it yet: while it is there, the turn stands on it.

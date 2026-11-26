@@ -5,10 +5,12 @@
 #                      a repository of its own (see relay/README.md): the plugin's licence forbids offering
 #                      the software to others as a hosted service, and a component whose whole purpose is
 #                      to be hosted cannot ship under it.
-#   feedback-service - the other little server: it takes a message from the panel's feedback screen and
-#                      hands it to the author's Telegram. Elastic-2.0, unlike the relay, and for the
-#                      mirror-image reason - nobody else has any use for a service that forwards to one
-#                      specific chat, so there is nothing here to run yourself.
+#   feedback-service - the other little server: it used to hand what was written on the panel's feedback
+#                      screen to the author's Telegram, and now only answers the old form with where a
+#                      change can be asked for. Elastic-2.0, unlike the relay, and for the mirror-image
+#                      reason - nobody else has any use for it, so there is nothing here to run yourself.
+#                      The published receiver is the original's (feedback.mzpizote.com), shared by both
+#                      plugins; this copy is kept beside the fork's other services.
 #
 # A workspace rather than two unrelated folders so that one `pnpm install` at the root sets up both, and
 # `pnpm -r build` / `pnpm -r test` cover the whole repository - the state a person cloning this expects.

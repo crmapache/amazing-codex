@@ -4,13 +4,17 @@ import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.Disposer
 import com.intellij.util.concurrency.AppExecutorUtil
 import io.github.crmapache.amazingcodex.codex.CodexAuth
 import io.github.crmapache.amazingcodex.codex.CodexCli
+import io.github.crmapache.amazingcodex.codex.CodexLogin
 import io.github.crmapache.amazingcodex.codex.CodexSessionHub
 import io.github.crmapache.amazingcodex.codex.CodexSessions
 import io.github.crmapache.amazingcodex.feedback.DiagnosticsLog
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -439,6 +443,7 @@ internal class AccountDesk(
                             put("email", identity?.who?.email ?: account.email)
                             put("plan", account.plan)
                             put("pending", account.isPending)
+                            if (signingIn.containsKey(account.id)) put("signingIn", true)
                             healthOf(account.id)?.let { put("health", it.name.lowercase()) }
                         }
                     }
@@ -592,6 +597,67 @@ internal class AccountDesk(
     }
 
     /**
+     * The rows being signed in again (see [signInAgain]), by id: the wait for each, to be cancelled.
+     */
+    private val signingIn = ConcurrentHashMap<String, ScheduledFuture<*>>()
+
+    init {
+        Disposer.register(parentDisposable) { signingIn.values.forEach { it.cancel(false) } }
+    }
+
+    /**
+     * Sign a row in again (from ACC 0.13.49): a row whose drawer holds no credential - `codex logout` run in it, a
+     * credential file that went - has one useful act, and Select is not it: everything moved onto it would come up
+     * signed out. So a terminal runs `codex login` in THAT row's own drawer (the ordinary home for the empty id), the
+     * drawer is asked every few seconds for ten minutes, the row says "signing in" meanwhile, and a landing redraws
+     * every screen: the row's health, its figures, a twin it may have turned out to be (see AccountTwin).
+     */
+    fun signInAgain(id: String) {
+        if (signingIn.containsKey(id)) return
+        if (id.isNotEmpty() && accounts.list().none { it.id == id && !it.isPending }) return
+
+        CodexLogin.login(project, parentDisposable, id) { outcome ->
+            if (outcome != CodexLogin.Outcome.OPENED) {
+                sendOutcome(if (outcome == CodexLogin.Outcome.NO_DRAWER) "no-drawer" else "no-terminal")
+                return@login
+            }
+
+            val startedAt = System.currentTimeMillis()
+            val wait = AppExecutorUtil.getAppScheduledExecutorService().scheduleWithFixedDelay(
+                {
+                    val landed = runCatching { accounts.health(id, project.basePath) }.getOrNull() == CodexAccounts.Health.PRESENT
+                    val late = System.currentTimeMillis() - startedAt > SIGN_IN_AGAIN_MS
+                    if (landed || late) {
+                        signingIn.remove(id)?.cancel(false)
+                        if (landed) landedAgain(id) else sendList(withHealth = false)
+                    }
+                },
+                SIGN_IN_POLL_MS,
+                SIGN_IN_POLL_MS,
+                TimeUnit.MILLISECONDS,
+            )
+            signingIn[id] = wait
+            sendList(withHealth = false)
+        }
+    }
+
+    /** Stop waiting for that sign-in. The terminal stays where it is: it is the person's. */
+    fun stopSignIn(id: String) {
+        signingIn.remove(id)?.cancel(false) ?: return
+        sendList(withHealth = false)
+    }
+
+    /** A row signed in again: its health, its figures and its name are asked anew on every screen. */
+    private fun landedAgain(id: String) {
+        knownHealth.remove(id)
+        hub.usage.forget(id)
+        CodexSessionHub.everyHub {
+            it.accounts.invalidate()
+            it.accountsChanged()
+        }
+    }
+
+    /**
      * Sign out of Claude Code, and carry on somewhere else if there is somewhere to carry on.
      *
      * This is what "Forget" cannot be for the sign-in the CLI already had: it has no drawer to delete, so
@@ -661,6 +727,10 @@ internal class AccountDesk(
 
         /** Past this a draft is not a sign-in in progress, it is what a closed IDE left behind. */
         const val STALE_DRAFT_MS = 15 * 60 * 1000L
+
+        /** How often a row signed in again is asked whether its credential has landed, and for how long. */
+        const val SIGN_IN_POLL_MS = 3_000L
+        const val SIGN_IN_AGAIN_MS = 10 * 60 * 1000L
     }
 
     /** A code rather than a sentence: the panel speaks ten languages and this side speaks one. */

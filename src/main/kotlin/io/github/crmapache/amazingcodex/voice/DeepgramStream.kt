@@ -44,6 +44,8 @@ internal class DeepgramStream(
     private val key: String,
     private val language: String,
     private val sampleRate: Int,
+    /** Ask Deepgram to keep this dictation out of its model training - see CodexPreferences.voiceTrainingOptOut. */
+    private val trainingOptOut: Boolean,
     /** The phrase as it is being said - replaced by the next one, never kept. */
     private val onInterim: (String) -> Unit,
     /** A phrase Deepgram has settled on. This is what reaches the input field. */
@@ -107,19 +109,7 @@ internal class DeepgramStream(
         AppExecutorUtil.createBoundedApplicationPoolExecutor("acc-deepgram", 1)
 
     fun open() {
-        val url = buildString {
-            append("wss://api.deepgram.com/v1/listen")
-            append("?model=").append(MODEL)
-            append("&language=").append(language)
-            append("&encoding=linear16")
-            append("&sample_rate=").append(sampleRate)
-            append("&channels=1")
-            // Punctuation, numerals and the rest of what turns a stream of words into a sentence.
-            append("&smart_format=true")
-            // Asked for, unlike in a tool that only shows the finished text: here the words appear in
-            // the field as they are spoken, and the interim ones are what makes that visible.
-            append("&interim_results=true")
-        }
+        val url = listenUrl(language, sampleRate, trainingOptOut)
 
         runCatching {
             IdeHttp.shared.newWebSocketBuilder()
@@ -401,6 +391,24 @@ internal class DeepgramStream(
 
         /** What `language=multi` is written as - see VoiceLanguages. */
         const val MULTILINGUAL = "multi"
+
+        /** The address a dictation opens. The phone builds the same one (`listenUrl` in mobile/dictation.ts). */
+        fun listenUrl(language: String, sampleRate: Int, trainingOptOut: Boolean): String = buildString {
+            append("wss://api.deepgram.com/v1/listen")
+            append("?model=").append(MODEL)
+            append("&language=").append(language)
+            append("&encoding=linear16")
+            append("&sample_rate=").append(sampleRate)
+            append("&channels=1")
+            // Punctuation, numerals and the rest of what turns a stream of words into a sentence.
+            append("&smart_format=true")
+            // Asked for, unlike in a tool that only shows the finished text: here the words appear in
+            // the field as they are spoken, and the interim ones are what makes that visible.
+            append("&interim_results=true")
+            // Written only when asked for: absent is Deepgram's default, and the one value it takes besides
+            // is `true` - anything else fails the handshake, which would be a dictation that never starts.
+            if (trainingOptOut) append("&mip_opt_out=true")
+        }
 
         /**
          * The three ways this fails, as codes the panel turns into sentences of its own.

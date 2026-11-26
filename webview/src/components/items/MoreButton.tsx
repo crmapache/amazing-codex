@@ -1,19 +1,37 @@
+import type { Ref } from 'react'
 import s from '../feed.module.css'
 
 /**
  * The three dots that open everything else a message can do.
  *
- * Only ever handed in by the phone. At the desk the same actions are elsewhere and are better there: a
- * quote is made by selecting the words it should be, a fork is a slash command, copying and pinning are
- * the buttons standing right beside this one. On a touchscreen none of those exist - there is no
- * selection menu under a thumb and no field to type a command into without losing the draft - so the
- * one affordance a phone has for "what else can I do with this" is a button that says so.
+ * On the phone they open a sheet (see MessageSheet): there is no selection menu under a thumb and no field
+ * to type a command into without losing the draft, so the dots are the one affordance a phone has for
+ * "what else can I do with this". At the desk they open the card's menu (see CardMenu) - the rarer things
+ * a message of one's own can do, kept out of its head so that copying stands there alone.
+ *
+ * [expanded] is whether the menu it opened is up: the dots stay lit for as long as it is, so it is plain
+ * which card the menu belongs to.
  */
-export const MoreButton = ({ className, label, onClick }: { className?: string; label: string; onClick: () => void }) => (
+export const MoreButton = ({
+  className,
+  label,
+  expanded,
+  ref,
+  onClick,
+}: {
+  className?: string
+  label: string
+  expanded?: boolean
+  ref?: Ref<HTMLButtonElement>
+  onClick: () => void
+}) => (
   <button
+    ref={ref}
     type="button"
-    className={className ?? s.textAction}
+    className={`${className ?? s.textAction} ${expanded ? s.moreOpen : ''}`}
     aria-label={label}
+    aria-haspopup={expanded === undefined ? undefined : 'menu'}
+    aria-expanded={expanded}
     data-tooltip={label}
     onClick={onClick}
   >

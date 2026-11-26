@@ -1,246 +1,122 @@
-import { connect } from 'node:net'
 import { afterEach, describe, expect, it } from 'vitest'
 import { readConfig, type Config } from './config.js'
-import { createService, type Service, type Sink } from './server.js'
-import type { Feedback } from './telegram.js'
+import { CLOSED_TEXT, createService, type Service } from './server.js'
 
 /**
- * A real service on a real port, answering real requests.
+ * A real service on a real port, answering the requests an old copy of the plugin still makes.
  *
- * What is being tested is almost entirely refusals - a body too big, a message with nothing in it, one
- * sender asking too often, a Telegram that did not answer - and those are exactly the paths that decide
- * whether somebody's bug report arrives or is quietly dropped. Where it goes afterwards is a stub: the
- * chat is not the part that can be wrong here.
+ * What matters is that such a person sees the words rather than an error: the old form prints the body of
+ * a 400 and nothing else, and only if the answer arrives after it has finished writing its request.
  */
 
-const carrier = () => {
-  const sent: Feedback[] = []
-  let works = true
-
-  const sink: Sink = {
-    enabled: true,
-    send: async (feedback) => {
-      if (!works) return false
-      sent.push(feedback)
-      return true
-    },
-  }
-
-  return { sink, sent, fail: () => (works = false) }
-}
-
 let service: Service | undefined
+const lines: string[] = []
 
-const raise = async (sink: Sink, overrides: Partial<Config> = {}): Promise<number> => {
+const raise = async (overrides: Partial<Config> = {}): Promise<number> => {
   const config = { ...readConfig(), logLevel: 'silent' as const, key: '', ...overrides }
-  service = createService(config, () => {}, sink)
+  service = createService(config, (line) => lines.push(line))
   return service.listen(0)
 }
 
 afterEach(() => {
   service?.close()
   service = undefined
+  lines.length = 0
 })
 
-const body = (parts: { name: string; filename?: string; value: string | Buffer }[], boundary = 'testboundary'): Buffer => {
-  const chunks: Buffer[] = []
+/** What the old form posts: multipart, its fields, and whatever files were picked. */
+const oldForm = (file: Buffer = Buffer.from('a screenshot')): Buffer => {
+  const boundary = 'testboundary'
+  const field = (name: string, value: string) =>
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`)
 
-  for (const part of parts) {
-    const disposition = part.filename
-      ? `form-data; name="${part.name}"; filename="${part.filename}"`
-      : `form-data; name="${part.name}"`
-
-    chunks.push(Buffer.from(`--${boundary}\r\nContent-Disposition: ${disposition}\r\n\r\n`))
-    chunks.push(typeof part.value === 'string' ? Buffer.from(part.value) : part.value)
-    chunks.push(Buffer.from('\r\n'))
-  }
-
-  chunks.push(Buffer.from(`--${boundary}--\r\n`))
-  return Buffer.concat(chunks)
+  return Buffer.concat([
+    field('kind', 'idea'),
+    field('text', 'please add a dark mode'),
+    field('email', 'someone@example.com'),
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="shot.png"\r\n\r\n`),
+    file,
+    Buffer.from(`\r\n--${boundary}--\r\n`),
+  ])
 }
 
-const post = async (
-  port: number,
-  payload: Buffer,
-  headers: Record<string, string> = {},
-): Promise<Response> =>
+const post = (port: number, body: Buffer, headers: Record<string, string> = {}) =>
   fetch(`http://127.0.0.1:${port}/v1/feedback`, {
     method: 'POST',
     headers: { 'content-type': 'multipart/form-data; boundary=testboundary', ...headers },
-    body: new Uint8Array(payload),
+    body: new Uint8Array(body),
   })
 
-describe('taking a piece of feedback', () => {
-  it('accepts one and hands it on', async () => {
-    const post_office = carrier()
-    const port = await raise(post_office.sink)
+describe('an old feedback form posting here', () => {
+  it('is answered with the words the new screen says, in the one status the form prints', async () => {
+    const port = await raise()
 
-    const response = await post(
-      port,
-      body([
-        { name: 'kind', value: 'bug' },
-        { name: 'text', value: 'the panel hangs on reopening a tab' },
-        { name: 'email', value: 'you@example.com' },
-        { name: 'environment', value: 'Amazing Claude Code GUI 0.8.1' },
-        { name: 'report', filename: 'report.txt', value: 'WebStorm 2026.2' },
-        { name: 'file', filename: 'shot.png', value: Buffer.from([1, 2, 3]) },
-      ]),
-    )
-
-    expect(response.status).toBe(204)
-    expect(post_office.sent).toHaveLength(1)
-    expect(post_office.sent[0]?.text).toBe('the panel hangs on reopening a tab')
-    expect(post_office.sent[0]?.files.map((file) => file.filename)).toEqual(['shot.png'])
-    expect(post_office.sent[0]?.report?.toString()).toBe('WebStorm 2026.2')
-  })
-
-  it('refuses one with nothing written in it', async () => {
-    const post_office = carrier()
-    const port = await raise(post_office.sink)
-
-    const response = await post(port, body([{ name: 'kind', value: 'bug' }]))
+    const response = await post(port, oldForm())
 
     expect(response.status).toBe(400)
-    expect(post_office.sent).toHaveLength(0)
+    expect(await response.text()).toBe(CLOSED_TEXT)
   })
 
-  it('refuses a body over the ceiling without collecting it', async () => {
-    const post_office = carrier()
-    const port = await raise(post_office.sink, { maxBodyBytes: 2048 })
+  it('logs a size and nothing of what was written', async () => {
+    const port = await raise()
 
-    const response = await post(
-      port,
-      body([
-        { name: 'text', value: 'here is the recording' },
-        { name: 'file', filename: 'big.bin', value: Buffer.alloc(8192) },
-      ]),
-    )
+    await post(port, oldForm())
 
-    expect(response.status).toBe(413)
-    expect(post_office.sent).toHaveLength(0)
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toMatch(/^turned one away: \d+ B/)
+    expect(lines.join('\n')).not.toContain('dark mode')
+    expect(lines.join('\n')).not.toContain('someone@example.com')
   })
 
-  it('carries no more files than it allows, however many were sent', async () => {
-    const post_office = carrier()
-    const port = await raise(post_office.sink, { maxFiles: 2 })
+  /** The old form writes everything before it reads; answering mid-body would break its pipe instead. */
+  it('reads a whole twenty-megabyte request through before answering', async () => {
+    const port = await raise()
 
-    await post(
-      port,
-      body([
-        { name: 'text', value: 'four files' },
-        { name: 'file', filename: 'a', value: 'a' },
-        { name: 'file', filename: 'b', value: 'b' },
-        { name: 'file', filename: 'c', value: 'c' },
-        { name: 'file', filename: 'd', value: 'd' },
-      ]),
-    )
-
-    expect(post_office.sent[0]?.files).toHaveLength(2)
-  })
-
-  it('wants multipart, and says so', async () => {
-    const post_office = carrier()
-    const port = await raise(post_office.sink)
-
-    const response = await fetch(`http://127.0.0.1:${port}/v1/feedback`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: '{"text":"hello"}',
-    })
+    const response = await post(port, oldForm(Buffer.alloc(20 * 1024 * 1024, 7)))
 
     expect(response.status).toBe(400)
+    expect(await response.text()).toBe(CLOSED_TEXT)
   })
 
-  it('answers nothing else', async () => {
-    const port = await raise(carrier().sink)
+  it('drops what is bigger than anything the form could send', async () => {
+    const port = await raise({ maxBodyBytes: 1024 })
 
-    expect((await fetch(`http://127.0.0.1:${port}/`)).status).toBe(404)
+    await expect(post(port, oldForm(Buffer.alloc(64 * 1024, 7))).then((response) => response.text())).rejects.toThrow()
+  })
+
+  it('still asks for the shared secret first', async () => {
+    const port = await raise({ key: 'secret' })
+
+    expect((await post(port, oldForm(), { 'x-acc-key': 'wrong' })).status).toBe(403)
+    expect((await post(port, oldForm(), { 'x-acc-key': 'secret' })).status).toBe(400)
+  })
+})
+
+describe('the words themselves', () => {
+  /** FeedbackSender cuts the body at 160 characters, and the line it sits in is a single line. */
+  it('fit the form whole', () => {
+    expect(CLOSED_TEXT.length).toBeLessThanOrEqual(160)
+    expect(CLOSED_TEXT).not.toMatch(/[\r\n]/)
+  })
+
+  it('name both ways in', () => {
+    expect(CLOSED_TEXT).toContain('ko-fi.com/mzpizote')
+    expect(CLOSED_TEXT).toContain('pull request')
+  })
+})
+
+describe('the rest of the address', () => {
+  it('says it is alive, and that it takes nothing', async () => {
+    const port = await raise()
+
+    expect(await (await fetch(`http://127.0.0.1:${port}/healthz`)).text()).toBe('ok')
+    expect(await (await fetch(`http://127.0.0.1:${port}/v1/info`)).json()).toMatchObject({ accepting: false })
+  })
+
+  it('answers anything else as it always did', async () => {
+    const port = await raise()
+
     expect((await fetch(`http://127.0.0.1:${port}/v1/feedback`)).status).toBe(405)
-    expect((await fetch(`http://127.0.0.1:${port}/healthz`)).status).toBe(200)
-  })
-})
-
-describe('the shared secret', () => {
-  it('turns away a caller that does not know it, before reading anything', async () => {
-    const post_office = carrier()
-    const port = await raise(post_office.sink, { key: 'the-key' })
-
-    const response = await post(port, body([{ name: 'text', value: 'hello' }]))
-
-    expect(response.status).toBe(403)
-    expect(post_office.sent).toHaveLength(0)
-  })
-
-  it('lets the plugin through', async () => {
-    const post_office = carrier()
-    const port = await raise(post_office.sink, { key: 'the-key' })
-
-    const response = await post(port, body([{ name: 'text', value: 'hello' }]), { 'x-acc-key': 'the-key' })
-
-    expect(response.status).toBe(204)
-  })
-})
-
-describe('how often it may be asked', () => {
-  it('stops one sender after their share of the hour', async () => {
-    const post_office = carrier()
-    const port = await raise(post_office.sink, { perIpPerHour: 2 })
-
-    const first = await post(port, body([{ name: 'text', value: 'one' }]))
-    const second = await post(port, body([{ name: 'text', value: 'two' }]))
-    const third = await post(port, body([{ name: 'text', value: 'three' }]))
-
-    expect([first.status, second.status]).toEqual([204, 204])
-    expect(third.status).toBe(429)
-    expect(post_office.sent).toHaveLength(2)
-  })
-
-  it('does not charge a sender for a message it failed to deliver', async () => {
-    const post_office = carrier()
-    const port = await raise(post_office.sink, { perIpPerHour: 1 })
-    post_office.fail()
-
-    const failed = await post(port, body([{ name: 'text', value: 'one' }]))
-
-    expect(failed.status).toBe(502)
-
-    // The attempt did not count, so the person may try again - which is the whole point of the refund.
-    const retried = await post(port, body([{ name: 'text', value: 'one' }]))
-    expect(retried.status).toBe(502)
-  })
-})
-
-describe('a request that goes away mid-body', () => {
-  it('does not count against the sender', async () => {
-    const post_office = carrier()
-    const port = await raise(post_office.sink, { perIpPerHour: 1 })
-
-    // A promised body that never finishes arriving: the connection is destroyed halfway. This is what a
-    // phone leaving a lift looks like from here.
-    await new Promise<void>((resolve) => {
-      const socket = connect(port, '127.0.0.1', () => {
-        socket.write(
-          'POST /v1/feedback HTTP/1.1\r\n' +
-            'Host: 127.0.0.1\r\n' +
-            'Content-Type: multipart/form-data; boundary=testboundary\r\n' +
-            'Content-Length: 4096\r\n\r\n' +
-            '--testboundary\r\nContent-Disposition: form-data; name="text"\r\n\r\nhalf a mes',
-        )
-        setTimeout(() => {
-          socket.destroy()
-          resolve()
-        }, 50)
-      })
-      socket.on('error', () => resolve())
-    })
-
-    // Give the server a moment to notice the socket is gone.
-    await new Promise((resolve) => setTimeout(resolve, 50))
-
-    // The hour's one slot is still there, so the retry gets through.
-    const retried = await post(port, body([{ name: 'text', value: 'the whole message this time' }]))
-
-    expect(retried.status).toBe(204)
-    expect(post_office.sent).toHaveLength(1)
+    expect((await fetch(`http://127.0.0.1:${port}/elsewhere`)).status).toBe(404)
   })
 })

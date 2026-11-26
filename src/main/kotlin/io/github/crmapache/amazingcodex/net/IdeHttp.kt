@@ -13,8 +13,8 @@ import java.time.Duration
  * because there is no way out without it, the certificate store because a network that inspects TLS
  * presents a certificate the JDK's own trust store has never heard of.
  *
- * One place for all three of the plugin's ways out - the relay, the feedback report and Deepgram. It was
- * three copies of these fifteen lines, which is a very quiet way to fail: mend the proxy in one of them
+ * One place for all of the plugin's ways out - the relay, the usage report and Deepgram. It was three
+ * copies of these fifteen lines, which is a very quiet way to fail: mend the proxy in one of them
  * and the other two go on being the parts of the plugin that a company's network refuses, with nothing
  * on screen to say why.
  *
@@ -48,6 +48,30 @@ internal object IdeHttp {
         return builder.build()
     }
 
+    /**
+     * A line for the log out of a failure that frequently has nothing to say for itself.
+     *
+     * The most ordinary failure of a request is a name that will not resolve - no network, a proxy that
+     * eats DNS, an address whose record has not spread yet - and it is precisely the one that arrives
+     * mute: the JDK's client wraps it in a ConnectException with no message, whose cause is another one
+     * with no message, and only at the bottom of that chain is there an UnresolvedAddressException, which
+     * carries nothing but its own name either. Logging the message alone wrote "did not go: null" and left
+     * no way to tell a machine with no network from a service answering nonsense.
+     *
+     * So the chain is walked: the names of everything in it, and the first thing any of them thought to
+     * say. Names only, never a stack - this goes to the IDE's log, which the person may well be reading.
+     */
+    fun describe(failure: Throwable): String {
+        val chain = generateSequence(failure) { it.cause.takeIf { cause -> cause !== it } }.take(CAUSE_DEPTH).toList()
+        val names = chain.joinToString(" <- ") { it.javaClass.simpleName }
+        val said = chain.firstNotNullOfOrNull { it.message?.trim()?.ifEmpty { null } }
+
+        return if (said == null) names else "$names: $said"
+    }
+
     /** Long enough for a proxy that thinks about it, short enough not to look like a hang. */
     private const val CONNECT_SECONDS = 15L
+
+    /** Far enough down a chain of causes for the one that means something; a guard against a cycle too. */
+    private const val CAUSE_DEPTH = 6
 }

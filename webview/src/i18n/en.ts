@@ -40,7 +40,8 @@ export const en = {
       mcp: { title: 'MCP SERVERS', hint: 'status · sign in · reconnect' },
       plugins: { title: 'PLUGINS', hint: 'installed · browse · marketplaces' },
       settings: { title: 'SETTINGS', hint: 'how the panel behaves and sounds' },
-      appearance: { title: 'APPEARANCE', hint: 'theme and text size' },
+      appearance: { title: 'APPEARANCE', hint: 'theme, text size and font' },
+      font: { title: 'FONT', hint: 'what the panel is set in' },
       sounds: { title: 'SOUND ALERTS', hint: 'when the panel calls you' },
       calmColors: { title: 'NO-STRESS COLORS', hint: 'how the gauges are painted' },
       indicators: { title: 'INDICATORS', hint: 'what stays around the field' },
@@ -66,8 +67,8 @@ export const en = {
       customModels: { title: 'CUSTOM MODELS', hint: 'ones Codex does not offer' },
       language: { title: 'LANGUAGE', hint: 'what the panel speaks' },
       accounts: { title: 'CODEX ACCOUNTS', hint: 'which subscription pays for the work' },
-      feedback: { title: 'FEEDBACK', hint: 'a bug, an idea, or just hello' },
-      feedbackLog: { title: 'WHAT GETS ATTACHED', hint: 'the whole report, before it goes' },
+      feedback: { title: 'FEEDBACK', hint: 'how to get something changed' },
+      feedbackLog: { title: 'DEBUG REPORT', hint: 'the whole report, to copy' },
       usageStats: { title: 'USAGE STATISTICS', hint: 'anonymous counts, only if you allow' },
       usageStatsReport: { title: 'WHAT GETS SENT', hint: 'the whole report, as it would go' },
     },
@@ -80,7 +81,7 @@ export const en = {
       remote: { label: 'Remote access', sub: 'State, relay, paired devices' },
       accounts: { label: 'Codex accounts', sub: 'Switch without signing out' },
       settings: { label: 'Settings', sub: 'Theme, sounds, new chats, language' },
-      feedback: { label: 'Send feedback', sub: 'A bug, an idea, or just hello' },
+      feedback: { label: 'Feedback', sub: 'How to get something changed' },
     },
 
     /**
@@ -214,6 +215,15 @@ export const en = {
     lightWord: 'light',
     /** The value beside the row in the settings list when nothing is chosen - "Auto · 13 pt". */
     auto: 'Auto',
+    font: 'FONT',
+    followConsoleFont: 'As the console font',
+    followConsoleFontSub: (font: string): string => `Follow the IDE's console font - ${font} right now`,
+    ownFont: 'A font of its own',
+    ownFontSub: 'The panel alone - the editor and the terminal stay as they are',
+    /** Under "A font of its own" once one is chosen. */
+    ownFontChosen: (font: string): string => `${font}, in the panel alone`,
+    /** Above the list of fonts: why only monospaced ones are offered. */
+    fontsNote: 'Monospaced fonts this computer has. The feed is set like a terminal, so code and tables keep their columns.',
   },
 
   /**
@@ -329,7 +339,7 @@ export const en = {
       hint: 'The ring for a business seat’s monthly spending cap - shown only on a seat that has one',
     },
     tokens: { label: 'Tokens today', hint: 'Spent today, across every project' },
-    feedback: { label: 'Feedback button', hint: 'The bubble that opens the feedback form - the menu keeps its own way in' },
+    feedback: { label: 'Feedback button', hint: 'The bubble that opens the feedback screen - the menu keeps its own way in' },
     thanks: { label: 'Heart', hint: 'A star, a review, a word to a friend, or a tip' },
   },
 
@@ -344,6 +354,13 @@ export const en = {
     /** Beside the time on a closed fork's row. */
     fork: 'fork',
     messages: (n: number): string => (n === 1 ? `${n} message` : `${n} messages`),
+    /** On a past conversation's row, under the hover - Codex deletes the thread itself (`thread/delete`), for good. */
+    delete: 'Delete',
+    deleteTitle: 'Delete this conversation?',
+    deleteNote: 'Codex deletes it for good, together with the agents it ran. It cannot be brought back.',
+    /** Above the list when a delete did not happen: the conversation is open in a tab, or Codex refused it. */
+    deleteOpen: (title: string): string => `“${title}” is open in a tab. Close the tab to delete it.`,
+    deleteRefused: (title: string): string => `Codex could not delete “${title}”, so it is still here.`,
   },
 
   search: {
@@ -1050,6 +1067,8 @@ export const en = {
       search: 'Search conversations',
       fork: 'Fork from the selection',
       forkWhen: 'with text selected in the feed',
+      terminal: 'Continue in terminal',
+      terminalWhen: 'an IDE action, unbound until you bind it',
     },
   },
 
@@ -1122,6 +1141,10 @@ export const en = {
     deviceDefault: 'System default',
     deviceDefaultHint: 'Follows whatever the system is set to',
     deviceNote: 'Changing this takes effect on the next dictation.',
+
+    /** A switch for Deepgram's `mip_opt_out`. Since March 2026 it does not change the listed price on those two plans. */
+    trainingOptOut: 'Opt out of model training',
+    trainingOptOutHint: 'Asks Deepgram not to keep your dictations or use them to improve its models. On the Pay as you go and Growth plans the price is the same either way.',
 
     /** The card at the foot of this screen - the author's other app. The product's name is not here: it
         is written the same in every language (see DICTATION_PRODUCT). */
@@ -1296,15 +1319,41 @@ export const en = {
     closeHint: (close: string, reopen: string): string => `${close} · ${reopen} opens it again`,
     conversations: 'Conversations',
     newSession: 'New session',
-    /** The button beside "+": a fork of the conversation on screen, whole - see App.fork. */
+    /** A fork of the open tab's conversation, whole - the button on the right of the header (see App.fork). */
     fork: 'Fork this conversation: a new tab that carries on from here, while this one stays as it is',
     /** The same button on a tab nobody has written into yet - there is no conversation to carry. */
     forkEmpty: 'Nothing to fork yet: this tab has no conversation',
     /** The field a double click on a conversation's tab opens in place of its name. */
     renameTab: 'Rename conversation',
+    /** The heading of a tab's right-click menu, and of a history row's (see ContextMenu). */
+    tabMenu: 'THIS CONVERSATION',
     menu: 'Menu',
-    /** How many others have this project open - a browser page beside the IDE, or a phone. */
-    watchers: (n: number): string => `${n} other ${n === 1 ? 'client is' : 'clients are'} watching this project`,
+  },
+
+  /** Continue in terminal (see TerminalDesk.kt): the card over the field while a terminal holds the conversation. */
+  terminal: {
+    label: 'TERMINAL',
+    /** The tab's menu, the `/status` row's button. */
+    continue: 'Continue in terminal',
+    show: 'Show terminal',
+    back: 'Return to chat',
+    here: 'This conversation continues in the terminal',
+    hereBody:
+      'What you write here waits in the queue and goes when the conversation is back. Return to chat closes the terminal, and whatever Codex is doing there stops.',
+    elsewhere: 'This conversation is open in another terminal',
+    elsewhereBody: 'Close it there to continue here. What you write here waits in the queue until then.',
+    /** hereBody on a phone, which has no terminal to show or close. */
+    atDesk: 'The conversation is in a terminal at the desk. What you write here waits in the queue and goes when it is back in the chat.',
+    refused: "Couldn't continue in the terminal",
+    reasons: {
+      noConversation: 'This tab has no conversation yet - send a message first.',
+      busy: 'Codex is working or waiting for your answer. Try again when the turn is over.',
+      background: 'Background agents or commands are still running in this conversation, and they would stop with it.',
+      notFound: 'Codex was not found on this machine.',
+      account: "This tab's account could not be used. Check it on the accounts screen.",
+      noTerminal: 'The IDE terminal could not be opened.',
+    },
+    dismiss: 'Close',
   },
 
   /** The card of side questions over the field - `/btw` (see SideQuestion.tsx). */
@@ -1438,9 +1487,11 @@ export const en = {
     jumpToLatest: 'Jump to latest',
     copyBlock: 'Copy this block',
     copyReply: 'Copy the whole reply',
-    /** The three dots on a card, which open everything else it can do - the phone's alone. */
+    /** The three dots on a card, which open everything else it can do - the phone's sheet, or the desk's menu. */
     moreActions: 'More',
-    /** The two buttons in the head of a message of one's own - see UserCard. */
+    /** The heading of the menu behind those dots on a message of one's own, at the desk (see CardMenu). */
+    messageMenu: 'THIS MESSAGE',
+    /** The one button left standing in the head of a message of one's own - see UserCard. */
     copyMessage: 'Copy this message, with the paths of what was attached',
     editor: {
       /** Under a sent message: the lines selected in the editor that went to the agent with it. */
@@ -1452,20 +1503,22 @@ export const en = {
     },
     reuse: {
       label: 'Edit and send again',
-      hint: 'Put this message back into the input field, to edit and send again',
       /**
-       * Said instead of the hint when a pasted picture cannot come back: only the caption for it is left
-       * in a conversation read off the disk, and the bytes are what the agent was actually shown.
+       * Said under the menu's entry when a pasted picture cannot come back: only the caption for it is
+       * left in a conversation read off the disk, and the bytes are what the agent was actually shown.
        */
       lostImages: (n: number): string =>
         n === 1
           ? 'Back into the input field - but the pasted image cannot come with it, attach it again'
           : `Back into the input field - but the ${n} pasted images cannot come with it, attach them again`,
     },
-    /** The third button in the head of a message of one's own - it opens the rewind dialog (see RewindDialog). */
+    /**
+     * The last entry of the menu on a message of one's own - it opens the rewind dialog (see RewindDialog).
+     * `hint` is said under it: what goes, before anything does.
+     */
     rewind: {
       label: 'Rewind to here',
-      hint: 'Rewind to here: this message and everything after it leave the conversation',
+      hint: 'This message and everything after it leave the conversation',
       /** On a message written while a turn was running: there is no clean point before it to go back to. */
       steering: 'Written while Codex was working - rewind to the message that started that turn',
     },
@@ -1474,9 +1527,9 @@ export const en = {
     /** The code a fork was to take along, not put back - see FORK_CODE in feed/rewind.ts. */
     forkCode: (why: string): string => `The fork is open, but the code here could not be put back: ${why}`,
     /**
-     * The pin button in the corner of a message, and the strip it puts the message into (see
-     * feed/pins.ts). `crowded` stands in for `add` on a button gone dead because three are pinned
-     * already - it is the one line that says why it will not work and what to do about it.
+     * The pin - a button in the corner of an answer, an entry in the menu of a message of one's own - and
+     * the strip it puts the message into (see feed/pins.ts). `crowded` is said on a pin gone dead because
+     * three are pinned already - it is the one line that says why it will not work and what to do about it.
      */
     pin: {
       add: 'Pin it to the top of the chat',
@@ -1539,7 +1592,7 @@ export const en = {
       output: (empty: boolean): string => (empty ? '· no output' : '· output'),
       /** The minus is a real minus sign, not a hyphen - it is set beside a plus and has to match it. */
       diff: (added: number, removed: number): string => `· +${added} −${removed}`,
-      moreLines: (n: number): string => `… ${n} more lines`,
+      moreLines: (n: number): string => `… ${n} more ${n === 1 ? 'line' : 'lines'}`,
       /** The same row once the whole diff is open: it collapses it back - see ToolCard. */
       fewerLines: '… collapse',
       count: (n: number): string => `${n} ${n === 1 ? 'tool' : 'tools'}`,
@@ -1690,11 +1743,14 @@ export const en = {
       terminal: 'In a terminal',
       copyId: 'Copy Session ID',
       terminalNote: 'Continues this conversation in a terminal opened in the project folder',
-      terminalNoteOn: (account: string): string =>
-        `Continues this conversation on ${account} in a terminal opened in the project folder`,
-      terminalNoteDefault: (account: string): string =>
-        `Continues this conversation in a terminal opened in the project folder - on the default Codex sign-in, not on ${account}`,
-      unnamedAccount: 'this tab’s account',
+      /** `/status` on an added account: the line names that account's drawer (see ResumeLine.kt). */
+      terminalNoteAccount: (name: string): string =>
+        name
+          ? `Continues this conversation on ${name}, in a terminal opened in the project folder`
+          : "Continues this conversation on this tab's account, in a terminal opened in the project folder",
+      /** The same on Windows, where the line cannot carry the account - it says so. */
+      terminalNoteDefault: (name: string): string =>
+        `Continues on the ordinary Codex sign-in rather than on ${name || "this tab's account"}. Continue in terminal keeps the account`,
       none: 'No ID yet - the conversation gets one with its first message',
     },
     outranked: {
@@ -1794,6 +1850,7 @@ export const en = {
     changes: {
       all: (n: number): string => `Show all (${n})`,
       fewer: 'Show fewer',
+      files: (n: number): string => (n === 1 ? '1 file' : `${n} files`),
       revert: 'Revert this file',
       revertAll: 'Revert all',
       reverting: 'Reverting…',
@@ -1824,6 +1881,9 @@ export const en = {
       /** A queue that came back with a tab opened again after it was closed while it worked (see SessionQueue.hold). */
       held: (n: number): string =>
         `${n} will fire in order after your next message - the turn they waited for was stopped · drag to reorder`,
+      /** A queue waiting for the conversation to come back from the terminal that holds it (see TerminalCard). */
+      terminal: (n: number): string =>
+        `${n} will fire in order once the conversation is back from the terminal · drag to reorder`,
       /** On the pencil beside a queued message: it goes back into the field to be corrected. */
       edit: 'Edit in the field',
       /**
@@ -1937,6 +1997,7 @@ export const en = {
     logout: 'Log out',
     logoutConfirm: 'Log out of Codex?',
     forget: 'Forget',
+    signInAgain: 'Sign in again',
     add: 'Add an account',
     adding: 'Waiting for the sign-in…',
     /** The way out of a wait that lasts ten minutes - see AddButton. */
@@ -1980,6 +2041,7 @@ export const en = {
       'already-here': 'That account is already here: it is the sign-in Codex itself has (codex login), so nothing was added.',
       'logout-failed': 'Logging out did not work. Try it in a terminal.',
       'already-running': 'A sign-in is already under way.',
+      'no-drawer': 'This account cannot be reached from this project, so the sign-in was not started.',
       unknown: 'That did not work.',
     } as Record<string, string>,
   },
@@ -2044,42 +2106,26 @@ export const en = {
   },
 
   feedback: {
-    button: 'Report a bug or send an idea',
-    kinds: {
-      bug: { label: 'Bug', placeholder: 'What happened, and what did you expect instead?' },
-      idea: { label: 'Idea', placeholder: 'What would you like the panel to do?' },
-      hello: { label: 'Hello', placeholder: 'Anything at all - it reaches a person, not a queue.' },
+    button: 'Want something changed?',
+    lead:
+      "I build this plugin on my own, and it takes a large share of my Codex subscription and a lot of my time. So I no longer take requests and bug reports here. If you'd like something changed, there are two ways:",
+    ways: {
+      tip: {
+        title: 'Support and ask',
+        body: "Tip on Ko-fi and write in the message what you'd like. I'll build it.",
+      },
+      code: {
+        title: 'Build it yourself',
+        body: "The code is open: make the change and open a pull request. I'll review it and may merge it.",
+      },
     },
-    email: 'EMAIL',
-    emailOptional: 'optional',
-    attachments: 'ATTACHMENTS',
-    addFiles: 'Add files',
-    removeFile: (name: string): string => `Remove ${name}`,
-    attachTotal: (count: number, max: number, size: string, budget: string): string =>
-      `${count} of ${max} · ${size} of ${budget}`,
-    logs: 'Attach debug logs',
-    logsFromTab: (tab: string): string => `From the tab ${tab} - `,
-    logsFromOpenTab: 'From the tab you have open now: ',
-    logsWhat:
-      'versions, timings and what went wrong. Not your conversation, not your file names, not your paths - and you can read the whole thing before it goes.',
-    logsOnlyBug:
-      'Only with a bug: the report is an account of something going wrong, and there is nothing here for it to describe.',
-    seeWhat: 'See exactly what gets attached',
-    send: 'Send',
-    sending: 'Sending…',
-    sentPartly: (note: string): string => `Sent, but not everything. ${note}`,
-    sent: 'Sent. Thank you ❤️ - it goes straight to me.',
-    notSent: 'It could not be sent. Nothing was lost - try again.',
+    thanks: 'Thank you for using the plugin',
+    report: 'Debug report for this tab',
     reportNote: (tab: string): string =>
-      `This is the entire attachment, word for word${tab ? `, for the tab ${tab}` : ''}. It is built here, in your IDE, from what the plugin itself saw: versions, the shape of that conversation, and anything that failed. File names appear as short hashes, so the same file reads as the same file without saying which one it is.`,
+      `For a pull request about a bug, or for when I ask. This is the whole report${tab ? ` for the tab ${tab}` : ''}, built here in your IDE from what the plugin itself saw: versions, the shape of the conversation and anything that failed - none of what was said. File names appear as short hashes.`,
     building: 'Building it…',
     copy: 'Copy',
-    problems: {
-      empty: 'Write a few words first.',
-      tooLong: (max: number): string => `That is longer than ${max} characters.`,
-      tooMany: (max: number): string => `No more than ${max} files.`,
-      tooHeavy: (budget: string): string => `The files add up to more than ${budget}.`,
-    },
+    copied: 'Copied',
   },
 
   mcp: {
@@ -2211,6 +2257,8 @@ export const en = {
         waitingQuestion: 'waiting on you · question',
         waitingPlan: 'waiting on you · plan',
         working: 'working',
+        /** The conversation's own turn is over and only the background agents it raised are still at it. */
+        agents: (n: number): string => (n === 1 ? 'subagent working' : `${n} subagents working`),
         done: 'done',
       },
       /** Why the list looks the way it does - said about the phone's whole situation. */
@@ -2422,6 +2470,9 @@ export const en = {
         `Forget ${name}? Its credential is removed from that machine - the account itself is untouched, and signing in again brings it back.`,
       logoutAsk:
         'Sign out of Codex? This revokes the credential at OpenAI - every machine you are signed in on goes with it.',
+      signInAtDesk: 'No stored credential. Signing it in again takes a terminal and a browser on that machine, so it is done at the desk.',
+      forgetSignedOutAsk: (name: string): string =>
+        `Take ${name} off the list? It is signed out already, so nothing is revoked - signing in again at the desk brings it back.`,
     },
 
     newSession: {
@@ -2507,8 +2558,6 @@ export const en = {
 
   status: {
     todayTokens: 'Tokens spent today, across all projects',
-    openPr: 'Open pull request in browser',
-    noPr: 'no PR',
     effortHint: (effort: string): string => `Reasoning effort: ${effort}`,
     modelHint: (model: string): string => `Model: ${model}`,
     /** The CLI moved the conversation to another model by itself - see SwitchItem. */
@@ -2553,6 +2602,8 @@ export const en = {
     decisions: { once: 'Allow once', always: 'Always allow', deny: 'Deny' },
     /** Which permission mode the question was asked under - `mode` is the short caption of that mode. */
     underMode: (mode: string): string => `${mode} mode`,
+    /** Which subagent's call it is, when it is not the conversation's own turn - `agent` is its chip's name. */
+    askedBy: (agent: string): string => `Asked by ${agent}`,
   },
 
   selectors: {
@@ -2645,6 +2696,7 @@ export const en = {
     btwArgument: '<question>',
     fast: 'toggle fast mode - quicker answers that use your limits faster',
     status: "this conversation's ID and the command to resume it in a terminal",
+    terminal: 'continue this conversation in the IDE terminal, then come back to the chat',
     model: 'switch the model for this session',
     effort: 'set how long Codex thinks before acting',
     codeReview: 'review changes with Codex\'s own reviewer',

@@ -43,7 +43,15 @@ internal object CodexLogin {
     }
 
     fun login(project: Project, parentDisposable: Disposable, onOutcome: (Outcome) -> Unit) =
-        openTerminal(project, parentDisposable, "login", onOutcome)
+        openTerminal(project, parentDisposable, "login", CodexAccounts.getInstance().currentId, onOutcome)
+
+    /**
+     * The same sign-in into one row's own drawer - "Sign in again" on the accounts screen, for a row whose drawer
+     * has lost its credential (see AccountDesk.signInAgain). Empty is the ordinary home, which is the drawer a plain
+     * terminal would have opened anyway.
+     */
+    fun login(project: Project, parentDisposable: Disposable, accountId: String, onOutcome: (Outcome) -> Unit) =
+        openTerminal(project, parentDisposable, "login", accountId, onOutcome)
 
     /**
      * Signing out goes into the terminal too. The panel should not wipe the authorization with its own
@@ -55,16 +63,16 @@ internal object CodexLogin {
      * every machine they have.
      */
     fun logout(project: Project, parentDisposable: Disposable, onOutcome: (Outcome) -> Unit) =
-        openTerminal(project, parentDisposable, "logout", onOutcome)
+        openTerminal(project, parentDisposable, "logout", CodexAccounts.getInstance().currentId, onOutcome)
 
     private fun openTerminal(
         project: Project,
         parentDisposable: Disposable,
         verb: String,
+        accountId: String,
         onOutcome: (Outcome) -> Unit,
     ) {
-        val accounts = CodexAccounts.getInstance()
-        val variables = accounts.variablesFor(accounts.currentId, project.basePath)
+        val variables = CodexAccounts.getInstance().variablesFor(accountId, project.basePath)
 
         if (variables == null) {
             DiagnosticsLog.note(DiagnosticsLog.ACCOUNTS, "a sign-in had no drawer to go into")

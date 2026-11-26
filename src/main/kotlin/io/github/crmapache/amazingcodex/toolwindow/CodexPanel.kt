@@ -20,6 +20,7 @@ import com.intellij.openapi.wm.ToolWindowAnchor
 import com.intellij.openapi.wm.ToolWindowManager
 import com.intellij.openapi.wm.WindowManager
 import com.intellij.openapi.wm.ex.ToolWindowManagerListener
+import com.intellij.ui.components.BrowserLink
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPanel
 import com.intellij.util.Alarm
@@ -27,6 +28,7 @@ import com.intellij.util.ui.JBUI
 import io.github.crmapache.amazingcodex.AccBundle
 import io.github.crmapache.amazingcodex.codex.CodexPreferences
 import io.github.crmapache.amazingcodex.codex.CodexSessionHub
+import io.github.crmapache.amazingcodex.codex.HostOs
 import io.github.crmapache.amazingcodex.codex.SessionClient
 import io.github.crmapache.amazingcodex.codex.accounts.CodexAccounts
 import io.github.crmapache.amazingcodex.editor.EditorContext
@@ -38,6 +40,7 @@ import io.github.crmapache.amazingcodex.sound.AlertSounds
 import io.github.crmapache.amazingcodex.usage.UsageFeatures
 import io.github.crmapache.amazingcodex.usage.UsageReporter
 import io.github.crmapache.amazingcodex.voice.VoiceDesk
+import io.github.crmapache.amazingcodex.webview.BrowserLoss
 import io.github.crmapache.amazingcodex.webview.DraftImages
 import io.github.crmapache.amazingcodex.webview.FilePicker
 import io.github.crmapache.amazingcodex.webview.IdeTypography
@@ -50,6 +53,7 @@ import io.github.crmapache.amazingcodex.webview.WebviewFileDrop
 import io.github.crmapache.amazingcodex.webview.WebviewHost
 import java.awt.BorderLayout
 import java.awt.Component
+import java.awt.GraphicsEnvironment
 import javax.swing.Box
 import javax.swing.BoxLayout
 import javax.swing.JButton
@@ -58,6 +62,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -67,6 +72,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 
 /**
@@ -186,9 +192,8 @@ internal class CodexPanel(
     }
 
     /**
-     * The feedback screen's side of the house: the files picked for it, the debug report, and the one
-     * request the plugin makes of the internet on its own (see FeedbackDesk). It answers through this
-     * window rather than through the hub - what it does belongs to no conversation.
+     * The feedback screen's side of the house: the debug report it offers to copy (see FeedbackDesk). It
+     * answers through this window rather than through the hub - what it does belongs to no conversation.
      */
     private val feedback = FeedbackDesk(project, hub) { message -> webview?.send(message) }
 
@@ -209,7 +214,7 @@ internal class CodexPanel(
 
     init {
         component = if (WebviewHost.isSupported()) {
-            buildWebview(parentDisposable)
+            buildWebview()
         } else {
             buildUnsupportedNotice()
         }
@@ -300,11 +305,32 @@ internal class CodexPanel(
      */
     private var frame: JBPanel<JBPanel<*>>? = null
 
-    private fun buildWebview(parentDisposable: Disposable): JComponent {
+    /** What the browser in the frame lives as long as - see [rebuildWebview]. */
+    private var hostDisposable: Disposable? = null
+
+    private fun buildWebview(): JComponent {
+        val frame = JBPanel<JBPanel<*>>(BorderLayout())
+        this.frame = frame
+
+        // A panel opened after the IDE's browser has stopped (another project, say) builds no browser of
+        // its own: there is no server left to build it in (see BrowserLoss).
+        val face = if (BrowserLoss.happened) buildBrowserStoppedNotice() else newHost()
+        frame.add(face, BorderLayout.CENTER)
+        BrowserLoss.watch(parentDisposable, ::browserStopped)
+
+        return frame
+    }
+
+    /** A browser with everything a browser in this panel carries, under a lifetime of its own. */
+    private fun newHost(): JComponent {
+        val lifetime = Disposer.newDisposable(parentDisposable, "Amazing Claude Code panel browser")
+        hostDisposable = lifetime
+
         val host = WebviewHost(
-            parentDisposable,
+            lifetime,
             PanelTheme.current(),
             onSessionIdCopied = { hub.stats.noteFeature("session_info") },
+            onPageLost = { ApplicationManager.getApplication().invokeLater({ pageLost() }, ModalityState.any()) },
         ) { message -> handleWebviewMessage(message) }
         webview = host
 
@@ -312,20 +338,50 @@ internal class CodexPanel(
         // it here - see WebviewFileDrop.
         WebviewFileDrop.install(
             component = host.component,
-            parentDisposable = parentDisposable,
+            parentDisposable = lifetime,
             onDragging = ::sendFileDrag,
             onDropped = ::attachDropped,
         )
 
         // The tab keys and Queue: the IDE has the keyboard before the browser does, so they are its
         // actions, held by the browser while the focus is in it (see PanelKeys).
-        PanelKeys.install(host.component, parentDisposable, ::pressPanelKey)
+        PanelKeys.install(host.component, lifetime, ::pressPanelKey)
 
-        val frame = JBPanel<JBPanel<*>>(BorderLayout()).apply { add(host.component, BorderLayout.CENTER) }
-        this.frame = frame
-        watchForSilence(parentDisposable)
+        pageSpoke = false
+        watchForSilence(lifetime)
 
-        return frame
+        return host.component
+    }
+
+    /**
+     * Throw the browser away and build another - what the button under a page that kept crashing does.
+     *
+     * A new browser rather than the old one put back: a browser taken out of the tree comes back as an empty
+     * rectangle (see "ready" in handleWebviewMessage). The new page is handed every conversation when it says
+     * it is ready, the same way a page reloaded from the crash screen is.
+     */
+    private fun rebuildWebview() {
+        if (alive.isDisposed) return
+        if (BrowserLoss.happened) {
+            show(buildBrowserStoppedNotice())
+            return
+        }
+
+        hostDisposable?.let(Disposer::dispose)
+        webview = null
+        show(newHost())
+    }
+
+    /** The IDE's browser as a whole has stopped - see BrowserLoss. The browser in the frame is dead with it. */
+    private fun browserStopped() {
+        if (alive.isDisposed) return
+        show(buildBrowserStoppedNotice())
+    }
+
+    /** The page kept dying and is no longer brought back by itself - see PageCrashes. */
+    private fun pageLost() {
+        if (alive.isDisposed || BrowserLoss.happened) return
+        show(buildPageCrashedNotice())
     }
 
     private fun buildUnsupportedNotice(): JComponent =
@@ -341,28 +397,60 @@ internal class CodexPanel(
      * the interface to the embedded browser is registered for the whole IDE process and cannot be taken
      * back (see the note at the top of plugin.xml), so after a live swap the page is asked of a plugin
      * that is no longer there and nothing is served. What that leaves on screen is a grey rectangle with
-     * no word on it - and no way to report it either, since the feedback button lives inside the very
-     * panel that is missing. This is that word.
+     * no word on it, and nothing inside the panel can explain it - the panel is the very thing missing.
+     * This is that word.
      */
     private fun buildStalledNotice(): JComponent =
+        notice(
+            AccBundle["webview.stalled.text"],
+            JButton(AccBundle["webview.stalled.restart"]).apply {
+                addActionListener { ApplicationManager.getApplication().restart() }
+            },
+        )
+
+    /**
+     * What is shown once the IDE's browser has stopped - see BrowserLoss.
+     *
+     * The person is not left guessing at a white rectangle, and the restart they would have arrived at
+     * anyway is one press away. The link is there because the fault is the IDE's: the issue is where a vote
+     * makes it go away for everyone.
+     */
+    private fun buildBrowserStoppedNotice(): JComponent =
+        notice(
+            AccBundle["webview.stopped.text"],
+            JButton(AccBundle["webview.stopped.restart"]).apply {
+                addActionListener { ApplicationManager.getApplication().restart() }
+            },
+            BrowserLink(AccBundle["webview.stopped.issue"], BROWSER_STOPPED_ISSUE),
+        )
+
+    /** What is shown once the page has died too many times in a row to be brought back by itself. */
+    private fun buildPageCrashedNotice(): JComponent =
+        notice(
+            AccBundle["webview.crashed.text"],
+            JButton(AccBundle["webview.crashed.reload"]).apply {
+                addActionListener { rebuildWebview() }
+            },
+        )
+
+    /** Words at the top of the panel, with whatever can be done about them below. */
+    private fun notice(text: String, vararg actions: JComponent): JComponent =
         JBPanel<JBPanel<*>>(BorderLayout()).apply {
             border = JBUI.Borders.empty(16)
 
             val column = JBPanel<JBPanel<*>>(null).apply {
                 layout = BoxLayout(this, BoxLayout.Y_AXIS)
                 add(
-                    JBLabel(AccBundle["webview.stalled.text"]).apply {
+                    JBLabel(text).apply {
                         setAllowAutoWrapping(true)
                         alignmentX = Component.LEFT_ALIGNMENT
                     },
                 )
-                add(Box.createVerticalStrut(JBUI.scale(12)))
-                add(
-                    JButton(AccBundle["webview.stalled.restart"]).apply {
-                        alignmentX = Component.LEFT_ALIGNMENT
-                        addActionListener { ApplicationManager.getApplication().restart() }
-                    },
-                )
+                for (action in actions) {
+                    add(Box.createVerticalStrut(JBUI.scale(12)))
+                    action.alignmentX = Component.LEFT_ALIGNMENT
+                    add(action)
+                }
             }
 
             add(column, BorderLayout.NORTH)
@@ -374,10 +462,11 @@ internal class CodexPanel(
      * The signal is a word from the page itself rather than the browser's own "loaded": a page served as
      * a 404 loads perfectly well and stays empty, which is precisely the failure being watched for here.
      */
-    private fun watchForSilence(parentDisposable: Disposable) {
-        val alarm = Alarm(Alarm.ThreadToUse.SWING_THREAD, parentDisposable)
+    private fun watchForSilence(hostLifetime: Disposable) {
+        val alarm = Alarm(Alarm.ThreadToUse.SWING_THREAD, hostLifetime)
         alarm.addRequest({
-            if (pageSpoke) return@addRequest
+            // A browser that stopped has its own words up already, and they are the true ones.
+            if (pageSpoke || BrowserLoss.happened) return@addRequest
 
             thisLogger().warn("The panel's interface never reported ready")
             DiagnosticsLog.note(DiagnosticsLog.PANEL, "interface silent for ${STALL_MS / 1000}s")
@@ -549,19 +638,24 @@ internal class CodexPanel(
             // than only to whoever asked: the setting is machine-wide, and a second window - or a phone -
             // left speaking the old language would be showing a setting that is no longer true.
             /*
-             * The two halves of the accounts screen that stay at this door, and the reason is no longer
-             * "a network client cannot reach it" - the rest of that screen has moved to SessionCommands,
+             * The parts of the accounts screen that stay at this door, and the reason is no longer "a
+             * network client cannot reach it" - the rest of that screen has moved to SessionCommands,
              * where a phone reaches it (see RemoteCommands).
              *
-             * These two end in a terminal window and a browser sign-in on THIS machine: adding an account
-             * runs `claude auth login` in a drawer of its own, and Claude Design is the same thing for its
-             * own credential. Neither can be finished from anywhere but the keyboard in front of them, so
-             * the door they are behind is the honest one.
+             * These end in a terminal window and a browser sign-in on THIS machine: adding an account runs
+             * `claude auth login` in a drawer of its own, signing a row in again runs it in that row's
+             * drawer, and Claude Design is the same thing for its own credential. None can be finished
+             * from anywhere but the keyboard in front of them, so the door they are behind is the honest
+             * one.
              */
             "accountAdd" -> hub.accounts.add()
 
             "accountCancel" -> hub.accounts.cancelAdd()
 
+            // Signing a row in again, and stopping the wait for it - a terminal and a browser here too.
+            "accountSignIn" -> hub.accounts.signInAgain(field("id"))
+
+            "accountSignInStop" -> hub.accounts.stopSignIn(field("id"))
 
             "setLanguage" -> {
                 CodexPreferences.language = field("language")
@@ -578,6 +672,25 @@ internal class CodexPanel(
             "setTextSize" -> {
                 CodexPreferences.textSize = payload["size"]?.jsonPrimitive?.intOrNull ?: CodexPreferences.TEXT_SIZE_FOLLOW
                 CodexPanels.everyPanel { it.appearanceChanged() }
+            }
+
+            "setFontFamily" -> {
+                CodexPreferences.fontFamily = field("font")
+                CodexPanels.everyPanel { it.appearanceChanged() }
+            }
+
+            // Every family the machine has, for the font screen (see FontFamilies in Appearance.tsx), which
+            // keeps the monospaced ones its browser can draw. Asked when the screen opens rather than sent with
+            // every typography, and off the interface thread: the first call reads every font file the
+            // system has.
+            "fontFamilies" -> ApplicationManager.getApplication().executeOnPooledThread {
+                val families = GraphicsEnvironment.getLocalGraphicsEnvironment().availableFontFamilyNames
+                webview?.send(
+                    buildJsonObject {
+                        put("type", "fontFamilies")
+                        putJsonArray("families") { families.forEach { add(it) } }
+                    }.toString(),
+                )
             }
 
             // What is being written in a tab's input field, and which tab is on screen - the two halves of
@@ -714,9 +827,6 @@ internal class CodexPanel(
                 )
             }
 
-            // Feedback. Handled here rather than by the conversation's commands on purpose: this is the
-            // one place a remote client cannot reach (see FeedbackDesk), and these messages read files
-            // off this machine and post them outwards.
             /*
              * The anonymous usage report: the answer to its question, and the report shown whole before it
              * is allowed. Both belong to this window rather than to the conversations - a machine's answer
@@ -741,13 +851,12 @@ internal class CodexPanel(
                 )
             }
 
+            // The feedback screen. Handled here rather than by the conversation's commands on purpose: this
+            // is the one place a remote client cannot reach (see FeedbackDesk), and the report is built
+            // out of a conversation's journal.
             "feedbackOpen" -> feedback.opened()
 
             "feedbackReport" -> feedback.report(field("sessionId"))
-
-            "feedbackAttach" -> feedback.attach()
-
-            "feedbackDetach" -> feedback.detach(field("id"))
 
             /*
              * Voice input. Handled here rather than by the conversation's commands for the same reason
@@ -768,6 +877,8 @@ internal class CodexPanel(
 
             "voiceDevice" -> voice.setDevice(field("device"))
 
+            "voiceTrainingOptOut" -> voice.setTrainingOptOut(payload["optOut"]?.jsonPrimitive?.booleanOrNull == true)
+
             "voiceKey" -> voice.setKey(field("key"))
 
             "voiceBalance" -> voice.refreshBalance()
@@ -777,14 +888,6 @@ internal class CodexPanel(
             "voiceStopCapture" -> voice.stopCapturing()
 
             "voiceClearHotkey" -> voice.clearHotkey(field("slot"))
-
-            "feedbackSend" -> feedback.send(
-                kind = field("kind"),
-                sessionId = field("sessionId"),
-                text = field("text"),
-                email = field("email"),
-                logs = payload["logs"]?.jsonPrimitive?.booleanOrNull == true,
-            )
 
             /**
              * A batch travelled into the page in pieces and did not survive the trip - see the bridge in
@@ -804,6 +907,20 @@ internal class CodexPanel(
             }
 
             "sessionInfo" -> sendSessionInfo(field("sessionId"))
+
+            /*
+             * The conversation into a terminal of this IDE, and back (see TerminalDesk). At the window's own door,
+             * like the sign-in terminals: what it opens is a terminal on THIS machine, and the person in front of
+             * it is the one who works in it. Off the interface thread: the checks read the disk, and the panel's
+             * process is taken down before the terminal's comes up.
+             */
+            "toTerminal" -> field("sessionId").takeIf { it.isNotEmpty() }?.let { sessionId ->
+                ApplicationManager.getApplication().executeOnPooledThread { hub.terminal.handOver(sessionId) }
+            }
+
+            "showTerminal" -> hub.terminal.show(field("sessionId"))
+
+            "fromTerminal" -> hub.terminal.takeBack(field("sessionId"))
 
             "channelLoss" -> {
                 val reason = field("reason")
@@ -1163,6 +1280,8 @@ internal class CodexPanel(
             buildJsonObject {
                 put("type", "typography")
                 put("monoFamily", typography.monoFamily)
+                put("consoleMonoFamily", typography.consoleMonoFamily)
+                put("fontFamily", typography.fontFamily)
                 put("uiFamily", typography.uiFamily)
                 put("lineHeight", typography.lineHeight)
                 // The three sizes the settings screen speaks of: what the console has, what the panel
@@ -1276,6 +1395,9 @@ internal class CodexPanel(
          * that nobody sits in front of an empty rectangle deciding the plugin is dead.
          */
         const val STALL_MS = 20_000
+
+        /** Where the IDE's own bug that stops its browser is tracked - see BrowserLoss. */
+        const val BROWSER_STOPPED_ISSUE = "https://youtrack.jetbrains.com/issue/JBR-10027"
 
     }
 }

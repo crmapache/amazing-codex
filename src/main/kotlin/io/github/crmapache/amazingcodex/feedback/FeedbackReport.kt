@@ -16,7 +16,8 @@ import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 /**
- * The debug report a person may attach to a piece of feedback - and the promise that goes with it.
+ * The debug report a person may copy into a pull request or a reply about a bug - and the promise that
+ * goes with it.
  *
  * The promise is that it carries technical facts only: what versions were in play, what shape the
  * conversation had, and anything that failed. Not what was asked, not what was answered, not which files
@@ -34,8 +35,8 @@ import java.util.concurrent.TimeUnit
  * its hash, exactly as the statistics already do it (see StatsCollector.hashOf): the same file reads as
  * the same file, and no hash says which one.
  *
- * The whole thing is shown to the person before it goes anywhere, and what they read is this string.
- * There is no second, fuller version for the wire.
+ * The whole thing is shown to the person before it goes anywhere, and what they read is this string:
+ * the copy button copies exactly what is on the screen, and there is no second, fuller version.
  */
 internal object FeedbackReport {
 
@@ -233,7 +234,7 @@ internal object FeedbackReport {
      *
      * The front is the environment, which is the part one reads first - so the cut is made inside the
      * conversation's outline instead, and says so where it cut. A long day at the keyboard should not
-     * turn a note about a button into a megabyte, and Telegram would not carry it anyway.
+     * turn a note about a button into a megabyte nobody would read.
      */
     private fun trimToBudget(report: String): String {
         if (report.length <= MAX_CHARS) return report
@@ -300,7 +301,7 @@ internal object FeedbackReport {
     private const val TROUBLE_HEAD = "--- what the plugin ran into ---"
     private const val CUT_NOTE = "(the earlier part of the outline was cut to keep this short)\n\n"
 
-    /** A ceiling a person can still read through, and one Telegram will carry as a file without fuss. */
+    /** A ceiling a person can still read through. */
     const val MAX_CHARS = 120_000
 
     /** How much of a reason is kept when a message brings one. */

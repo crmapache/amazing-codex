@@ -245,7 +245,7 @@ export interface UserItem {
   /**
    * Written into a turn that was still running. The CLI does not make such a message a turn of its own: it
    * hands it to the agent between two steps of the running one, so there is no clean "before" to cut the
-   * conversation back to - the rewind button stands disabled on it and says so (see UserCard).
+   * conversation back to - the rewind entry of its menu stands dead on it and says so (see feed/messageMenu.ts).
    */
   steering?: boolean
   /**
@@ -748,7 +748,8 @@ export interface FileChange {
  * Asked for by a person who read the end of an answer for the list of what had been touched: the cards
  * that did the editing stand far up the feed, folded into groups, and an answer names the files only when
  * the model happens to. Here the list is the same at the end of every turn, drawn from the calls rather than
- * from what the model chose to say. Subagents' edits are in it too (see noteChanges).
+ * from what the model chose to say - and, at the turn's end, from the disk: the IDE adds every file the turn changed
+ * that no call reported, by Bash or by a subagent (see settleChanges).
  */
 export interface ChangesItem {
   id: string
@@ -871,8 +872,11 @@ export interface SessionInfoItem {
   id: string
   kind: 'session'
   conversationId?: string
-  resume?: string
+  /** The line to paste into a terminal, as the IDE built it on the tab's account - see the `sessionInfo` message. */
+  command?: string
+  /** The added account the tab runs on, by name - for the note under the line. */
   account?: string
+  /** The line carries on on the ordinary sign-in rather than on [account] (Windows) - said under it. */
   onDefault?: boolean
 }
 

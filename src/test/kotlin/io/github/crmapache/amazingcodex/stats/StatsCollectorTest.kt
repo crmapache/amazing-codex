@@ -349,46 +349,20 @@ class StatsCollectorTest {
     }
 
     @Test
-    fun `a conversation's minutes add up to its longest stretch across the day's edge`() {
+    fun `a conversation's length is its minutes, pauses left out`() {
         collector.noteStatus("main", running = true)
         for (index in 0 until 30) {
             now += 60_000
             collector.noteStatus("main", running = true)
         }
-        // A long pause, then a short burst: the session grows, the stretch does not.
+        // A long pause, then a short burst: the pause is not the conversation's time.
         now += 60 * 60_000
         for (index in 0 until 5) {
             now += 60_000
             collector.noteStatus("main", running = true)
         }
 
-        val day = today()
-        assertEquals(36, day.longestSession)
-        assertEquals(31, day.longestStretch)
-    }
-
-    /**
-     * A pause shorter than the bridge is still the same stretch - a person reading the answer before
-     * writing the next message has not left - while a longer one starts a new one. The rule used to live
-     * in a helper of its own; it is carried along with the minutes now (see Conversation.mark).
-     */
-    @Test
-    fun `a short pause does not break a stretch and a long one does`() {
-        collector.noteStatus("main", running = true)
-        // Five minutes of silence: bridged, so the stretch runs on across them.
-        now += 5 * 60_000
-        collector.noteStatus("main", running = true)
-        now += 60_000
-        collector.noteStatus("main", running = true)
-
-        assertEquals(7, today().longestStretch)
-
-        // Seven minutes is past the bridge: a new stretch begins, and the longest stays what it was.
-        now += 7 * 60_000
-        collector.noteStatus("main", running = true)
-
-        assertEquals(7, today().longestStretch)
-        assertEquals(4, today().longestSession)
+        assertEquals(36, today().longestSession)
     }
 
     @Test
@@ -408,7 +382,7 @@ class StatsCollectorTest {
 
         assertTrue(payload.contains("\"type\":\"statistics\""))
         assertTrue(payload.contains("\"key\":\"p-test\""))
-        assertTrue(payload.contains("\"id\":\"hours-in-panel\""))
+        assertTrue(payload.contains("\"id\":\"lines-written\""))
         assertTrue(payload.contains("\"date\":\"2026-08-26\""))
     }
 
@@ -486,6 +460,20 @@ class StatsCollectorTest {
         assertEquals(1, day.models["GPT-5.6 Sol"])
         assertNull(day.models["<synthetic>"])
         assertEquals(setOf("GPT-5.6 Sol"), day.models.keys)
+    }
+
+    @Test
+    fun `a proxy's placeholder signature does not take the turn from the model that worked`() {
+        collector.noteLine("main", toolUse("t1", "Read", """{"file_path":"src/app.ts"}"""))
+        collector.noteLine("main", toolResult("t1"))
+        // Some proxies sign part of their answers with the bare word "custom" (PR #25).
+        collector.noteLine(
+            "main",
+            """{"type":"assistant","message":{"model":"custom","content":[{"type":"text","text":"Done."}]}}""",
+        )
+        collector.noteLine("main", result(durationMs = 3_000))
+
+        assertEquals(setOf("GPT-5.6 Sol"), today().models.keys)
     }
 
     @Test

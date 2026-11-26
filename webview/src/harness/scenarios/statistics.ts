@@ -1,16 +1,16 @@
 import type { AchievementState, StatisticsData, StatisticsDay } from '../../protocol'
 import { ACHIEVEMENTS } from '../../stats/catalogue'
-import { addDays, dayOf, weekday } from '../../stats/dates'
+import { addDays, dayNumber, dayOf, weekday } from '../../stats/dates'
 import { bootstrap, checkpoint, scenario, shell } from '../events'
 import type { Scenario, ScenarioStep } from '../types'
 
 /**
  * The statistics tab with a summer's worth of figures behind it - enough of them for every tile, the
- * chart, the calendar and the achievements screen to have something to show.
+ * bars, the calendar and the achievements screen to have something to show.
  *
  * The figures are made up, deliberately and repeatably: the same noise every run, so a screenshot of a
  * checkpoint today matches one from tomorrow. The dates are counted back from today, so the calendar
- * always ends on this week and the chart's last point is the present.
+ * always ends on this week and the last bar is the present hour.
  */
 
 /** The same "random" every time - a hash rather than Math.random, so a run is repeatable. */
@@ -26,6 +26,7 @@ const DAYS = 130
 
 const today = dayOf(Date.now())
 
+/** A day's minutes of work spread over its hours - what the made-up tokens are spent along. */
 const hoursOf = (minutes: number, seed: number): number[] => {
   const hours = Array.from({ length: 24 }, () => 0)
   let left = minutes
@@ -63,7 +64,6 @@ const day = (offset: number): StatisticsDay | null => {
   return {
     date,
     minutes,
-    hours: hoursOf(minutes, offset * 7),
     turns,
     prompts: turns,
     sessions: 1 + Math.round(noise(offset + 3) * 3),
@@ -106,7 +106,6 @@ const day = (offset: number): StatisticsDay | null => {
     mcpConnected: 4,
     plugins: 6,
     longestSession: 40 + Math.round(noise(offset + 97) * 130),
-    longestStretch: 20 + Math.round(noise(offset + 101) * 70),
     maxForksInTree: noise(offset + 103) > 0.9 ? 3 : 1,
     maxDepth: noise(offset + 107) > 0.95 ? 3 : 1,
   }
@@ -114,21 +113,29 @@ const day = (offset: number): StatisticsDay | null => {
 
 const days = Array.from({ length: DAYS }, (_, offset) => day(offset)).filter((entry): entry is StatisticsDay => entry !== null)
 
+/** The hour it is now - today's tokens stop there, as the real ones do. */
+const hourNow = new Date().getHours()
+
 /**
- * The tokens of the same days, hour by hour - a few million for every minute in the panel, and on some
- * nights a scenario run grinding on with nobody at the keyboard, the way the real figures look.
+ * The tokens of the same days, hour by hour - a few million for every minute of work, and on some nights a
+ * scenario run grinding on with nobody at the keyboard, the way the real figures look.
  */
-const tokensOf = (entry: StatisticsDay, offset: number): number[] =>
-  entry.hours.map((minutes, hour) => {
+const tokensOf = (entry: StatisticsDay, offset: number): number[] => {
+  const back = dayNumber(today) - dayNumber(entry.date)
+  return hoursOf(entry.minutes, back * 7).map((minutes, hour) => {
+    if (entry.date === today && hour > hourNow) return 0
     const atWork = minutes * (4_000_000 + noise(offset * 31 + hour) * 9_000_000)
     const running = hour < 6 && noise(offset * 17 + hour + 400) > 0.8
     const overnight = running ? 60_000_000 + noise(offset + hour) * 140_000_000 : 0
     return Math.round(atWork + overnight)
   })
+}
 
 const tokens: Record<string, number[]> = Object.fromEntries(
   days.map((entry, offset) => [entry.date, tokensOf(entry, offset)]),
 )
+
+const dayTokens = (date: string): number => (tokens[date] ?? []).reduce((total, value) => total + value, 0)
 
 const OTHER_PROJECTS = [
   { key: 'p-api', name: 'nimbus-api', share: 0.55 },
@@ -139,29 +146,24 @@ const OTHER_PROJECTS = [
   { key: 'p-dotfiles', name: 'dotfiles', share: 0.04 },
   { key: 'p-game', name: 'weekend-game', share: 0.03 },
   { key: 'p-scripts', name: 'scripts', share: 0.02 },
+  // Never opened in the IDE: a repository only ever worked on from a terminal still spends tokens.
+  { key: 'p-trial', name: 'checkout-trial-run', share: 0.12 },
 ]
 
-/**
- * Where the hours went, project by project - shares of the day the tab counts as a whole.
- *
- * A share rather than the whole of it, this project included: a day of two hours with two agents running
- * is two hours of a person's life and rather more than two hours of project time, so these add up to
- * more than the days do. That is the shape of the real thing (see StatisticsData.days) and worth having in
- * the sandbox, because it is the shape the tab used to get wrong.
- */
+/** Where the tokens went, project by project - shares of each day's tokens, this project taking the most. */
 const projects = [
   {
     key: 'p-this',
     name: 'nimbus-checkout',
-    minutes: Object.fromEntries(days.map((entry, offset) => [entry.date, Math.round(entry.minutes * (0.45 + noise(offset + 211) * 0.35))])),
+    tokens: Object.fromEntries(days.map((entry, offset) => [entry.date, Math.round(dayTokens(entry.date) * (0.45 + noise(offset + 211) * 0.35))])),
   },
   ...OTHER_PROJECTS.map((project, index) => ({
     key: project.key,
     name: project.name,
-    minutes: Object.fromEntries(
+    tokens: Object.fromEntries(
       days
         .filter((_, offset) => noise(offset * 3 + index * 101) > 0.3)
-        .map((entry, offset) => [entry.date, Math.round(entry.minutes * project.share * (0.5 + noise(offset + index * 7)))]),
+        .map((entry, offset) => [entry.date, Math.round(dayTokens(entry.date) * project.share * (0.5 + noise(offset + index * 7)))]),
     ),
   })),
 ]
@@ -179,10 +181,6 @@ const PICTURE: Record<string, [number, number, number | undefined]> = {
   'two-hundred': [3, 96, 200],
   'a-year-in': [4, 341, 365],
   'home-for-the-holidays': [2, 2, 5],
-  'hours-in-panel': [2, 6765, 60000],
-  'deep-work': [4, 105, 120],
-  marathon: [3, 171, 240],
-  'full-day': [3, 260, 360],
   sprint: [3, 13, 15],
   'quick-turn': [3, 210, 250],
   'long-haul': [3, 14, 25],
@@ -274,12 +272,17 @@ const freshFigures: StatisticsData = {
   ide: 'WebStorm',
   devicesPaired: 0,
   project: { key: 'p-this', name: 'nimbus-checkout' },
-  projects: [{ key: 'p-this', name: 'nimbus-checkout', minutes: { [today]: 42, [addDays(today, -1)]: 18 } }],
+  projects: [
+    {
+      key: 'p-this',
+      name: 'nimbus-checkout',
+      tokens: { [today]: 42 * 3_000_000, [addDays(today, -1)]: 18 * 2_000_000 },
+    },
+  ],
   days: [
     {
       date: addDays(today, -1),
       minutes: 18,
-      hours: hoursOf(18, 3),
       turns: 3,
       prompts: 3,
       sessions: 1,
@@ -301,7 +304,6 @@ const freshFigures: StatisticsData = {
     {
       date: today,
       minutes: 42,
-      hours: hoursOf(42, 5),
       turns: 7,
       prompts: 7,
       sessions: 2,
@@ -324,7 +326,7 @@ const freshFigures: StatisticsData = {
   ],
   tokens: {
     [addDays(today, -1)]: hoursOf(18, 3).map((minutes) => minutes * 2_000_000),
-    [today]: hoursOf(42, 5).map((minutes) => minutes * 3_000_000),
+    [today]: hoursOf(42, 5).map((minutes, hour) => (hour > hourNow ? 0 : minutes * 3_000_000)),
   },
   achievements: ACHIEVEMENTS.map((spec): AchievementState => {
     const steps = spec.milestone ? 1 : (spec.steps ?? 5)
@@ -332,8 +334,8 @@ const freshFigures: StatisticsData = {
     if (done) {
       return { id: spec.id, tier: steps, steps, value: done[1] as number, line: done[1] as number, earned: { '5': Date.now() - 3_600_000 } }
     }
-    // A day and a half in: the first hour is behind, the second line is a long way off.
-    if (spec.id === 'hours-in-panel') return { id: spec.id, tier: 1, steps, value: 96, line: 60, target: 600, earned: { '1': Date.now() - 86_400_000 } }
+    // A day and a half in: the first steps are behind, the next lines a long way off.
+    if (spec.id === 'quick-turn') return { id: spec.id, tier: 0, steps, value: 6, target: 25, earned: {} }
     if (spec.id === 'reader') return { id: spec.id, tier: 0, steps, value: 42, target: 50, earned: {} }
     if (spec.id === 'shell') return { id: spec.id, tier: 0, steps, value: 9, target: 25, earned: {} }
     return { id: spec.id, tier: 0, steps, value: 0, target: 1, earned: {} }
@@ -344,9 +346,16 @@ const fresh: ScenarioStep = shell({ type: 'statistics', ...freshFigures })
 
 /**
  * The same, a moment after the update: the IDE is still on its first reading of the transcripts, so
- * there are no tokens yet and the tokens card says it is counting rather than "nothing spent".
+ * there are no tokens yet - by day or by project - and the cards say they are counting rather than
+ * "nothing spent".
  */
-const freshCounting: ScenarioStep = shell({ type: 'statistics', ...freshFigures, tokens: {}, tokensReading: true })
+const freshCounting: ScenarioStep = shell({
+  type: 'statistics',
+  ...freshFigures,
+  projects: freshFigures.projects.map((project) => ({ ...project, tokens: {} })),
+  tokens: {},
+  tokensReading: true,
+})
 
 export const scenariosStatistics: Scenario[] = [
   scenario('statistics-summer', 'Statistics: a summer of work', 'system', [

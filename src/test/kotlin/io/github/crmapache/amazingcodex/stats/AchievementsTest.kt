@@ -19,13 +19,13 @@ class AchievementsTest {
         StatsSnapshot().apply { days.forEach { (date, record) -> project(project, "x").days[date] = record } }
 
     @Test
-    fun `there are forty-six of them, ids unique`() {
-        assertEquals(46, Achievements.ALL.size)
-        assertEquals(46, Achievements.IDS.toSet().size)
+    fun `there are forty-two of them, ids unique`() {
+        assertEquals(42, Achievements.ALL.size)
+        assertEquals(42, Achievements.IDS.toSet().size)
     }
 
     @Test
-    fun `the interface names the same forty-six in the same order`() {
+    fun `the interface names the same forty-two in the same order`() {
         // The words live in the interface, the rules here; the ids are what ties the two together.
         val catalogue = File("webview/src/stats/catalogue.ts").readText()
         // An achievement's id sits two levels in; a group's, one level in - the indent tells them apart.
@@ -103,7 +103,7 @@ class AchievementsTest {
                 tools["Grep"] = 2
                 tools["Glob"] = 1
                 slash.addAll(listOf("compact", "not-a-builtin"))
-                longestStretch = 40
+                maxTurnsInHour = 40
                 forks = 2
                 maxDepth = 2
             }
@@ -113,7 +113,7 @@ class AchievementsTest {
                 linesAdded = 700
                 tools["Read"] = 1
                 slash.add("clear")
-                longestStretch = 25
+                maxTurnsInHour = 25
                 forks = 1
             }
         }
@@ -124,10 +124,9 @@ class AchievementsTest {
         assertEquals(6, metrics.reads)
         assertEquals(3, metrics.searches)
         assertEquals(2, metrics.slashCommands)
-        assertEquals(40, metrics.longestStretch)
+        assertEquals(40, metrics.maxTurnsInHour)
         assertEquals(3, metrics.forks)
         assertEquals(2, metrics.maxDepth)
-        assertEquals(3, metrics.minutes)
         assertEquals(2, metrics.activeDays)
         assertEquals(2, metrics.bestStreak)
         assertEquals(2, metrics.daysSinceFirst)
@@ -137,9 +136,9 @@ class AchievementsTest {
     @Test
     fun `a tier already written down is not taken back by a smaller figure`() {
         val book = StatsSnapshot().apply {
-            project("p-1", "one").days["2026-08-26"] = DayRecord().apply { repeat(130) { minutes.mark(it) } }
-            // Ten thousand hours were once counted here, and every tier of the panel's hours written down.
-            earned["hours-in-panel"] = TreeMap((1..5).associateWith { 1_000L })
+            project("p-1", "one").days["2026-08-26"] = DayRecord().apply { linesAdded = 60_000 }
+            // A hundred million lines were once counted here, and every tier of them written down.
+            earned["lines-written"] = TreeMap((1..5).associateWith { 1_000L })
         }
 
         val states = Achievements.evaluate(
@@ -148,16 +147,16 @@ class AchievementsTest {
             earned = book.earned.mapValues { (_, tiers) -> tiers.keys.max() },
         )
 
-        val hours = states.first { it.id == "hours-in-panel" }
-        assertEquals(5, hours.tier)
+        val lines = states.first { it.id == "lines-written" }
+        assertEquals(5, lines.tier)
         // The figure beside it is the truth as it stands, and there is no line left above the fifth.
-        assertEquals(130, hours.value)
-        assertNull(hours.target)
+        assertEquals(60_000, lines.value)
+        assertNull(lines.target)
 
-        // Without the floor the same book stands where the figure puts it: two hours in, ten to go.
-        val bare = Achievements.evaluate(book, LocalDate.parse("2026-08-26")).first { it.id == "hours-in-panel" }
+        // Without the floor the same book stands where the figure puts it: past the first line, short of the second.
+        val bare = Achievements.evaluate(book, LocalDate.parse("2026-08-26")).first { it.id == "lines-written" }
         assertEquals(1, bare.tier)
-        assertEquals(600, bare.target)
+        assertEquals(350_000, bare.target)
     }
 
     @Test
@@ -166,7 +165,7 @@ class AchievementsTest {
 
         val states = Achievements.evaluate(book, LocalDate.parse("2026-08-26"))
 
-        assertEquals(46, states.size)
+        assertEquals(42, states.size)
         // Eighteen thousand lines is a good start and no more: the first line stands at fifty thousand.
         val lines = states.first { it.id == "lines-written" }
         assertEquals(0, lines.tier)

@@ -9,8 +9,11 @@ import java.util.Base64
  * Time in the panel is counted this way rather than as a running total of seconds: a minute is either
  * active or it is not, and marking the same minute twice costs nothing. That is what makes the sources
  * easy to add up - a turn running, a message sent, a hand on the keyboard - without one of them counting
- * a moment the other has already counted. The hour-of-day breakdown the calendar draws falls out of the
- * same bits for free.
+ * a moment the other has already counted.
+ *
+ * The statistics tab no longer shows the time itself - a panel left open says little about the work, and
+ * the tokens say it better. The minutes still decide which days were worked (see DayRecord.isActive), and
+ * the anonymous usage report reads its sittings off them (see UsageReport).
  */
 internal class MinuteSet private constructor(private val bits: BitSet) {
 
@@ -25,20 +28,8 @@ internal class MinuteSet private constructor(private val bits: BitSet) {
 
     fun isEmpty(): Boolean = bits.isEmpty
 
-    /** Active minutes per hour of the day - the calendar's "between 10:00 and 13:00" is read off this. */
-    fun hours(): IntArray {
-        val out = IntArray(24)
-        var minute = bits.nextSetBit(0)
-        while (minute >= 0) {
-            out[minute / 60]++
-            minute = bits.nextSetBit(minute + 1)
-        }
-        return out
-    }
-
     /**
-     * Every set minute, in order. The ledger turns these into the longer-running counts a day cannot
-     * hold on its own (a conversation's unbroken stretch crosses midnight).
+     * Every set minute, in order - what the usage report cuts into a day's sittings.
      */
     fun minutes(): IntArray {
         val out = IntArray(count())

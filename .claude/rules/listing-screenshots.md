@@ -35,8 +35,12 @@ compose]`. Оркестратор ставит Playwright в `/tmp/acx-shots`, �
 
 **Порядок внутри `shoot.mjs`.** При закрытой песочнице: демо-проект, `phone-shots.mjs reset` (забыть чаты
 прошлого дубля: иначе песочница вернёт их вкладки и разбудит процессы), `sandbox-stage.mjs set`. Потом
-`pnpm dev` в `webview/`, релей и телефонный клиент, песочница с `-PwebviewDevUrl`, `-PjcefDebugPort=4452` и
-`-PremoteRelay`, 45 секунд на индексацию, камеры, `compose.mjs`, уборка и `sandbox-stage.mjs restore`.
+`pnpm dev` в `webview/`, релей и телефонный клиент, песочница через `scripts/agent-sandbox.sh start` с
+`-PwebviewDevUrl` и `-PremoteRelay` (CDP на `4452`, проект - `ACX_SANDBOX_PROJECT`, журнал -
+`build/sandbox-agent.log`), 45 секунд на индексацию, камеры, `compose.mjs`, уборка (`agent-sandbox.sh stop`) и
+`sandbox-stage.mjs restore`. Окно встаёт на экран, где нет курсора человека (сначала встроенный экран
+ноутбука), и `ide-shots.mjs` ставит его в левый верхний угол того же экрана: съёмка не закрывает работу
+человека и не забирает его клавиатуру (CLAUDE.md, «Окна агента»).
 
 - **Кадр IDE - это харнесс внутри настоящей панели.** Камера по CDP уводит панель на
   `harness.html?shot=<id>`, окно снимается `screencapture -l` по id окна (`window.swift`), никогда не

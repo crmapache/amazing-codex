@@ -27,6 +27,16 @@ class ModelNamesTest {
     }
 
     @Test
+    fun `a signature that names no model is not a model`() {
+        assertTrue(ModelNames.isModel("gpt-5.6-sol"))
+        assertTrue(ModelNames.isModel("deepseek-ai/DeepSeek-V4.1-Flash-1017"))
+        assertFalse(ModelNames.isModel("<synthetic>"))
+        assertFalse(ModelNames.isModel("custom"))
+        assertFalse(ModelNames.isModel("Custom"))
+        assertFalse(ModelNames.isModel(""))
+    }
+
+    @Test
     fun `a catalogue holds exactly the models it names`() {
         val catalogue = setOf("gpt-5.6-sol", "gpt-5.1-codex-max")
 

@@ -21,7 +21,7 @@ export const isStatusCommand = (text: string): boolean => text.trim() === '/stat
 export const sessionInfoAction = (message: Extract<ShellMessage, { type: 'sessionInfo' }>): PanelAction => ({
   kind: 'sessionInfo',
   conversationId: message.conversationId,
-  ...(message.resume ? { resume: message.resume } : {}),
+  ...(message.command ? { command: message.command } : {}),
   ...(message.account ? { account: message.account } : {}),
   ...(message.onDefault ? { onDefault: true } : {}),
 })
@@ -30,7 +30,7 @@ export const sessionInfoAction = (message: Extract<ShellMessage, { type: 'sessio
  * The line that continues the conversation in a terminal: the IDE's own when it named one - a tab on an added
  * account has the account's drawer in front of the command (see ResumeLine.kt) - and `codex resume <id>` otherwise.
  */
-export const resumeCommand = (item: SessionInfoItem): string => item.resume ?? `codex resume ${item.conversationId ?? ''}`
+export const resumeCommand = (item: SessionInfoItem): string => item.command ?? `codex resume ${item.conversationId ?? ''}`
 
 /**
  * What the caption under the line says: where to run it, and on which account it runs. A tab on an added account is
@@ -39,7 +39,8 @@ export const resumeCommand = (item: SessionInfoItem): string => item.resume ?? `
  * billed to the other subscription unannounced.
  */
 export const resumeNote = (item: SessionInfoItem, words: Dict['feed']['session']): string => {
-  const account = item.account ?? words.unnamedAccount
-  if (item.onDefault) return words.terminalNoteDefault(account)
-  return item.account ? words.terminalNoteOn(item.account) : words.terminalNote
+  // An account the IDE could not name is "this tab's account" in the words themselves (an empty name).
+  if (item.account === undefined && !item.onDefault) return words.terminalNote
+  const name = item.account ?? ''
+  return item.onDefault ? words.terminalNoteDefault(name) : words.terminalNoteAccount(name)
 }

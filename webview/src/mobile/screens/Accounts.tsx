@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { AccountInfo, UsageWindow } from '../../protocol'
+import { lostSignIn } from '../../feed/accounts'
 import type { UsageFacts } from '../../feed/usage'
 import { FIVE_HOUR_MS, MONTH_MS, WEEK_MS, paceColor, spendingWindow, timeLeft, usableAgainIn } from '../../feed/usage'
 import { useTicking } from '../../hooks/useTicking'
@@ -168,6 +169,7 @@ export const Accounts = ({
             {state.accounts.map((account) => {
               const current = account.id === state.current
               const facts = usage(account.id)
+              const lost = lostSignIn(account)
 
               return (
                 <div key={account.id} className={m.accountRow}>
@@ -175,7 +177,9 @@ export const Accounts = ({
                     <span className={`${m.dot} ${current ? m.dotLive : account.health === 'absent' ? m.dotCrashed : ''}`} />
                     <span className={m.accountName}>{shortName(account, t)}</span>
                     {current && <span className={m.accountCurrent}>{t.accounts.current}</span>}
-                    {account.pending && <span className={m.accountPending}>{t.accounts.signingIn}</span>}
+                    {(account.pending === true || account.signingIn === true) && (
+                      <span className={m.accountPending}>{t.accounts.signingIn}</span>
+                    )}
                   </div>
 
                   {/* The plan and the address on one line, in that order and on every row: a shape
@@ -216,7 +220,11 @@ export const Accounts = ({
                       asked about the account that is not in use (see usableAgainIn). */}
                   <UsableAgain facts={facts} now={now} />
 
-                  {account.health === 'absent' && <p className={m.noteBad}>{t.accounts.absent}</p>}
+                  {/* The way back in is a terminal and a browser at the desk, so the phone says where it is
+                      rather than drawing a button that cannot be finished from here. */}
+                  {account.health === 'absent' && (
+                    <p className={m.noteBad}>{lost ? t.mobile.accounts.signInAtDesk : t.accounts.absent}</p>
+                  )}
 
                   {renaming === account.id ? (
                     <div className={m.formActions}>
@@ -241,8 +249,9 @@ export const Accounts = ({
                   ) : (
                     <div className={m.accountActions}>
                       {/* Not on a sign-in still in flight: its drawer is empty, so everything moved onto
-                          it would come up signed out. The IDE refuses it as well. */}
-                      {!current && account.pending !== true && (
+                          it would come up signed out. The IDE refuses it as well. Not on a row whose
+                          credential is gone either - the same rule as the panel's (see lostSignIn). */}
+                      {!current && account.pending !== true && !lost && (
                         <button
                           type="button"
                           className={m.rowButtonPrimary}
@@ -275,8 +284,9 @@ export const Accounts = ({
                         Claude Code already had has no drawer, so the only removal it has is ending the
                         session, and that revokes the credential at Anthropic: every machine the person
                         is signed in on goes with it. The second question says so in as many words.
+                        Signed out already, there is nothing to revoke, and Forget only takes its row off.
                       */}
-                      {account.isDefault === true ? (
+                      {account.isDefault === true && !lost ? (
                         <button
                           type="button"
                           className={m.rowButtonDanger}
@@ -291,7 +301,13 @@ export const Accounts = ({
                           type="button"
                           className={m.rowButtonDanger}
                           onClick={() => {
-                            if (window.confirm(t.mobile.accounts.forgetAsk(shortName(account, t)))) {
+                            // The signed-out ordinary sign-in has no credential to remove, so its question
+                            // says what really happens: the row goes, and nothing is revoked.
+                            const ask =
+                              account.isDefault === true
+                                ? t.mobile.accounts.forgetSignedOutAsk(shortName(account, t))
+                                : t.mobile.accounts.forgetAsk(shortName(account, t))
+                            if (window.confirm(ask)) {
                               onForget(account.id)
                             }
                           }}

@@ -64,11 +64,24 @@ internal class FakeCodex : AutoCloseable {
             if (value) steersFile.writeText("yes") else steersFile.delete()
         }
 
+    private val predictionsFile = File(directory, "no-predictions")
+
+    /**
+     * Whether `thread/prediction/request` is answered - by default it is, with an empty result. Off, it is answered
+     * the way Codex 0.163 answers it: "not implemented yet" (measured).
+     */
+    var answersPredictions: Boolean = true
+        set(value) {
+            field = value
+            if (value) predictionsFile.delete() else predictionsFile.writeText("no")
+        }
+
     private val executableBefore = CodexPreferences.executablePath
 
     init {
         script.writeText(
-            SCRIPT.replace(LOG_MARK, log.absolutePath).replace(TIER_MARK, tierFile.absolutePath).replace(STEERS_MARK, steersFile.absolutePath),
+            SCRIPT.replace(LOG_MARK, log.absolutePath).replace(TIER_MARK, tierFile.absolutePath).replace(STEERS_MARK, steersFile.absolutePath)
+                .replace(PREDICTIONS_MARK, predictionsFile.absolutePath),
         )
         script.setExecutable(true)
         CodexPreferences.executablePath = script.absolutePath
@@ -120,6 +133,7 @@ internal class FakeCodex : AutoCloseable {
         private const val LOG_MARK = "@LOG@"
         private const val TIER_MARK = "@TIER@"
         private const val STEERS_MARK = "@STEERS@"
+        private const val PREDICTIONS_MARK = "@PREDICTIONS@"
 
         /**
          * Codex's app-server, as far as a conversation needs one. Our client writes `method` and then `id` first in
@@ -150,6 +164,9 @@ internal class FakeCodex : AutoCloseable {
                 turn/steer)
                   if [ -f '$STEERS_MARK' ]; then printf '{"id":%s,"result":{}}\n' "${'$'}id"
                   else printf '{"id":%s,"error":{"code":-32600,"message":"This turn cannot be steered."}}\n' "${'$'}id"; fi ;;
+                thread/prediction/request)
+                  if [ -f '$PREDICTIONS_MARK' ]; then printf '{"id":%s,"error":{"code":-32601,"message":"thread/prediction/request is not implemented yet"}}\n' "${'$'}id"
+                  else printf '{"id":%s,"result":{}}\n' "${'$'}id"; fi ;;
                 *) printf '{"id":%s,"result":{}}\n' "${'$'}id" ;;
               esac
             done
@@ -209,6 +226,10 @@ internal class FakeCodex : AutoCloseable {
         /** What Codex says when a turn moved the thread to [model] (`thread/settings/updated`, 0.163). */
         fun modelChanged(thread: String, model: String): String =
             """{"method":"thread/settings/updated","params":{"threadId":"$thread","threadSettings":{"model":"$model"}}}"""
+
+        /** Codex's guess at the next message after [turn] (`thread/prediction/updated`). */
+        fun predicted(thread: String, turn: String, text: String): String =
+            """{"method":"thread/prediction/updated","params":{"threadId":"$thread","sourceTurnId":"$turn","result":{"type":"completed","text":"$text"}}}"""
 
         /** An answer of the agent's, complete (`item/completed` of an `agentMessage`). */
         fun answered(thread: String, turn: String, item: String, text: String): String =

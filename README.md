@@ -63,19 +63,21 @@ The short version, in full in [PRIVACY.md](PRIVACY.md):
 - **The agent runs on your machine.** The plugin starts the Codex CLI and talks to it over
   its standard input and output. No proxy in between and no server of ours your conversation
   passes through. Your sign-in belongs to Codex: the plugin never sends it anywhere.
-- **Nothing is sent unless you say so.** No account, no analytics behind your back.
-  Anonymous usage statistics stay off until you press Allow on the card that asks once -
-  counts of features and minutes, never your code, messages, file names or who you are - and
-  the settings show the whole report and switch it off. With that off and remote access off,
-  the only thing that ever leaves the machine is a feedback report you write and send
-  yourself.
+- **No account, and no analytics unless you allow them.** The panel asks once whether it may
+  send anonymous daily counts of how it is used (which features, how often, how long) - never
+  your code, messages, file names or who you are - and sends nothing until you press Allow.
+  The settings show the whole report and switch it off. Apart from that, nothing leaves the
+  machine while remote access is off.
 - **Your config stays yours.** The approval policy and the sandbox a thread runs with are
   exactly the mode shown under the input field, and everything else - models, MCP servers,
   skills, custom prompts, project docs - comes from your own `~/.codex`.
 - **Questions have no deadline.** No timer, no auto-answer: the turn stands still until a
   human decides.
 - **Remote access is off** until you turn it on, and even then the relay carries sealed
-  envelopes it cannot read.
+  envelopes it cannot read - see "Remote access from your phone".
+- **The debug report is built from a whitelist,** not copied out of your conversation,
+  and the plugin never sends it: you read it whole and copy it yourself - see "Asking for a
+  change".
 - **Source available** under the Elastic License 2.0: everything above can be checked
   rather than believed.
 
@@ -199,16 +201,30 @@ your phone, confirm the pairing in the IDE. What a phone may and may not do is e
 your machine (`remote/RemoteCommands.kt`), and the relay carries sealed envelopes it cannot
 read. See `PRIVACY.md`.
 
-## Telling the author something
+## Asking for a change
 
-The speech bubble beside the heart opens a form: a bug, an idea, or nothing in particular,
-with an optional address, files, and a technical debug report you can read in full before
-sending. See `PRIVACY.md` for exactly what it contains.
+The plugin is built by one person, and it takes a large share of that person's subscription and time.
+So it no longer takes messages: the speech bubble beside the heart (and **Feedback** in the menu) opens a
+screen that names the two ways a change gets in. You can leave a tip on
+[Ko-fi](https://ko-fi.com/mzpizote) and write in the message what you would like - I'll build it. Or you
+can make the change yourself and open a pull request here; I'll review it and may merge it. "Running it"
+below covers building the plugin from source.
+
+The same screen still offers a debug report for the open tab, for a pull request about a bug or for when
+I ask about one. It is technical only - the plugin's version, the IDE and its build, the operating system,
+the version of Codex, and an outline of what the tab did: which tool ran, how many bytes went in and came
+back, what failed and when. No messages, no answers, no file contents, no commands, no paths, no project
+name; file names appear as short hashes, so the same file reads as the same file without saying which
+one. The plugin never sends it: the screen shows the whole string, and Copy copies exactly that.
+
+Older versions of the plugin had a form here that posted to a small service
+(`feedback-service/` in this repository). That service now answers the old form with the same two ways
+and forwards nothing.
 
 ## Saying thanks
 
 The plugin is free and built by one person. If it saves you time, a tip on Ko-fi lets me spend more
-hours on it. Bug reports and ideas help just as much.
+hours on it, and the message with the tip is the place to say what you would like changed.
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/K7R4280V03)
 

@@ -2,9 +2,12 @@ import { RevealProvider } from 'smooth-stream-text/react'
 import { paragraphsText } from '../../feed/markdown'
 import { useT } from '../../i18n'
 import type { TextItem } from '../../feed/types'
+import { messageMenu } from '../../feed/messageMenu'
 import { CopyButton } from './CopyButton'
 import { PinButton } from './PinButton'
 import { MoreButton } from './MoreButton'
+import { CardMenu } from './CardMenu'
+import { messageActionIcon } from './UserCard'
 import { Markdown } from './Markdown'
 import s from '../feed.module.css'
 
@@ -14,15 +17,16 @@ interface TextCardProps {
   onOpenLink: (url: string) => void
   /**
    * Pin this answer over the conversation, or unpin it (see feed/pins.ts). Absent where there is no strip
-   * to pin it to - the phone, the same way the reuse button is absent from a message of one's own.
+   * to pin it to - the phone, the same way putting a message of one's own back into the field is absent there.
    */
   onPin?: () => void
   pinned: boolean
   /** Whether the strip is already full - the hint says so before the press (see PinButton). */
   pinsFull: boolean
   /**
-   * Everything else this answer can do, behind three dots (see MoreButton). Handed in by the phone
-   * alone: at the desk each of those actions has a better home than a menu.
+   * Everything else this answer can do, in the phone's sheet behind the three dots (see MessageSheet).
+   * Handed in by the phone alone; at the desk the same dots open the card's own menu (see
+   * feed/messageMenu.ts), which for an answer holds the pin and nothing else.
    */
   onActions?: () => void
 }
@@ -103,16 +107,42 @@ export const TextCard = ({ item, onOpenLink, onPin, pinned, pinsFull, onActions 
   )
   const reveal = length <= REVEAL_LIMIT
 
+  /*
+   * The same menu a message of one's own has, with the one entry an answer can use. A menu of one is asked
+   * for on purpose: every card in the feed then has the same corner - copy, and the dots - rather than an
+   * answer wearing a pin where a message wears dots.
+   */
+  const menu = onPin
+    ? messageMenu(t, { reuse: null, pin: { pinned, full: pinsFull }, rewind: null }).map((option) => ({
+        ...option,
+        icon: messageActionIcon[option.id](pinned),
+      }))
+    : []
+
   return (
-    <div className={onPin ? `${s.text} ${s.textPinnable}` : s.text} data-copyable>
-      {/* In the corner where the copy button has always stood, and beside it rather than instead of it.
+    <div className={onPin ? `${s.text} ${s.textWithMenu} ${pinned ? s.textPinned : ''}` : s.text} data-copyable>
+      {/* In the corner where the copy button has always stood, with the dots beside it - and, while the
+          answer is pinned, the lit pin before it, the way a message of one's own has it (see UserCard).
           The card has no head to hang them off (a message of one's own has one - see .userActions), so
-          the room for them is the card's own right padding, and the second button widens it: hence
-          .textPinnable, rather than paying for a button that is not there on every answer. */}
+          the room for them is the card's own right padding, widened for what is there: .textWithMenu,
+          .textPinned. */}
       <div className={s.textActions}>
-        {onPin ? <PinButton pinned={pinned} full={pinsFull} className={s.textAction} onPin={onPin} /> : null}
+        {onPin && pinned ? <PinButton pinned full={pinsFull} className={s.textAction} onPin={onPin} /> : null}
         <CopyButton text={paragraphsText(item.paragraphs)} className={s.textAction} title={t.feed.copyReply} />
-        {onActions ? <MoreButton className={s.textAction} label={t.feed.moreActions} onClick={onActions} /> : null}
+        {onActions ? (
+          <MoreButton className={s.textAction} label={t.feed.moreActions} onClick={onActions} />
+        ) : onPin ? (
+          <CardMenu
+            className={s.textAction}
+            label={t.feed.moreActions}
+            title={t.feed.messageMenu}
+            width={272}
+            options={menu}
+            onPick={(id) => {
+              if (id === 'pin') onPin()
+            }}
+          />
+        ) : null}
       </div>
 
       {/* One wave for the whole card: otherwise every paragraph would start the reveal afresh and the

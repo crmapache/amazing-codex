@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import { createPortal } from 'react-dom'
 import { send, subscribe } from './bridge'
 import { copyToClipboard, installClipboardBridge, pasteFromKeys, resolveClipboard } from './clipboard'
+import { cssFamily } from './fontFamilies'
 import { resolvePastedFile } from './pasted'
 import { openPicture, resolveImagePreview, resolvePictureUnopened } from './imagePreviewLoad'
 import {
@@ -45,14 +46,7 @@ import type { RevertChanges } from './components/items/ChangesRow'
 import { RewindDialog } from './components/RewindDialog'
 import { Feed } from './components/Feed'
 import type { FeedMemory, FeedPlace } from './feed/place'
-import {
-  Feedback,
-  FeedbackLog,
-  emptyFeedback,
-  feedbackLogs,
-  feedbackProblem,
-  type FeedbackDraft,
-} from './components/Feedback'
+import { Feedback, FeedbackLog } from './components/Feedback'
 import { Header, type PanelTab, type Session, type SessionState } from './components/Header'
 import { History } from './components/History'
 import { Garland, Snowfall } from './components/Holiday'
@@ -76,7 +70,7 @@ import type { Dict } from './i18n/en'
 import { StatisticsTab, type StatisticsView } from './components/stats/StatisticsTab'
 import { dressAll, summarize } from './stats/achievements'
 import { ChoiceList, LayoutChoice } from './components/Choices'
-import { Appearance, appearanceSummary } from './components/Appearance'
+import { Appearance, appearanceSummary, FontFamilies } from './components/Appearance'
 import { CalmColors } from './components/CalmColors'
 import { RestoreTabs } from './components/RestoreTabs'
 import { ShareEditor } from './components/ShareEditor'
@@ -121,14 +115,15 @@ import { useHoverTarget } from './hooks/useHoverTarget'
 import { useLowPanel } from './hooks/useLowPanel'
 import { StreamSwitcher } from './components/StreamSwitcher'
 import { TaskListPanel } from './components/TaskListPanel'
+import { TerminalCard } from './components/TerminalCard'
 import { ModDock } from './components/ModDock'
 import composer from './components/composer.module.css'
 import s from './components/shell.module.css'
 import { askReply, EMPTY_ASK_DRAFT, type AskDraft } from './feed/askDraft'
 import { bashCommand, shellText, type ShellRun } from './feed/bash'
-import { withBranch, type BranchFacts } from './feed/branch'
 import { contextOf, initialPanelState, reducePanel, type PanelState } from './feed/build'
 import { deferFollowUpForCompact } from './feed/compact'
+import { editDeclines } from './feed/suggestion'
 import { FAST_MARK, FAST_MODE, fastAsked, fastModeShown, fastModeSub, fastTierNote, modelHasFastMode, type FastModeShown } from './feed/fastMode'
 import { waitsForTheTurn } from './feed/delivery'
 import { PASTE_COLLAPSE_DEFAULT, PASTE_COLLAPSE_NEVER, pasteCollapseLines, referenceChip } from './feed/reference'
@@ -155,10 +150,12 @@ import {
   type LocalCommand,
 } from './feed/slash'
 import {
+  agentLabel,
+  agentsWaiting,
+  askerOf,
   awaitsYou,
   buildAgentTabs,
   mainStatusOf,
-  ownStream,
   pendingAsk,
   pendingPermission,
   pendingPlan,
@@ -182,6 +179,7 @@ import { emptyUsageBook, mergeUsageBook, usageOf, type UsageBook } from './feed/
 import type {
   AvailablePluginInfo,
   ClosedTab,
+  HistoryDeleteOutcome,
   HistoryEntry,
   InstalledPluginInfo,
   PaintedTerm,
@@ -349,8 +347,8 @@ const defaultTitle = (sessionId: string): string => (sessionId === MAIN_SESSION 
 const applyTypography = (monoFamily: string, uiFamily: string, lineHeight: number): void => {
   const root = document.documentElement.style
 
-  if (monoFamily) root.setProperty('--acc-mono', `'${monoFamily}', ui-monospace, monospace`)
-  if (uiFamily) root.setProperty('--acc-font', `'${uiFamily}', system-ui, sans-serif`)
+  if (monoFamily) root.setProperty('--acc-mono', `${cssFamily(monoFamily)}, ui-monospace, monospace`)
+  if (uiFamily) root.setProperty('--acc-font', `${cssFamily(uiFamily)}, system-ui, sans-serif`)
   if (lineHeight > 0) root.setProperty('--acc-leading', String(lineHeight))
 }
 
@@ -521,6 +519,7 @@ const NO_VOICE: VoiceSettings = {
   languages: [],
   device: '',
   devices: [],
+  trainingOptOut: false,
   keyHint: '',
   hotkeys: {
     push: { caps: [] },
@@ -546,12 +545,6 @@ export const App = () => {
   const sessionsRef = useRef(sessions)
   sessionsRef.current = sessions
   const [active, setActive] = useState(MAIN_SESSION)
-  /**
-   * The branch and its pull request on the header - the folder's, not any tab's (see feed/branch.ts). They
-   * lived in the opening tab's feed once, and closing that tab took them off the header until the branch
-   * next changed.
-   */
-  const [branch, setBranch] = useState<BranchFacts>({})
   const [drafts, setDrafts] = useState<Record<string, Draft>>({})
   /**
    * A queued message taken out into this tab's field to be edited, by tab - and where it goes back to:
@@ -819,6 +812,15 @@ export const App = () => {
    * the harness shows.
    */
   const [textSize, setTextSizeState] = useState<TextSize>({ chosen: TEXT_SIZE_FOLLOW, console: DESIGN_SIZE })
+  /**
+   * The panel's own font (empty while it follows the console's) and the console's, for the settings screen -
+   * what the feed is set in arrives with the typography and goes into the document's root (see
+   * applyTypography). The console's is the design's until the IDE says otherwise, which is what the harness
+   * shows.
+   */
+  const [fontInfo, setFontInfo] = useState<{ chosen: string; console: string }>({ chosen: '', console: 'JetBrains Mono' })
+  /** Every font family the machine has, asked when the font screen opens - null until the IDE answers. */
+  const [fontFamilies, setFontFamilies] = useState<string[] | null>(null)
   const [loginWaiting, setLoginWaiting] = useState(false)
   /**
    * Why the sign-in could not even be started, when it could not (see protocol.ts).
@@ -878,12 +880,6 @@ export const App = () => {
    */
   const [loggingOut, setLoggingOut] = useState<{ id: string; label: string } | null>(null)
   /**
-   * Which of the modal panels is open - one value rather than three independent booleans. That way they
-   * are mutually exclusive by construction: opening the plugins closes the history by itself rather than
-   * leaving it hanging quietly under the new one on top of it.
-   */
-  const [watchers, setWatchers] = useState(0)
-  /**
    * The menu behind the burger: whether it is out, and which of its screens is showing.
    *
    * The screen is kept while it is shut so that closing does not make the contents jump on the way out -
@@ -921,6 +917,16 @@ export const App = () => {
   const [calls, setCalls] = useState<Record<string, TabCall>>({})
   /** The project's past conversations: null means the list has not arrived yet (see the startup requests). */
   const [history, setHistory] = useState<HistoryEntry[] | null>(null)
+  /** Whether the IDE can delete a past conversation - only into a trash (see CodexHistory.canTrash). */
+  const [historyCanDelete, setHistoryCanDelete] = useState(false)
+  /**
+   * Why the last delete from the history did not happen - said above the list until the screen is opened again
+   * or another row is deleted. The title is the row's as it was pressed: the list that follows names it again
+   * only when it is back.
+   */
+  const [historyRefusal, setHistoryRefusal] = useState<{ title: string; outcome: HistoryDeleteOutcome } | null>(null)
+  /** The rows on their way to the trash, by id, with the title a refusal would say. */
+  const deletingHistory = useRef<Record<string, string>>({})
   /**
    * The statistics tab's figures: null until the IDE answers the first request. Asked for at startup
    * (the menu's row shows the achievements' count without the tab being opened), again whenever the tab
@@ -1108,7 +1114,7 @@ export const App = () => {
    * Kept here rather than inside the tab because the tab is unmounted the moment another one is looked
    * at: a description typed into the new-scenario form, or a scenario half written in the editor, used
    * to be lost to a glance at a chat - while the model asked to write it went on working behind an empty
-   * screen. The same reasoning the feedback draft above lives by.
+   * screen.
    */
   /**
    * When each Run button was last pressed - see startScenario and pressedAgain.
@@ -1225,12 +1231,10 @@ export const App = () => {
   const [pluginMessage, setPluginMessage] = useState<{ ok: boolean; text: string } | null>(null)
   const [pluginApps, setPluginApps] = useState<Record<string, PluginAppsInfo>>({})
   /**
-   * The feedback screen's draft. It lives here rather than inside the screen because the screen is
-   * unmounted the moment one steps into the report's preview beside it (see the SideMenu block below) -
-   * and a half-written message that vanishes for looking at what it would attach is worse than no
-   * preview at all.
+   * The debug report the feedback screen offers to copy. Null means "not built yet": it is asked for
+   * afresh every time its screen is opened (see openScreen) and shown as the IDE built it.
    */
-  const [feedback, setFeedback] = useState<FeedbackDraft>(emptyFeedback)
+  const [feedbackReport, setFeedbackReport] = useState<string | null>(null)
   /**
    * The catalogue of models from the CLI itself, per account - the same shape and the same reason as the
    * usage figures beside it (see UsageBook).
@@ -1751,6 +1755,7 @@ export const App = () => {
     }
 
     setSideMenu({ open: true, screen: 'history' })
+    setHistoryRefusal(null)
     send({ type: 'history' })
   }, [])
 
@@ -2256,15 +2261,16 @@ export const App = () => {
   }, [])
 
   /**
-   * The main stream's permission/ask/plan can be decided only by whoever is looking at this very tab - the
-   * decision cards are rendered out of the active session's panel.items (see permission/ask just below and
-   * Feed's onPlanDecision), so watching one active session is enough rather than driving this across every
-   * open tab. We react to a change in awaitsYou and carry it into the panel (attentionStarted /
-   * attentionEnded - see build.ts) so that streamStatus can subtract the waiting time from "Claude is
-   * thinking - Xm Ys" rather than charge it to the agent.
+   * A permission/ask/plan can be decided only by whoever is looking at this very tab - the decision cards
+   * are rendered out of the active session's panel.items (see permission/ask just below and Feed's
+   * onPlanDecision), so watching one active session is enough rather than driving this across every open
+   * tab. We react to a change in awaitsYou and carry it into the panel (attentionStarted / attentionEnded -
+   * see build.ts) so that streamStatus can subtract the waiting time from "Claude is thinking - Xm Ys"
+   * rather than charge it to the agent. A subagent's decision is waited for the same way: the card stands
+   * over the field on every screen (see pendingPermission), and the work does not move until it is answered.
    */
   useEffect(() => {
-    const awaiting = panel.items.some((item) => ownStream(item) && awaitsYou(item, cards))
+    const awaiting = panel.items.some((item) => awaitsYou(item, cards))
     dispatchPanel({ session: active, action: { kind: awaiting ? 'attentionStarted' : 'attentionEnded' } })
   }, [active, panel.items, cards])
 
@@ -2345,9 +2351,6 @@ export const App = () => {
               setSpellcheckState(message.preferences.spellcheck !== false)
             }
             if (message.improve) setImproveInstructions(message.improve)
-            // Only until the fact itself has said: `project` is sent again whenever the branch changes, and
-            // carries the PR along with it, while this is a snapshot taken when the panel was put together.
-            setBranch((held) => ({ ...held, gitBranch: held.gitBranch ?? message.gitBranch }))
             feed({
               session: MAIN_SESSION,
               action: {
@@ -2451,10 +2454,6 @@ export const App = () => {
            */
           case 'customModels':
             setCustomModelsState(message.models)
-            break
-
-          case 'project':
-            setBranch((held) => withBranch(held, message))
             break
 
           /**
@@ -2614,10 +2613,6 @@ export const App = () => {
             })
             break
 
-          case 'clients':
-            setWatchers(message.count)
-            break
-
           case 'sessionReset':
             dispatchPanel({ session: message.sessionId, reset: true })
             delete held.current[message.sessionId]
@@ -2634,6 +2629,16 @@ export const App = () => {
           // The answer to `/status` - a row in the feed of the tab it was asked in.
           case 'sessionInfo':
             dispatchPanel({ session: message.sessionId, action: sessionInfoAction(message) })
+            break
+
+          // Whether a terminal holds the conversation, and why it did not go into one - see TerminalDesk.kt.
+          // Through `feed` like the queue: a state said while the feed is being restored lands after it, not under it.
+          case 'terminal':
+            feed({ session: message.sessionId, action: { kind: 'terminal', state: message.state } })
+            break
+
+          case 'terminalRefused':
+            feed({ session: message.sessionId, action: { kind: 'terminalRefused', reason: message.reason } })
             break
 
           /**
@@ -2772,6 +2777,7 @@ export const App = () => {
               languages: message.languages,
               device: message.device,
               devices: message.devices,
+              trainingOptOut: message.trainingOptOut,
               keyHint: message.keyHint,
               hotkeys: message.hotkeys,
             })
@@ -2954,7 +2960,15 @@ export const App = () => {
 
           case 'history':
             setHistory(message.conversations)
+            setHistoryCanDelete(message.canDelete === true)
             break
+
+          case 'historyDeleted': {
+            const title = deletingHistory.current[message.id] ?? ''
+            delete deletingHistory.current[message.id]
+            setHistoryRefusal(message.outcome === 'trashed' ? null : { title, outcome: message.outcome })
+            break
+          }
 
           case 'searchResults': {
             if (message.id === searchAsked.current) {
@@ -3302,8 +3316,13 @@ export const App = () => {
             }))
             break
 
+          case 'fontFamilies':
+            setFontFamilies(message.families)
+            break
+
           case 'typography': {
             applyTypography(message.monoFamily, message.uiFamily, message.lineHeight)
+            setFontInfo({ chosen: message.fontFamily ?? '', console: message.consoleMonoFamily ?? message.monoFamily })
             const chosen = normalizeTextSize(message.textSize)
             // Our own sizes, come back round in the order they were sent - the same care as the
             // indicators': the echo of the first of three presses must not pull the figure back two
@@ -3363,44 +3382,8 @@ export const App = () => {
             setAccountNote(message.code)
             break
 
-          /*
-           * The feedback screen's three answers. The address and the files come from the IDE, which is
-           * where they are kept; the note beside them is what it has to say about the last pick - a file
-           * too big, one too many - and it is cleared by the next one rather than by a timer.
-           */
-          case 'feedbackState':
-            setFeedback((current) => ({
-              ...current,
-              // Whatever the person has done to the field wins - including emptying it. An empty field
-              // is not "nothing typed yet": see emailTouched in Feedback.
-              email: current.emailTouched ? current.email : message.email,
-              attachments: message.attachments,
-              note: message.note ?? null,
-            }))
-            break
-
           case 'feedbackLog':
-            setFeedback((current) => ({ ...current, report: message.text }))
-            break
-
-          case 'feedbackSent':
-            setFeedback((current) =>
-              message.ok
-                ? // Sent: the draft goes, the address stays. Somebody who writes once often writes twice,
-                  // and asking for it again would read as if the first one had not counted.
-                  {
-                    ...emptyFeedback(),
-                    email: current.email,
-                    // Not "sent" when something was left behind: it went, but not all of it, and the
-                    // one thing worse than a failure here is a thank-you that hides one.
-                    message: message.note ? { kind: 'partly', note: message.note } : { kind: 'sent' },
-                  }
-                : {
-                    ...current,
-                    sending: false,
-                    message: { kind: 'failed', said: message.error },
-                  },
-            )
+            setFeedbackReport(message.text)
             break
 
           case 'permission':
@@ -3872,6 +3855,20 @@ export const App = () => {
     return () => window.removeEventListener('pagehide', flush)
   }, [])
 
+  /**
+   * The panel's own font, or the console's again for an empty one - drawn here at once, and every window is
+   * told: the IDE answers with a typography of its own, the same as for the size.
+   */
+  const setFontFamily = useCallback(
+    (font: string) => {
+      const next = font.trim()
+      applyTypography(next || fontInfo.console, '', 0)
+      setFontInfo((current) => ({ ...current, chosen: next }))
+      send({ type: 'setFontFamily', font: next })
+    },
+    [fontInfo.console],
+  )
+
   /** Whether the tabs come back after a restart - applied here at once, and every window is told. */
   const setRestoreTabs = useCallback((on: boolean) => {
     send({ type: 'setRestoreTabs', on })
@@ -3913,7 +3910,7 @@ export const App = () => {
    * inherited by each field that does not say otherwise, and the ones that do say "false" are the fields for
    * names, paths and keys, where an underline is never wanted. Removed rather than set to "true" when on, so
    * the browser's own default holds, and on the root rather than on the input field alone because the
-   * same person writes the answer to a question, the feedback and the improve-prompt text too.
+   * same person writes the answer to a question, a scenario and the improve-prompt text too.
    *
    * The browser drops the underlines already drawn when the attribute changes, so switching it off clears
    * a field mid-sentence rather than at the next word.
@@ -4260,7 +4257,7 @@ export const App = () => {
   /**
    * A fork: the agent carries on in a new conversation, and the original stays as it was.
    *
-   * Three doors lead here. The button on a tab and `/fork` fork the conversation whole. A selection's
+   * Three doors lead here. The fork button on the right of the header and `/fork` fork the conversation whole. A selection's
    * "Fork from here" forks it up to the turn the selection is in, and the selection travels as a quote above
    * the input field (not editable, and not cluttering the field). The rewind dialog's "In a new tab" forks it
    * up to before a message of the person's, and that message goes into the fork's field to be said again.
@@ -4387,7 +4384,7 @@ export const App = () => {
     [active, sessions],
   )
 
-  /** A tab's whole conversation, forked - the button on the tab (see Header). */
+  /** A tab's whole conversation, forked - the button on the right of the header (see Header). */
   const forkWhole = useCallback((sessionId: string) => fork('', { from: sessionId }), [fork])
 
   /**
@@ -4918,6 +4915,30 @@ export const App = () => {
     [sideStep],
   )
 
+  /**
+   * Continue in terminal (see TerminalDesk.kt) - the tab's right-click menu, `/terminal` and the button on the
+   * `/status` row all come here. A tab a terminal of ours already holds brings that terminal forward rather than
+   * asking again; one held by somebody else's has nothing here to press.
+   *
+   * Whether the conversation may go now (a turn, a card, background work) the IDE decides, and says why when it
+   * may not: it is the one that sees the process, and the panel's picture of it is a moment old.
+   */
+  const continueInTerminal = useCallback((sessionId: string) => {
+    const held = panelsRef.current[sessionId]?.terminal
+    if (held === 'here') {
+      send({ type: 'showTerminal', sessionId })
+      return
+    }
+    if (held === 'elsewhere') return
+
+    // A new try takes the note about the last refusal away; a refusal again brings a fresh one.
+    dispatchPanel({ session: sessionId, action: { kind: 'terminalRefused' } })
+    send({ type: 'toTerminal', sessionId })
+  }, [])
+
+  /** The `/status` row's button - for the tab on screen, steady between its renders (see FeedProps.onTerminal). */
+  const terminalHere = useCallback(() => continueInTerminal(active), [continueInTerminal, active])
+
   const runLocal = useCallback(
     ({ name, argument }: LocalCommand) => {
       // Asked at once whatever the agent is doing - that is the whole of it: the question goes beside the
@@ -4988,9 +5009,15 @@ export const App = () => {
         return
       }
 
+      // The panel's own: the CLI has no such command - it IS the terminal (see continueInTerminal).
+      if (name === 'terminal') {
+        continueInTerminal(active)
+        return
+      }
+
       if (name === 'fork') fork()
     },
-    [fork, pickModel, pickEffort, pickFastMode, nameSession, active, openCodexConfig, askAside, sideStep],
+    [fork, pickModel, pickEffort, pickFastMode, nameSession, active, openCodexConfig, askAside, sideStep, continueInTerminal],
   )
 
   /** The Alt+B from the selection menu. The key is drawn in the menu, so it has to work. */
@@ -5157,7 +5184,7 @@ export const App = () => {
   )
 
   /**
-   * The rewind button on a message of one's own: the dialog opens at once, and the IDE is asked what the
+   * The rewind entry in the menu of a message of one's own: the dialog opens at once, and the IDE is asked what the
    * code part would touch (see RewindDialog). Stable, for the memoized feed - the same reason as above.
    */
   const openRewind = useCallback((item: UserItem) => {
@@ -5192,7 +5219,7 @@ export const App = () => {
    * held once at mount, so that it always sees the dialog as it stands now.
    *
    * Done: the dialog closes and the message goes back into the field, chips, quotes and pictures and all,
-   * by the road the reuse button takes - one step of the undo history over whatever was being written. Its
+   * by the road "edit and send again" takes - one step of the undo history over whatever was being written. Its
    * card is gone from the feed by now: the `rewound` message travels ahead of this answer. A code part that
    * failed after the conversation went says so in the feed, where the person is looking once the dialog is
    * gone. Refused: the dialog stays, and says why.
@@ -5439,6 +5466,14 @@ export const App = () => {
       return
     }
 
+    // A terminal holds the conversation (see TerminalCard): no turn can start here until it comes back, so the
+    // message waits in the queue rather than standing in the feed over a "thinking" nothing answers. Found in the
+    // sandbox: sent as an ordinary message, the card and the spinner went up while the IDE quietly queued it.
+    if (panel.terminal) {
+      intoTheQueue()
+      return
+    }
+
     /**
      * While a plan card waits for a decision, the turn stands precisely on it: the agent called
      * ExitPlanMode and will not budge, whatever is written to it. As an ordinary message such text simply
@@ -5579,6 +5614,13 @@ export const App = () => {
     if (from !== 'renumber') {
       setImproveError(null)
       setVoiceError('')
+      // The first keystroke after a turn, Tab putting the guess in included, ends that turn's guess at the
+      // next message - also one still on its way. Asked first: said on every keystroke, it would rebuild every
+      // tab's state each time (see editDeclines).
+      const panel = panels[active]
+      if (panel && editDeclines(panel)) {
+        dispatchPanel({ session: active, action: { kind: 'suggestionDismissed' } })
+      }
     }
 
     if (!applyingImprove.current && improveSources[active]) {
@@ -5716,6 +5758,8 @@ export const App = () => {
    */
   const permission = pendingPermission(panel.items, resolvedStream)
   const ask = pendingAsk(panel.items, cards.answeredAsks, resolvedStream)
+  /** The agent the permission card came from, named on it - the card stands on every screen (see pendingPermission). */
+  const permissionAsker = permission ? askerOf(permission, panel.items) : undefined
   const tabs = useMemo(
     () =>
       sessions.map((session) => ({
@@ -5987,7 +6031,10 @@ export const App = () => {
       send({ type: 'usageStatsPreview' })
     }
 
-    if (screen === 'history') send({ type: 'history' })
+    if (screen === 'history') {
+      setHistoryRefusal(null)
+      send({ type: 'history' })
+    }
 
     // Asked afresh every time it is opened: the health of each account and its remaining share both cost
     // a process, so they are not kept warm - and both are exactly what somebody opens this screen to read.
@@ -6005,17 +6052,14 @@ export const App = () => {
       }
     }
 
-    // The address to answer to, and the files still picked from an earlier visit, are kept by the IDE
-    // rather than by the page: the panel is reloaded far more often than a person changes their mind.
-    if (screen === 'feedback') {
-      setFeedback((current) => ({ ...current, message: null, note: null }))
-      send({ type: 'feedbackOpen' })
-    }
+    // The IDE starts reading the CLI's version as the screen opens, so that the report one step further
+    // already has it rather than saying it is still being read (see FeedbackEnvironment).
+    if (screen === 'feedback') send({ type: 'feedbackOpen' })
 
     // Built afresh every time it is opened, never remembered: a report from ten minutes ago would be
     // shown as if it described what just went wrong.
     if (screen === 'feedbackLog') {
-      setFeedback((current) => ({ ...current, report: null }))
+      setFeedbackReport(null)
       send({ type: 'feedbackReport', sessionId: reportedSession()?.id ?? active })
     }
 
@@ -6203,16 +6247,6 @@ export const App = () => {
     // The tick on "share" belongs to the menu that is open, not to the panel: opened again, it asks again.
     setShared(false)
     setMenu({ kind: 'thanks', anchor })
-  }
-
-  /**
-   * Open the current branch's PR in the system browser - the link itself lives in the panel and travels
-   * outwards only on a click. The branch and its PR live in the header (see Header), one and the same place
-   * under any layout.
-   */
-  const openPullRequest = () => {
-    const url = branch.pullRequestUrl
-    if (url) send({ type: 'openExternal', url })
   }
 
   /**
@@ -6463,6 +6497,11 @@ export const App = () => {
       case 'queue':
         setQueueToken((current) => current + 1)
         return
+
+      // The tab on screen, when it holds a conversation that exists - the tab's menu offers it on the same terms.
+      case 'terminal':
+        if (sessions.some((session) => session.id === active) && panels[active]?.sessionId) continueInTerminal(active)
+        return
     }
   }
   pressPanelKeyRef.current = pressPanelKey
@@ -6507,6 +6546,16 @@ export const App = () => {
         onNameSession={nameSession}
         naming={namingTab}
         onNaming={setNamingTab}
+        conversationOf={(tab) => panelsRef.current[tab]?.sessionId}
+        onCopySessionId={(tab) => {
+          const conversation = panelsRef.current[tab]?.sessionId
+          if (!conversation) return
+          void copyToClipboard(conversation)
+          // Counted like the browser menu's entry and /status (see PanelContextMenu.kt).
+          send({ type: 'stat', kind: 'feature', id: 'session_info' })
+        }}
+        terminalOf={(tab) => panelsRef.current[tab]?.terminal}
+        onContinueInTerminal={continueInTerminal}
         onReturnToInput={() => setFocusToken((current) => current + 1)}
         onOpenMenu={openMenu}
         panelTabs={headerPanelTabs}
@@ -6515,10 +6564,6 @@ export const App = () => {
         newTabKey={keyText(panelKeys.newTab)}
         closeTabKey={closeTabHint}
         calls={calls}
-        watchers={watchers}
-        gitBranch={branch.gitBranch}
-        pullRequest={branch.pullRequest}
-        onOpenPullRequest={openPullRequest}
       />
   )
 
@@ -6554,7 +6599,12 @@ export const App = () => {
 
   const dockCards = (
     <>
-      <PermissionPanel item={permission} composerEmpty={!draftReady} onDecide={decidePermission} />
+      <PermissionPanel
+        item={permission}
+        asker={permissionAsker ? { label: agentLabel(permissionAsker), meta: permissionAsker.meta } : undefined}
+        composerEmpty={!draftReady}
+        onDecide={decidePermission}
+      />
 
       {/* The usage question waits its turn: while the agent is asking something of the person, that is
           the card they should be reading, and a request of ours on top of it would be in the way. */}
@@ -6598,6 +6648,15 @@ export const App = () => {
         onOpenLink={openLink}
       />
 
+      {/* Right over the queue it explains: while a terminal holds the conversation, what is typed waits there. */}
+      <TerminalCard
+        state={panel.terminal}
+        refused={panel.terminalRefused}
+        onShow={() => send({ type: 'showTerminal', sessionId: active })}
+        onBack={() => send({ type: 'fromTerminal', sessionId: active })}
+        onDismiss={() => dispatchPanel({ session: active, action: { kind: 'terminalRefused' } })}
+      />
+
       <Queue
         items={sessionQueue}
         sessionId={active}
@@ -6614,6 +6673,7 @@ export const App = () => {
         editing={running ? (queueEdits[active] ?? null) : null}
         sendKey={sendKey}
         held={panel.queueHeld}
+        terminal={panel.terminal !== undefined}
       />
 
       <Quotes
@@ -7001,6 +7061,7 @@ export const App = () => {
               onChooseModel={chooseAnotherModel}
               signIn={signInOffer}
               onCodexConfig={openCodexConfig}
+              onTerminal={terminalHere}
               onRevertChanges={revertChanges}
               projectRoot={projectRoot}
               onReuse={reuseMessage}
@@ -7019,7 +7080,10 @@ export const App = () => {
             />
             </SaidImagesContext.Provider>
           ) : (
-            <AgentStreamView item={activeTask} />
+            <AgentStreamView
+              item={activeTask}
+              waiting={activeTask ? agentsWaiting(panel.items, cards.answeredAsks).has(activeTask.id) : false}
+            />
           )}
 
           {/* One agent of a fleet, over the whole output area - the feed and the agent screen alike, since
@@ -7038,17 +7102,15 @@ export const App = () => {
               }}
               onQuote={() => {
                 // As a chip right in the input field, like a file or an image, rather than as a separate
-                // block above it: a quote from the agent's output is no worse than an attachment.
+                // block above it: a quote from the agent's output is no worse than an attachment. Through
+                // the field, as a reference from the editor goes: there it lands where the caret stood
+                // before the words were marked in the feed (see noteCaret), and it is a hand on the field,
+                // which also closes the chain of a rewrite - a way back still on offer would take the
+                // quote away with it. The field renumbers quotes by their place (see relabelChips); the
+                // number here is right for the one road that does not pass the field, the end of the draft.
                 const ordinal = draft.tokens.filter((token) => token.kind === 'chip' && token.chip.kind === 'quote').length + 1
-                editDraft(active, {
-                  tokens: appendChip(draft.tokens, { kind: 'quote', value: `ref${ordinal}`, text: selection.text }),
-                })
-                // It goes into the draft without passing through the field, so the chain has to be closed
-                // here by hand: a rewrite with a quote added under it is a draft of one's own again, and a
-                // way back still on offer would take the quote away with it.
-                forgetImproveSource(active)
+                addToDraft({ kind: 'chip', chip: { kind: 'quote', value: `ref${ordinal}`, text: selection.text } })
                 clearSelection()
-                setFocusToken((current) => current + 1)
               }}
             />
           ) : null}
@@ -7087,6 +7149,7 @@ export const App = () => {
             model={model}
             switchedFrom={panel.switchedFrom}
             stuckPick={panel.stuckPick}
+            suggestion={panel.suggestion}
             fast={fastShown}
             effort={effort}
             contextMode={contextMode}
@@ -7194,6 +7257,31 @@ export const App = () => {
               reopenTab(key)
             }}
             reopenKey={keyText(panelKeys.reopenTab)}
+            onDelete={
+              historyCanDelete
+                ? (entry) => {
+                    // Off the list at once; the IDE's answer is the list again, with the row gone for good
+                    // or back when it was refused - and then a word above the list on why (historyDeleted).
+                    deletingHistory.current[entry.id] = entry.title
+                    setHistoryRefusal(null)
+                    setHistory((current) => current?.filter((item) => item.id !== entry.id) ?? current)
+                    send({ type: 'deleteConversation', id: entry.id })
+                  }
+                : undefined
+            }
+            onRename={(entry, title) => {
+              // Shown at once; the list that comes back after a name put on disk says the last word, so a
+              // name the file refused goes back to what it was (see ProjectCatalog.renameConversation).
+              setHistory(
+                (current) =>
+                  current?.map((item) => (item.id === entry.id ? { ...item, title, titleSource: 'user' } : item)) ??
+                  current,
+              )
+              // Open in a tab or not is the IDE's to tell: the tab list here can be a step behind it.
+              send({ type: 'renameConversation', id: entry.id, title })
+            }}
+            isOpen={(id) => tabHolding(id, sessions, (tab) => panelsRef.current[tab]?.sessionId) !== undefined}
+            refusal={historyRefusal}
           />
         ) : null}
 
@@ -7295,6 +7383,7 @@ export const App = () => {
             onClear={(slot) => send({ type: 'voiceClearHotkey', slot })}
             onOpenLanguages={() => openScreen('voiceLanguage')}
             onOpenDevices={() => openScreen('voiceDevice')}
+            onTrainingOptOut={(optOut) => send({ type: 'voiceTrainingOptOut', optOut })}
             onOpenSite={() => send({ type: 'openExternal', url: DEEPGRAM_URL })}
             onOpenLink={openLink}
           />
@@ -7376,6 +7465,8 @@ export const App = () => {
               const account = accounts?.accounts.find((one) => one.id === id)
               setLoggingOut({ id, label: account?.alias.trim() || account?.email || '' })
             }}
+            onSignInAgain={(id) => send({ type: 'accountSignIn', id })}
+            onStopSignIn={(id) => send({ type: 'accountSignInStop', id })}
             onRename={(id, alias) => send({ type: 'accountRename', id, alias })}
           />
         ) : null}
@@ -7451,10 +7542,32 @@ export const App = () => {
           <Appearance
             t={t}
             size={textSize}
+            fontFamily={fontInfo.chosen}
+            consoleFont={fontInfo.console}
             theme={theme?.choice ?? ''}
             ideDark={theme?.ideDark ?? true}
             onTextSize={setTextSize}
+            onFontFamily={setFontFamily}
+            onOpenFonts={() => {
+              // Asked every time: a font installed since the last look belongs on the list.
+              send({ type: 'fontFamilies' })
+              openScreen('font')
+            }}
             onTheme={setTheme}
+          />
+        ) : null}
+
+        {sideMenu.open && sideMenu.screen === 'font' ? (
+          <FontFamilies
+            t={t}
+            families={fontFamilies}
+            fontFamily={fontInfo.chosen}
+            consoleFont={fontInfo.console}
+            onPick={(font) => {
+              setFontFamily(font)
+              // Back to the screen that sent us here, as the microphone's list does: a choice made ends the step.
+              setSideMenu({ open: true, screen: 'appearance' })
+            }}
           />
         ) : null}
 
@@ -7528,32 +7641,7 @@ export const App = () => {
         ) : null}
 
         {sideMenu.open && sideMenu.screen === 'feedback' ? (
-          <Feedback
-            draft={feedback}
-            conversation={reportedSession()?.title ?? ''}
-            onChange={(change) => setFeedback((current) => ({ ...current, ...change }))}
-            onAttach={() => {
-              setFeedback((current) => ({ ...current, note: null }))
-              send({ type: 'feedbackAttach' })
-            }}
-            onDetach={(id) => send({ type: 'feedbackDetach', id })}
-            onPreview={() => openScreen('feedbackLog')}
-            onSend={() => {
-              // The same check the button obeys, once more before anything travels: the button can be
-              // reached by keyboard while it is disabled in some browsers, and this one is cheap.
-              if (feedbackProblem(t, feedback)) return
-
-              setFeedback((current) => ({ ...current, sending: true, message: null }))
-              send({
-                type: 'feedbackSend',
-                kind: feedback.kind,
-                sessionId: reportedSession()?.id ?? active,
-                text: feedback.text.trim(),
-                email: feedback.email.trim(),
-                logs: feedbackLogs(feedback),
-              })
-            }}
-          />
+          <Feedback onOpenLink={openLink} onReport={() => openScreen('feedbackLog')} />
         ) : null}
 
         {sideMenu.open && sideMenu.screen === 'usageStats' ? (
@@ -7570,10 +7658,10 @@ export const App = () => {
 
         {sideMenu.open && sideMenu.screen === 'feedbackLog' ? (
           <FeedbackLog
-            text={feedback.report}
+            text={feedbackReport}
             conversation={reportedSession()?.title ?? ''}
             onCopy={() => {
-              if (feedback.report) send({ type: 'clipboardWrite', text: feedback.report, html: '' })
+              if (feedbackReport) send({ type: 'clipboardWrite', text: feedbackReport, html: '' })
             }}
           />
         ) : null}

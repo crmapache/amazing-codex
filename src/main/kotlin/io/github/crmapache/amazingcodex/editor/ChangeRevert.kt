@@ -28,8 +28,10 @@ import kotlinx.serialization.json.putJsonArray
  *
  * A file the turn created is deleted - but only if what is in it is still exactly what the turn left there -
  * and brought back by writing it anew. A file the turn deleted (a Codex patch can) is written back with the text
- * the patch deleted, and deleted again on the way forward only if that text is what stands there. A move is
- * nothing to the text: it says where the file stood before (see [Edit.Move]), and [FileReverts] carries the file
+ * the patch deleted, and deleted again on the way forward only if that text is what stands there. A file the turn
+ * removed after patches had taken every line out of it (see TurnFootprint) is the same thing said another way:
+ * written back as those patches undone over nothing, and removed again only while it still reads exactly so. A move
+ * is nothing to the text: it says where the file stood before (see [Edit.Move]), and [FileReverts] carries the file
  * between the two places.
  *
  * The same engine undoes a rewind's patches (see CodeRewind in the plugin's codex package), so a file put back
@@ -53,6 +55,12 @@ internal object ChangeRevert {
          * come as a [Patch] after it - so to the text this is nothing; [FileReverts] puts the file back at [from].
          */
         data class Move(val from: String) : Edit
+
+        /**
+         * The file was removed, after the patches before this had taken every line out of it - so the file a revert
+         * writes back is those patches undone over nothing, and its text travels as short lines (see TurnFootprint).
+         */
+        data object Remove : Edit
     }
 
     /**
@@ -111,6 +119,8 @@ internal object ChangeRevert {
                 // Something stands where the turn left nothing: not the turn's to write over.
                 is Edit.Delete -> if (text == null) Lines.of(edit.content) else return Result.Changed
                 is Edit.Move -> text
+                // Nothing may stand where the turn removed the file; undone, it is the empty file the patches before left.
+                Edit.Remove -> if (text == null) Lines.of("") else return Result.Changed
             }
         }
         return text?.let { Result.Text(it.toString()) } ?: Result.Delete
@@ -141,6 +151,7 @@ internal object ChangeRevert {
                 is Edit.Patch -> apply(text ?: return Result.Changed, edit, forward = true, anchored) ?: return Result.Changed
                 is Edit.Delete -> if (text != null && text.lines == Lines.of(edit.content).lines) null else return Result.Changed
                 is Edit.Move -> text
+                Edit.Remove -> if (text != null && text.lines.isEmpty()) null else return Result.Changed
             }
         }
         return text?.let { Result.Text(it.toString()) } ?: Result.Delete
@@ -358,6 +369,7 @@ internal object ChangeRevert {
             "create" -> Edit.Create(edit.text("content"))
             "delete" -> Edit.Delete(edit.text("content"))
             "move" -> edit.text("from").takeIf { it.isNotBlank() }?.let(Edit::Move)
+            "remove" -> Edit.Remove
             "patch" -> {
                 val hunks = (edit["hunks"] as? JsonArray)?.map { hunk ->
                     val fields = hunk as? JsonObject ?: return null

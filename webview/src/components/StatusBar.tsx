@@ -509,56 +509,6 @@ export const StatusBar = ({
   )
 }
 
-interface BranchChipProps {
-  gitBranch?: string
-  pullRequest?: string
-  onOpenPullRequest?: () => void
-}
-
-/**
- * The branch and its PR, on the right of the header before the burger (see Header.tsx) - the one place
- * they stand in every layout.
- *
- * The branch gives way to the tabs down to four characters (see .statusItem), so its full name
- * is a hover away - but only while it is cut short. A hint that repeats the name already on the screen is
- * the thing the panel's hints never do, so whether it is cut is looked at the moment the pointer arrives,
- * and the text is written straight onto the element: the hints read it from there on the `mouseover`
- * that follows this event (see Tooltips), and a render per hover would buy nothing.
- */
-export const BranchChip = ({ gitBranch, pullRequest, onOpenPullRequest }: BranchChipProps) => {
-  const t = useT()
-
-  if (!gitBranch) return null
-
-  return (
-    <span className={s.statusItem}>
-      <span
-        className={s.statusBranch}
-        onPointerEnter={(event) => {
-          const branch = event.currentTarget
-          if (branch.scrollWidth > branch.clientWidth) branch.dataset.tooltip = gitBranch
-          else delete branch.dataset.tooltip
-        }}
-      >
-        {gitBranch}
-      </span>
-      {pullRequest ? (
-        <button
-        type="button"
-        className={s.statusPrLink}
-        onClick={onOpenPullRequest}
-        data-tooltip={t.status.openPr}
-        data-tooltip-at="top left"
-      >
-          PR #{pullRequest}
-        </button>
-      ) : (
-        <span className={s.statusPr}>{t.status.noPr}</span>
-      )}
-    </span>
-  )
-}
-
 /**
  * The weekly window: under the bright usage arc lies a pale arc of the even pace, that is, how much of
  * the limit is already "due" by today. While the bright one is shorter than the pale one, we are on plan

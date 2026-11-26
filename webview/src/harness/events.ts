@@ -89,7 +89,6 @@ export const bootstrap: ScenarioStep[] = [
     type: 'init',
     projectName: 'demo-project',
     workingDirectory: '/Users/you/demo-project',
-    gitBranch: 'main',
     // The version stands at the foot of the menu and under a shared picture of the statistics - without
     // one here both would be looked at empty.
     pluginVersion: '0.8.0',

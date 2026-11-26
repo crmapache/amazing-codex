@@ -129,7 +129,7 @@ button:disabled {
  * sign of it. It is simply drawn in our own line colour, in the same two strokes.
  *
  * Here at the root beside the scrollbars, not beside each field: a textarea added tomorrow gets this for
- * free, and every one of them today (the scenario's cards, the feedback, the improve instructions) was
+ * free, and every one of them today (the scenario's cards, the improve instructions) was
  * showing the same corner.
  */
 ::-webkit-scrollbar-corner {

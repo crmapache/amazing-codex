@@ -51,7 +51,7 @@ export const selectorsFit = (room: number, full: number, terse: number): Selecto
  * ring and the counter are switched off) and the pair (`pair`, at its natural width) are what has to share
  * it, `gap` apart. When they cannot, the pair goes rather than the usage: what went past the edge was always
  * the pair - the heart cut in half by the panel's border - and the rings are the one place the limits are
- * read, while the feedback form has its own row in the menu.
+ * read, while the feedback screen has its own row in the menu.
  *
  * Coming back asks for a pixel to spare, like a square in the field's row (see toolsDropped): the measurement
  * is rounded, and a pair back in a line it only just fits would be the next measurement's reason to go.

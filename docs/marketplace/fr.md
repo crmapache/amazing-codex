@@ -88,12 +88,10 @@ personnalisés arrivent avec lui. Pas de proxy au milieu, aucun compte chez nous
 - **Tout tourne sur votre machine.** Pas de proxy, aucun serveur à nous au milieu. Votre connexion
   Codex appartient au CLI : le plugin ne l'envoie jamais nulle part et ne part pas chercher de
   clés d'API sur votre disque.
-- **Rien ne part sans votre accord.** Pas de compte, pas d'analytics dans votre dos. Les
-  statistiques d'usage anonymes restent coupées jusqu'à ce que vous appuyiez sur Autoriser sur la
-  carte qui pose la question une seule fois : des comptages uniquement, jamais de code, de
-  messages ni de noms de fichiers. Avec elles et l'accès à distance coupés, la seule chose qui
-  sort est un retour que vous écrivez et envoyez vous-même - et un bouton en montre d'abord le
-  texte exact.
+- **Pas de compte, et pas d'analytique sans votre accord.** Le panneau demande une fois s'il peut
+  envoyer des compteurs quotidiens anonymes d'utilisation, et n'envoie rien avant que vous cliquiez
+  sur Autoriser - les paramètres montrent d'abord le rapport entier, et le désactiver efface ce qui
+  a été envoyé. À part cela, l'accès distant désactivé, rien ne quitte la machine.
 - **Vos règles restent les vôtres.** Codex applique votre configuration, son propre bac à sable et
   sa propre politique de validation ; le mode affiché à l'écran est exactement la politique avec
   laquelle tourne le fil, et le plugin ne démarre jamais un fil dans un mode plus permissif.

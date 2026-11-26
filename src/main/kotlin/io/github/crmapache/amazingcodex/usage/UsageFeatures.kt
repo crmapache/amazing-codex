@@ -50,6 +50,8 @@ internal object UsageFeatures {
         // `/status`, or the id copied from the right-click menu - that one is counted by the window that
         // builds the menu rather than arriving as a message: see PanelContextMenu.
         "session_info",
+        // Continue in terminal: the tab's menu, `/terminal` and the button on the `/status` row - see TerminalDesk.
+        "terminal",
         "plan_decision",
         "ask_answer",
         "subagent_window",
@@ -84,7 +86,6 @@ internal object UsageFeatures {
         "account_add",
         "account_switch",
         "project_trust",
-        "feedback_sent",
     )
 
     /**
@@ -98,6 +99,7 @@ internal object UsageFeatures {
         "plugins",
         "settings",
         "appearance",
+        "font",
         "sounds",
         "calmColors",
         "indicators",
@@ -133,6 +135,7 @@ internal object UsageFeatures {
     val SETTINGS: Set<String> = setOf(
         "theme",
         "text_size",
+        "font_family",
         "language",
         "layout",
         "send_key",
@@ -243,7 +246,14 @@ internal object UsageFeatures {
     fun isPhoneAction(type: String): Boolean = type in PHONE_ACTIONS
 
     /** What the panel may report through `stat` - the uses the IDE cannot see arriving. */
-    private val PANEL: Set<String> = setOf("pin", "message_reuse", "statistics_tab", "scenarios_tab")
+    private val PANEL: Set<String> = setOf(
+        "pin",
+        "message_reuse",
+        "statistics_tab",
+        "scenarios_tab",
+        // The id copied from a tab's right-click menu - the panel's own menu, not the browser's (see ContextMenu.tsx).
+        "session_info",
+    )
 
     fun isKnown(id: String): Boolean = when {
         id.startsWith(SCREEN) -> id.removePrefix(SCREEN) in SCREENS
@@ -283,7 +293,8 @@ internal object UsageFeatures {
     private fun featureOf(type: String, payload: JsonObject): String? = when (type) {
         "newSession" -> if (payload.text("kind") == "branch") "fork" else "new_tab"
         "reopenTab" -> "reopen_tab"
-        "nameSession" -> "tab_rename"
+        // Named from the history's row - the same naming, wherever it lands (see ProjectCatalog.renameConversation).
+        "nameSession", "renameConversation" -> "tab_rename"
         "reorderTabs", "reorderGroups" -> "tab_reorder"
         "queuePrompt" -> "queue"
         "takeQueued" -> "queue_edit"
@@ -302,6 +313,7 @@ internal object UsageFeatures {
         "setFastMode" -> if ((payload["on"] as? JsonPrimitive)?.booleanOrNull == true) "fast_mode" else null
         "setMode" -> "mode_switch"
         "sessionInfo" -> "session_info"
+        "toTerminal" -> "terminal"
         "planDecision" -> "plan_decision"
         "askAnswer" -> "ask_answer"
         "agentTranscript" -> "subagent_window"
@@ -331,13 +343,14 @@ internal object UsageFeatures {
         "pluginInstall", "pluginUninstall", "pluginAppConnect", "pluginAppCancel", "marketplaceAdd", "marketplaceRemove" -> "plugins_manage"
         "accountAdd" -> "account_add"
         "accountUse" -> "account_switch"
-        "feedbackSend" -> "feedback_sent"
+
         else -> settingOf(type)?.let { SETTING + it }
     }
 
     private fun settingOf(type: String): String? = when (type) {
         "setTheme" -> "theme"
         "setTextSize" -> "text_size"
+        "setFontFamily" -> "font_family"
         "setLanguage" -> "language"
         "setComposerLayout" -> "layout"
         "setSendKey" -> "send_key"
@@ -355,7 +368,8 @@ internal object UsageFeatures {
         // to what, stays on the machine.
         "setCodexConfig" -> "codex_config"
         "setExecutablePath" -> "executable"
-        "voiceEnabled", "voiceKey", "voiceLanguage", "voiceDevice", "voiceCaptureHotkey", "voiceClearHotkey" -> "voice"
+        "voiceEnabled", "voiceKey", "voiceLanguage", "voiceDevice", "voiceTrainingOptOut", "voiceCaptureHotkey",
+        "voiceClearHotkey" -> "voice"
         "setRelayUrl" -> "relay"
         else -> null
     }

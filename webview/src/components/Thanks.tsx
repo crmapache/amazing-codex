@@ -3,6 +3,7 @@ import { anchorFrom, type Anchor } from './StatusBar'
 import s from './shell.module.css'
 import { useT } from '../i18n'
 import type { Dict } from '../i18n/en'
+import { THANKS_LINKS } from './thanksLinks'
 
 /**
  * Saying thanks: a heart at the far end of the row opposite MODEL/EFFORT/MODE, and behind it the panel's
@@ -19,16 +20,7 @@ import type { Dict } from '../i18n/en'
  * way, framed in the row and borderless in the rail (see .thanks / .thanksRail and Composer.tsx).
  */
 
-/** The addresses themselves - the menu carries only ids, the shell opens the address (see App.openThanks). */
-export const THANKS_LINKS = {
-  github: 'https://github.com/crmapache/amazing-codex',
-  /* The plugin's page in the marketplace, found by its name: this fork has no page of its own to link
-     straight to until it is published, and a search is the address that works either way. */
-  rate: 'https://plugins.jetbrains.com/search?search=Amazing%20Codex%20GUI',
-  /* The author's page rather than a payment form: the amount, once or monthly, and the means of paying are
-     chosen there, and nothing about money passes through the plugin. */
-  tip: 'https://ko-fi.com/mzpizote',
-} as const
+export { THANKS_LINKS }
 
 export type ThanksLink = keyof typeof THANKS_LINKS
 

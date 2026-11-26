@@ -35,7 +35,21 @@ const ONLY = process.argv.slice(2)
 const DEMO = process.env.DEMO ?? join(homedir(), 'work', 'nimbus-checkout')
 
 /** The window, as on a 14" MacBook with the dock shown: maximized, the size the listing's frames share. */
-const WINDOW = { x: 0, y: 33, width: 1512, height: 890 }
+const WINDOW = { width: 1512, height: 890 }
+
+/**
+ * Where the window stands: the top left corner of the display the person is not working on (the laptop's
+ * built-in screen first, see scripts/aside-display.js), so the takes do not cover their work. With one
+ * display - under the menu bar of the main one, as before.
+ */
+const origin = () => {
+  try {
+    const aside = new URL('../aside-display.js', import.meta.url).pathname
+    const [x, y] = execFileSync('osascript', ['-l', 'JavaScript', aside], { encoding: 'utf8' }).trim().split(' ').map(Number)
+    if (Number.isFinite(x) && Number.isFinite(y)) return { x, y }
+  } catch {}
+  return { x: 0, y: 33 }
+}
 
 /**
  * The harness inside the real panel, with the IDE's bridge kept out of it.
@@ -92,9 +106,10 @@ const findWindow = () => {
 
 /** Puts the window where every frame expects it - by its attributes, not by dragging anything. */
 const placeWindow = (pid) => {
+  const { x, y } = origin()
   const script = [
     `tell application "System Events" to set p to first process whose unix id is ${pid}`,
-    `tell application "System Events" to set position of window 1 of p to {${WINDOW.x}, ${WINDOW.y}}`,
+    `tell application "System Events" to set position of window 1 of p to {${x}, ${y}}`,
     `tell application "System Events" to set size of window 1 of p to {${WINDOW.width}, ${WINDOW.height}}`,
   ]
   execFileSync('osascript', script.flatMap((line) => ['-e', line]))

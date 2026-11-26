@@ -504,6 +504,12 @@ export const panelCommands = (t: Dict): CommandOption[] => [
    * and the IDE answers that with the same row (see SessionCommands.statusAsked).
    */
   { id: 'status', hint: t.commands.status, local: true },
+  /*
+   * The panel's, and the CLI has no such command at all: it is the CLI's own interface the conversation goes to.
+   * The panel's process gives the conversation up, the CLI comes up in a terminal tab of the IDE on the same
+   * account, and the tab waits until that terminal ends (see TerminalDesk.kt).
+   */
+  { id: 'terminal', hint: t.commands.terminal, local: true },
 ]
 
 /**

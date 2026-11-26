@@ -86,11 +86,10 @@ unverändert mit. Kein Proxy dazwischen, kein Konto bei uns.
 - **Alles läuft auf deinem Rechner.** Kein Proxy, kein Server von uns dazwischen. Deine
   Codex-Anmeldung gehört der CLI: Das Plugin schickt sie nie irgendwohin und sucht auch keine
   API-Schlüssel auf deiner Platte.
-- **Nichts verlässt den Rechner ohne Ihr Ja.** Kein Konto, keine heimliche Analyse. Anonyme
-  Nutzungsstatistik bleibt aus, bis Sie auf der Karte, die einmal fragt, auf Erlauben drücken:
-  nur Zählwerte, nie Code, Nachrichten oder Dateinamen. Ist sie aus und der Fernzugriff ebenso,
-  verlässt nur ein Feedback den Rechner, das Sie selbst schreiben und senden - und ein Knopf
-  zeigt vorher den genauen Text.
+- **Kein Konto und keine Analytik ohne deine Erlaubnis.** Das Panel fragt einmal, ob es anonyme
+  Tageszähler zur Nutzung senden darf, und sendet nichts, bevor du auf Erlauben drückst - die
+  Einstellungen zeigen vorher den ganzen Bericht, und Ausschalten löscht, was gesendet wurde. Davon
+  abgesehen verlässt bei ausgeschaltetem Fernzugriff nichts die Maschine.
 - **Deine Regeln bleiben deine.** Codex wendet deine Konfiguration an, seine eigene Sandbox und
   seine eigene Freigaberichtlinie; der Modus auf dem Bildschirm ist genau die Richtlinie, mit der
   der Thread läuft, und das Plugin startet nie einen Thread in einem laxeren Modus.

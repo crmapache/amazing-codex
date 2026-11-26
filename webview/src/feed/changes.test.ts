@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentEvent, ToolUseResult } from '../protocol'
 import { initialPanelState, reducePanel, type PanelState } from './build'
-import { changeOf, projectRelative, withChange } from './changes'
+import { changeOf, projectRelative, totalOf, withChange } from './changes'
 import type { PanelAction } from './panelState'
-import type { ChangesItem, FeedItem } from './types'
+import type { ChangesItem, FeedItem, FileChange } from './types'
 
 const AT = 1_700_000_000_000
 const ROOT = '/Users/you/app'
@@ -308,8 +308,6 @@ describe('the files a turn changed, in the feed', () => {
         type: 'files_settled',
         files: [
           { path: `${ROOT}/a.css`, added: 3, removed: 0, edits: [{ kind: 'create', content: '' }, settled] },
-          // A file the list does not hold stays out of it.
-          { path: `${ROOT}/elsewhere.ts`, added: 1, removed: 0, edits: [settled] },
         ],
       }),
       live(result),
@@ -321,6 +319,73 @@ describe('the files a turn changed, in the feed', () => {
         { path: `${ROOT}/b.ts`, added: 1, removed: 1, edits: [{ kind: 'patch' }] },
       ],
     ])
+  })
+
+  /**
+   * The agent's Python and `sed`, a subagent whose results carry no diff: no call reports these files, and the IDE,
+   * holding the project against the turn's start, names them (see TurnFootprint). They join the list after the rest.
+   */
+  it('adds the files the IDE found changed on the disk, which no call reported', () => {
+    const removedWhole = { kind: 'patch' as const, hunks: [{ oldStart: 1, newStart: 0, lines: ['-x', '-y'] }] }
+    const state = reduce([
+      live(init),
+      live(call('e1', 'Edit', { file_path: `${ROOT}/b.ts`, old_string: 'a', new_string: 'b' })),
+      live(answer('e1', 'ok', { filePath: `${ROOT}/b.ts`, structuredPatch: patch('-a', '+b') })),
+      // A subagent's edit: its result has no structured half in the stream, so the list cannot count it.
+      live(call('s1', 'Edit', { file_path: `${ROOT}/sub.ts`, old_string: 'a', new_string: 'b' }, 'agent1')),
+      live(answer('s1', 'The file has been updated successfully.', undefined, { parent: 'agent1' })),
+      live({
+        type: 'files_settled',
+        turn: 't1',
+        files: [
+          { path: `${ROOT}/b.ts`, added: 4, removed: 1, edits: [{ kind: 'patch', hunks: [] }] },
+          { path: `${ROOT}/sub.ts`, added: 1, removed: 1, edits: [{ kind: 'patch', hunks: [] }] },
+          { path: `${ROOT}/scripted.ts`, added: 2, removed: 0, created: true, edits: [{ kind: 'create', content: '' }] },
+          { path: `${ROOT}/gone.ts`, added: 0, removed: 2, deleted: true, edits: [removedWhole, { kind: 'remove' }] },
+          { path: `${ROOT}/logo.png`, added: 0, removed: 0, uncounted: true },
+        ],
+      }),
+      live(result),
+    ])
+
+    const list = state.items.find((item): item is ChangesItem => item.kind === 'changes')
+    // Named by the turn's first call, as before.
+    expect(list?.id).toBe('changes-e1')
+    expect(list?.files.map((file) => [file.shown, file.added, file.removed])).toEqual([
+      ['b.ts', 4, 1],
+      ['sub.ts', 1, 1],
+      ['scripted.ts', 2, 0],
+      ['gone.ts', 0, 2],
+      ['logo.png', 0, 0],
+    ])
+    expect(list?.files[2]).toMatchObject({ created: true, firstCall: 'disk-t1' })
+    expect(list?.files[3]).toMatchObject({ deleted: true, edits: [removedWhole, { kind: 'remove' }] })
+    expect(list?.files[4]).toMatchObject({ uncounted: true })
+    expect(list?.files[4]?.edits).toBeUndefined()
+  })
+
+  /** A turn that changed files by Bash alone still gets its list, named by the IDE's event - the same in every rebuild. */
+  it('lists a turn whose files only the disk knows, under the name the IDE gave it', () => {
+    const state = reduce([
+      live(init),
+      live({ type: 'files_settled', turn: 't9', files: [{ path: `${ROOT}/a.ts`, added: 1, removed: 0 }] }),
+      live(result),
+    ])
+    const list = state.items.find((item): item is ChangesItem => item.kind === 'changes')
+    expect(list?.id).toBe('changes-disk-t9')
+    expect(list?.files.map((file) => file.shown)).toEqual(['a.ts'])
+  })
+
+  /** The CLI on Windows writes backslashes and the drive as typed; the IDE names the same file its own way. */
+  it('knows a listed file by its path however it is spelled', () => {
+    const state = reduce([
+      live({ type: 'system', subtype: 'init', cwd: 'C:\\work\\app', session_id: 's1' }),
+      live(call('e1', 'Edit', { file_path: 'c:\\work\\app\\a.ts', old_string: 'a', new_string: 'b' })),
+      live(answer('e1', 'ok', { filePath: 'c:\\work\\app\\a.ts', structuredPatch: patch('-a', '+b') })),
+      live({ type: 'files_settled', turn: 't1', files: [{ path: 'C:/work/app/a.ts', added: 7, removed: 1 }] }),
+      live(result),
+    ])
+    expect(lists(state.items)[0]?.map((file) => [file.path, file.added])).toEqual([['c:\\work\\app\\a.ts', 7]])
   })
 
   /** The phone is sent the figures without the edits when they would not fit its frame. */
@@ -610,5 +675,29 @@ describe('a file a turn moved or deleted', () => {
     const again = withChange(deleted, change('/p/o.ts', { created: true, removed: 0, edits: [{ kind: 'create', content: 'y\n' }] }))
     expect(again[0]).toMatchObject({ created: false, added: 1, removed: 1 })
     expect(again[0]?.deleted).toBeUndefined()
+  })
+})
+
+describe('the whole turn over its rows', () => {
+  const file = (added: number, removed: number, extra: Partial<FileChange> = {}): FileChange => ({
+    path: `${ROOT}/f${added}${removed}.ts`,
+    shown: `f${added}${removed}.ts`,
+    added,
+    removed,
+    created: false,
+    firstCall: 'c1',
+    ...extra,
+  })
+
+  it('sums what the rows say, a created file by how long it came out and an uncounted one not at all', () => {
+    expect(
+      totalOf([
+        file(10, 2),
+        // Created, then edited down by three lines: its row says +5 and nothing removed.
+        file(8, 3, { created: true }),
+        file(0, 7, { deleted: true }),
+        file(0, 0, { uncounted: true }),
+      ]),
+    ).toEqual({ added: 15, removed: 9 })
   })
 })

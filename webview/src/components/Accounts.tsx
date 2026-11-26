@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useT } from '../i18n'
 import type { Dict } from '../i18n/en'
 import type { AccountInfo, UsageWindow } from '../protocol'
+import { lostSignIn } from '../feed/accounts'
 import type { UsageFacts } from '../feed/usage'
 import { FIVE_HOUR_MS, MONTH_MS, WEEK_MS, paceColor, spendingWindow, timeLeft, usableAgainIn } from '../feed/usage'
 import { useFieldHistory } from '../hooks/useFieldHistory'
@@ -33,6 +34,10 @@ interface AccountsProps {
   onForget: (id: string) => void
   /** Sign out of Claude Code. Only the default account has this - see the button below. */
   onLogout: (id: string) => void
+  /** Sign a row whose credential is gone in again, in a terminal - see the `accountSignIn` message. */
+  onSignInAgain: (id: string) => void
+  /** Stop waiting for that sign-in - see the `accountSignInStop` message. */
+  onStopSignIn: (id: string) => void
   onRename: (id: string, alias: string) => void
 }
 
@@ -67,8 +72,10 @@ export const accountState = (
  * machine with several of them that is the one thing that screen has to say - "Log in" above a list of
  * other names otherwise reads as a choice nobody made.
  *
- * Empty is the ordinary answer on a machine with a single sign-in: the CLI's own account has a row only
- * while it IS signed in, and a screen that stands there because nobody is has nothing to name.
+ * Empty is the ordinary answer on a machine with a single sign-in that was never named or seen: the CLI's
+ * own account has a row while it IS signed in, or once it has been lost by itself (see
+ * CodexAccounts.keepsSignedOutDefault), and a screen that stands there because nobody is has nothing to
+ * name.
  */
 export const currentAccountName = (t: Dict, state: AccountsState | null): string => {
   const current = state?.accounts.find((one) => one.id === state.current)
@@ -257,6 +264,8 @@ export const Accounts = ({
   onCancelAdd,
   onForget,
   onLogout,
+  onSignInAgain,
+  onStopSignIn,
   onRename,
 }: AccountsProps) => {
   const t = useT()
@@ -365,6 +374,7 @@ export const Accounts = ({
         {state.accounts.map((account) => {
           const isCurrent = account.id === state.current
           const facts = usage(account.id)
+          const lost = lostSignIn(account)
 
           return (
             <div key={account.id} className={account.health === 'absent' ? `${s.card} ${s.cardWarn}` : s.card}>
@@ -374,7 +384,9 @@ export const Accounts = ({
                 />
                 <span className={s.cardName}>{shortName(account, t)}</span>
                 {isCurrent ? <span className={s.cardStateOk}>{t.accounts.current}</span> : null}
-                {account.pending ? <span className={s.cardStateWarn}>{t.accounts.signingIn}</span> : null}
+                {account.pending === true || account.signingIn === true ? (
+                  <span className={s.cardStateWarn}>{t.accounts.signingIn}</span>
+                ) : null}
               </div>
 
               {/*
@@ -431,11 +443,32 @@ export const Accounts = ({
               ) : (
                 <div className={s.cardActions}>
                   {/*
-                    Not on a sign-in still in flight: its drawer is empty, so everything moved onto it
-                    would come up signed out. The IDE refuses it as well (see ClaudeAccounts.canSelect) -
-                    this is only the half that keeps the button from being there to press.
+                    The way back for a row whose credential is gone, into that row's own drawer. The line
+                    above it has said "Sign in again" for as long as the line has existed, with nothing to
+                    press; the ordinary sign-in, wiped by a refused refresh, used to have not even the row.
+                    While the terminal is open the same place stops the wait - the terminal itself is the
+                    person's and stays.
                   */}
-                  {!isCurrent && account.pending !== true ? (
+                  {lost && account.signingIn === true ? (
+                    <button type="button" className={s.button} onClick={() => onStopSignIn(account.id)}>
+                      {t.accounts.cancel}
+                    </button>
+                  ) : lost ? (
+                    <button
+                      type="button"
+                      className={`${s.button} ${s.buttonPrimary}`}
+                      onClick={() => onSignInAgain(account.id)}
+                    >
+                      {t.accounts.signInAgain}
+                    </button>
+                  ) : null}
+                  {/*
+                    Not on a sign-in still in flight: its drawer is empty, so everything moved onto it
+                    would come up signed out. The IDE refuses it as well (see CodexAccounts.canSelect) -
+                    this is only the half that keeps the button from being there to press. Not on a row
+                    whose credential is gone either, for the same reason: what it needs is the button above.
+                  */}
+                  {!isCurrent && account.pending !== true && !lost ? (
                     <button
                       type="button"
                       className={`${s.button} ${s.buttonPrimary}`}
@@ -452,9 +485,11 @@ export const Accounts = ({
                     Two different acts, so two different words. Forgetting an added account drops its
                     drawer from this machine and leaves the account itself alone; the sign-in Claude Code
                     already had has no drawer, so the only way to remove it is to end the session - which
-                    revokes the credential and is what "Log out" honestly says.
+                    revokes the credential and is what "Log out" honestly says. Signed out already, there is
+                    nothing left to revoke, and Forget takes its row off the screen - the way to say "I ended
+                    that one myself" about a sign-out the panel could not tell from a lost one.
                   */}
-                  {account.isDefault === true ? (
+                  {account.isDefault === true && !lost ? (
                     <button
                       type="button"
                       className={`${s.button} ${s.buttonDangerStrong}`}

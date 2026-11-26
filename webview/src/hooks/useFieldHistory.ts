@@ -7,8 +7,8 @@ type TextField = HTMLInputElement | HTMLTextAreaElement
  * A plain text field with the keys the browser inside the IDE does not give it: Cmd/Ctrl+Backspace for
  * the word before the caret, and an undo history of its own on Cmd/Ctrl+Z, Shift for the step forward,
  * Ctrl+Y as well - the same keys the composer answers, by the same rules (see feed/fieldEdits.ts). Every
- * plain input and textarea of the panel goes through it: the search window's two fields, the feedback
- * form, the improve-prompt instructions, an answer in one's own words, the MCP and plugin forms, the relay
+ * plain input and textarea of the panel goes through it: the search window's two fields, the
+ * improve-prompt instructions, an answer in one's own words, the MCP and plugin forms, the relay
  * address, the Deepgram key and the path to the executable. A field left out is a field where Cmd+Z
  * answers with somebody else's undo.
  *

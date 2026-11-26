@@ -118,6 +118,7 @@ internal class VoiceDictation : Disposable {
         this.level = 0
 
         val language = VoiceLanguages.sanitize(CodexPreferences.voiceLanguage)
+        val trainingOptOut = CodexPreferences.voiceTrainingOptOut
 
         // The socket first: the audio has somewhere to go from the first chunk, and a key Deepgram
         // refuses fails before anything has been recorded.
@@ -139,6 +140,7 @@ internal class VoiceDictation : Disposable {
             key = key,
             language = language,
             sampleRate = capture.sampleRate,
+            trainingOptOut = trainingOptOut,
             onInterim = { text -> this.sink?.interim(text) },
             onFinal = { text -> this.sink?.final(text) },
             onError = { reason -> fail(reason) },
@@ -153,7 +155,8 @@ internal class VoiceDictation : Disposable {
         ceiling = AppExecutorUtil.getAppScheduledExecutorService()
             .schedule({ runCatching { stop() } }, MAX_MS, TimeUnit.MILLISECONDS)
 
-        DiagnosticsLog.note(DiagnosticsLog.PANEL, "dictation started ($language, ${capture.sampleRate}Hz)")
+        val optedOut = if (trainingOptOut) ", out of training" else ""
+        DiagnosticsLog.note(DiagnosticsLog.PANEL, "dictation started ($language, ${capture.sampleRate}Hz$optedOut)")
     }
 
     /**

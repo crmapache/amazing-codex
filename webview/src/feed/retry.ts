@@ -143,6 +143,11 @@ export const closeRetryFor = (state: PanelState, event: AgentEvent, now: number)
     case 'rate_limit_event':
       return state
 
+    // The guess at the next message belongs to the turn before: it arrives after that turn's result, sometimes
+    // only once a queued message has started the next one, and says nothing about the request being retried.
+    case 'prompt_suggestion':
+      return state
+
     // The placeholder is recognised by its internal model name rather than by the absence of a real one:
     // silence about the model is merely silence, and declaring a turn surrendered by it would mean
     // recording ordinary answers as breakages.

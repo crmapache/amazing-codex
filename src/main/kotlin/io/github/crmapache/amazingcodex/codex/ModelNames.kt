@@ -26,6 +26,21 @@ internal object ModelNames {
         return names.any { key(it) == wanted }
     }
 
+    /**
+     * Whether the signature under an answer names a model at all.
+     *
+     * Two kinds of signature do not. The panel signs the words it puts in the model's mouth itself with a mark in
+     * angle brackets - `<synthetic>` closes a turn a limit or a dead sign-in refused (see CodexStream). And some
+     * proxies and model routers sign part of their answers with the bare word `custom`, between answers signed with
+     * the real model (ACC PR #25). Neither is a model anybody can be launched on, and taking one for a model gets the
+     * statistics wrong: the models card grows a row for something nobody ran and takes the turn away from the model
+     * that did the work. The panel's feed drops the same signatures (realModel in feed/build.ts).
+     */
+    fun isModel(signature: String): Boolean =
+        signature.isNotEmpty() && !signature.startsWith("<") && !signature.equals(PLACEHOLDER, ignoreCase = true)
+
+    private const val PLACEHOLDER = "custom"
+
     /** A model without a window mark - Codex has none, so this is the model itself. */
     fun unmarked(model: String): String = model
 

@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { StatisticsData } from '../../protocol'
 import { HEAT_WEEKS, heatMap } from '../../stats/compute'
-import { shortDate } from '../../stats/format'
+import { shortDate, tokenAmount } from '../../stats/format'
 import s from './stats.module.css'
 
 /**
- * The calendar of working days: a column a week, a cell a day, the paint by how busy the day was.
+ * The calendar of working days: a column a week, a cell a day, the paint by the tokens the day took.
  *
  * The grid fills from the right-hand edge (see .heatScroll): the newest week always stands against the
  * right side, and it is the oldest that leaves the view when the panel narrows - as far back as the
@@ -70,9 +70,9 @@ export const Heatmap = ({ data }: HeatmapProps) => {
                   data-tooltip={
                     cell.ahead
                       ? undefined
-                      : cell.minutes === 0
+                      : cell.tokens === 0
                         ? `${shortDate(cell.date)} · nothing that day`
-                        : `${shortDate(cell.date)} · ${cell.minutes} min`
+                        : `${shortDate(cell.date)} · ${tokenAmount(cell.tokens)} tokens`
                   }
                 />
               )),

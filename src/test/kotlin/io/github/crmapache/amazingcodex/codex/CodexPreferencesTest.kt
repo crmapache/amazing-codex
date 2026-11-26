@@ -1,5 +1,6 @@
 package io.github.crmapache.amazingcodex.codex
 
+import com.intellij.ide.util.PropertiesComponent
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 
 /**
@@ -26,6 +27,33 @@ class CodexPreferencesTest : BasePlatformTestCase() {
             CodexPreferences.newTabContextMode = ""
             CodexPreferences.contextMode = "standard"
         }
+    }
+
+    /**
+     * The address the old feedback form remembered. The form is gone, so a person's address has no business
+     * staying in the IDE's settings - and PRIVACY.md says it is deleted.
+     */
+    fun testTheOldFeedbackAddressIsWiped() {
+        PropertiesComponent.getInstance().setValue("acx.feedback.email", "someone@example.com")
+
+        CodexPreferences.forgetRetired()
+
+        assertNull(PropertiesComponent.getInstance().getValue("acx.feedback.email"))
+    }
+
+    /**
+     * The panel's own font is a name the page puts into CSS and nothing more: one line, without what a control
+     * character would do to a stylesheet, and empty for "as the console's".
+     */
+    fun testTheFontIsAPlainName() {
+        CodexPreferences.fontFamily = "  Menlo\n"
+        assertEquals("Menlo", CodexPreferences.fontFamily)
+
+        CodexPreferences.fontFamily = "Fira\u0000 Code"
+        assertEquals("Fira Code", CodexPreferences.fontFamily)
+
+        CodexPreferences.fontFamily = ""
+        assertEquals("", CodexPreferences.fontFamily)
     }
 
     fun testSnapshotKeepsWhatWasWritten() {

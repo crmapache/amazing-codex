@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 import type { ShellMessage } from '../protocol'
-import { startDictation, type Dictation } from './dictation'
+import { startDictation, type Dictation, type DictationGrant } from './dictation'
 
 /**
  * Dictation on the phone, from the press to the words in the field.
@@ -63,7 +63,7 @@ export const useDictation = ({ requestToken }: { requestToken: (id: string) => v
    * has already granted permission the network can win that race. Without this the token would be
    * dropped and the dictation would record into a socket that never opened.
    */
-  const waiting = useRef<{ token: string; language: string; model: string } | null>(null)
+  const waiting = useRef<DictationGrant | null>(null)
 
   /**
    * The ceiling on one dictation.
@@ -194,10 +194,12 @@ export const useDictation = ({ requestToken }: { requestToken: (id: string) => v
       return
     }
 
-    const granted = {
+    const granted: DictationGrant = {
       token: message.token,
       language: message.language || 'en',
       model: message.model || 'nova-3',
+      // Absent from a plugin older than the switch, which never asked for it.
+      trainingOptOut: message.trainingOptOut === true,
     }
 
     if (live.current) live.current.authorise(granted)

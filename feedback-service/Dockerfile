@@ -1,5 +1,5 @@
 # Small on purpose: one process, no database, no volume. What it needs at runtime is Node and a few
-# kilobytes of JavaScript - it holds a message for as long as it takes to forward it.
+# kilobytes of JavaScript - it holds nothing, it only answers.
 FROM node:22-alpine AS build
 WORKDIR /app
 COPY package.json ./

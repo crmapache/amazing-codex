@@ -8,6 +8,8 @@ import { WorkflowRun } from './items/WorkflowRun'
 interface AgentStreamViewProps {
   /** The agent currently opened by a chip - or nothing while no tab is chosen. */
   item: TaskItem | undefined
+  /** Whether it stands on a decision of its own - see agentsWaiting. */
+  waiting?: boolean
 }
 
 /**
@@ -17,7 +19,7 @@ interface AgentStreamViewProps {
  * already an extension on top, and it is visible on the chip anyway, so duplicating it here serves
  * nothing.
  */
-export const AgentStreamView = ({ item }: AgentStreamViewProps) => {
+export const AgentStreamView = ({ item, waiting = false }: AgentStreamViewProps) => {
   const body = useRef<HTMLDivElement | null>(null)
 
   // A live agent's growing log sticks to the bottom, like the main feed - otherwise watching a working
@@ -32,7 +34,7 @@ export const AgentStreamView = ({ item }: AgentStreamViewProps) => {
 
   return (
     <div className={s.agentViewBody} ref={body}>
-      <AgentLog item={item} />
+      <AgentLog item={item} waiting={waiting} />
     </div>
   )
 }
@@ -42,7 +44,7 @@ export const AgentStreamView = ({ item }: AgentStreamViewProps) => {
  * (see TaskCard). One rendering for both: the card was added long after this screen, and a second copy
  * of it would drift the moment either changed.
  */
-export const AgentLog = ({ item }: { item: TaskItem }) => {
+export const AgentLog = ({ item, waiting = false }: { item: TaskItem; waiting?: boolean }) => {
   const t = useT()
 
   return (
@@ -62,9 +64,14 @@ export const AgentLog = ({ item }: { item: TaskItem }) => {
       ))}
       {/* It ticks by the same shared tick mechanism as this agent's chip in the header (see
           tickDurations in feed/build.ts) - we simply show the same value here rather than only on the
-          chip. */}
+          chip. An agent standing on a permission is not working: it says so in the words the main
+          stream's line uses for the same thing. */}
       {item.pending ? (
-        <div className={s.agentViewWorking}>{t.feed.agentWorking(item.duration || '0.0s')}</div>
+        <div className={s.agentViewWorking}>
+          {waiting
+            ? t.stream.withElapsed(t.stream.waitingForYou, item.duration || '0.0s')
+            : t.feed.agentWorking(item.duration || '0.0s')}
+        </div>
       ) : null}
     </>
   )

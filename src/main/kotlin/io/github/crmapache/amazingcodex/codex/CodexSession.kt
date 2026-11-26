@@ -168,6 +168,21 @@ internal class CodexSession(
      * turn undoes in place of its patches (see [codePlan]). The tab's own, like [putBack].
      */
     private val settled: TurnFiles.Settled = TurnFiles.Settled(),
+    /**
+     * Whether [conversationId] is held by a terminal the panel handed it to (see terminal/TerminalDesk), so that no
+     * process of this conversation may come up now: Codex keeps one writer per thread, and the terminal's is it.
+     *
+     * Asked in [start], because every process of a tab comes up through there - a message, the queue, a phone, the
+     * MCP screen, a restored tab being looked at - and a road added tomorrow is held by it as well.
+     */
+    private val heldElsewhere: (conversationId: String) -> Boolean = { false },
+    /**
+     * Whether Codex is asked to guess this conversation's next message after each turn (see [askPrediction]).
+     *
+     * True for a tab: the guess waits as gray text in its empty field. False for a scenario's head and cards - nobody
+     * types there, and a guess is one more request after every turn.
+     */
+    private val suggestionsWanted: Boolean = true,
 ) : Disposable {
 
     /** Every role gets the project's shared `.claude` contract when its process actually opens. */
@@ -2086,6 +2101,15 @@ internal class CodexSession(
     // --- The process --------------------------------------------------------------------------------
 
     private fun start(): AppServer? {
+        // A terminal holds this conversation (see [heldElsewhere]): a second process now would be refused the thread by
+        // Codex anyway, and the tab waits instead - what is written into it waits in the queue.
+        conversationId?.let { thread ->
+            if (heldElsewhere(thread)) {
+                DiagnosticsLog.note(DiagnosticsLog.AGENT, "a conversation was not started: a terminal holds it")
+                return null
+            }
+        }
+
         val executable = CodexExecutable.find()
         if (executable == null) {
             DiagnosticsLog.note(DiagnosticsLog.AGENT, "the codex executable was not found")
@@ -2244,12 +2268,65 @@ internal class CodexSession(
             onResult = { result -> threadOpened(result as? JsonObject, carried, started = method == "thread/start") },
             onError = { error ->
                 DiagnosticsLog.note(DiagnosticsLog.AGENT, "codex could not open the conversation ($method)")
-                onError("Codex could not open the conversation: ${error.message}")
+                onError(openRefusal(error.message.orEmpty()))
                 val waiting = synchronized(waitingForThread) { waitingForThread.toList().also { waitingForThread.clear() } }
                 if (waiting.isNotEmpty() || busy) endTurn()
             },
         )
     }
+
+    /** The turn a guess at the next message was asked for - a guess about an older one is stale. */
+    @Volatile
+    private var predictionFor: String? = null
+
+    /**
+     * Ask Codex to guess the person's next message after a turn that finished (from ACC 0.13.50, where the CLI writes
+     * the guess itself with `--prompt-suggestions`). Codex's own request is `thread/prediction/request`, the answer
+     * comes as `thread/prediction/updated` with the turn it is about (see [notification]).
+     *
+     * Codex 0.163 lists the request and answers it "not implemented yet" (measured): the IDE notes that against the
+     * executable and does not ask that one again, so nothing is spent until a Codex that guesses is installed - then
+     * the gray text comes by itself. The panel does not make the guess with a model call of its own: that would be a
+     * paid request after every turn that nobody asked for, and Codex is building the real one.
+     *
+     * Not for a turn stopped or failed, nor in plan mode, where the next step is the plan's decision.
+     */
+    private fun askPrediction(turn: JsonObject) {
+        if (!suggestionsWanted || muted) return
+        if (AppServer.text(turn["status"]) != "completed" || permissionMode == PermissionModes.PLAN) return
+        val srv = server ?: return
+        val thread = conversationId ?: return
+        val turnId = AppServer.text(turn["id"]).ifEmpty { return }
+        val stamp = executableStamp ?: return
+        if (stamp in NO_PREDICTIONS) return
+
+        predictionFor = turnId
+        srv.request(
+            "thread/prediction/request",
+            buildJsonObject {
+                put("threadId", thread)
+                put("sourceTurnId", turnId)
+            },
+            onError = { error ->
+                if (error.code == AppServer.METHOD_NOT_FOUND || error.code == AppServer.INVALID_REQUEST) NO_PREDICTIONS += stamp
+            },
+        )
+    }
+
+    /**
+     * What the feed says when Codex would not open the thread. The one refusal a person can act on is a second writer:
+     * Codex keeps one writer per thread, and `codex resume` in a terminal of one's own - the line `/status` hands out -
+     * holds it until that terminal's process ends. Codex keeps no register of who holds a thread (Claude Code's CLI
+     * does, and the original waits on it), so the panel cannot wait for the other process itself; it says where the
+     * thread is and what to do.
+     */
+    private fun openRefusal(message: String): String =
+        if (message.contains(ACTIVE_WRITER, ignoreCase = true)) {
+            "This conversation is open in another Codex process - a terminal where it was resumed, or another app. " +
+                "Close it there, then send your message again."
+        } else {
+            "Codex could not open the conversation: $message"
+        }
 
     /** The tier this conversation asks for, as Codex names it - nothing when it leaves that to the config. */
     private fun tierOnWire(): String? = fastMode?.let { if (it) ServiceTiers.FAST else ServiceTiers.STANDARD }
@@ -2494,6 +2571,21 @@ internal class CodexSession(
                 }
                 tellTurnEnd(turn)
                 turnOver()
+                askPrediction(turn)
+            }
+
+            // Codex's guess at the next message (see [askPrediction]): to the panel as the stream line Claude Code
+            // writes for the same thing, which the field already draws as gray text.
+            "thread/prediction/updated" -> {
+                if (AppServer.text(params["threadId"]) != conversationId) return
+                if (AppServer.text(params["sourceTurnId"]) != predictionFor) return
+                val result = params["result"] as? JsonObject ?: return
+                if (AppServer.text(result["type"]) != "completed") return
+                val text = AppServer.text(result["text"]).trim().takeIf { it.isNotEmpty() } ?: return
+                emit(buildJsonObject {
+                    put("type", "prompt_suggestion")
+                    put("suggestion", text)
+                }.toString())
             }
 
             "error" -> {
@@ -2957,6 +3049,15 @@ internal class CodexSession(
     private fun signedModel(): String = threadModel.ifEmpty { nextModel() }
 
     private companion object {
+        /**
+         * The Codex executables that answered `thread/prediction/request` with "not implemented" or did not know it -
+         * by their stamp, so a Codex updated in place is asked afresh (see [askPrediction]).
+         */
+        private val NO_PREDICTIONS: MutableSet<CodexExecutable.Stamp> = ConcurrentHashMap.newKeySet()
+
+        /** Codex's refusal to open a thread another live process writes (measured on 0.163). */
+        private const val ACTIVE_WRITER = "already has an active writer"
+
         /**
          * What makes our ids for Codex's requests unique - `codex-<epoch>-<id>` (see [serverRequest]). One count
          * for every conversation in the IDE rather than one per conversation: JSON-RPC ids start again at zero

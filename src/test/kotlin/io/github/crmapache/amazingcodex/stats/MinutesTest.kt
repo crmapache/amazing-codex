@@ -28,18 +28,6 @@ class MinutesTest {
     }
 
     @Test
-    fun `the hours are read off the same bits`() {
-        val set = MinuteSet()
-        for (minute in 600 until 660) set.mark(minute)
-        set.mark(661)
-
-        val hours = set.hours()
-        assertEquals(60, hours[10])
-        assertEquals(1, hours[11])
-        assertEquals(0, hours[9])
-    }
-
-    @Test
     fun `the bits survive the file`() {
         val set = MinuteSet()
         set.mark(0)
