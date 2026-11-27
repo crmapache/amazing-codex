@@ -5,6 +5,10 @@ Marketplace and the IDE's update dialog show, so every release lists only its ow
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-11-27
+
+- Changed: a small internal cleanup with no visible effect. Two places in the plugin still called IDE functions that JetBrains has marked as outdated: looking up the project's folders when you open a folder named in the conversation, and re-reading the files Codex has changed. They now call the functions that took their place, which do exactly the same thing in every IDE version the plugin supports. The plugin works exactly as before.
+
 ## [0.3.2] - 2026-11-25
 
 - Added: continue a conversation in Codex's own interface in a terminal of the IDE, and come back to the chat with everything done there. "Continue in terminal" is in the tab's right-click menu, under /status, as /terminal in the field and as an IDE action you can bind a key to. The terminal opens `codex resume` with the tab's model, effort, mode and account; while it runs, what you write in the panel waits in the queue. When Codex exits, the turns from the terminal appear in the feed and the queue goes on.
@@ -195,7 +199,8 @@ Marketplace and the IDE's update dialog show, so every release lists only its ow
 - Added: search, prompt improvement, conversation titles and scenario writing run as short-lived,
   read-only Codex threads that leave nothing in the history.
 
-[Unreleased]: https://github.com/crmapache/amazing-codex/compare/0.3.2...HEAD
+[Unreleased]: https://github.com/crmapache/amazing-codex/compare/0.3.3...HEAD
+[0.3.3]: https://github.com/crmapache/amazing-codex/compare/0.3.2...0.3.3
 [0.3.2]: https://github.com/crmapache/amazing-codex/compare/0.3.1...0.3.2
 [0.3.1]: https://github.com/crmapache/amazing-codex/compare/0.3.0...0.3.1
 [0.3.0]: https://github.com/crmapache/amazing-codex/compare/0.2.6...0.3.0
